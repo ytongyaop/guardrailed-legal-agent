@@ -42,7 +42,7 @@ def test_login_page_renders(tmp_path, monkeypatch) -> None:
 def test_required_copy_is_present() -> None:
     """必留文案守卫：免责、转介、边界声明、评测口径不能被删。"""
     text = Path(APP).read_text(encoding="utf-8")
-    for required in ("非法律意见", "12348", "不代表合规", "评测集标注说明", "不构成本案结论"):
+    for required in ("非法律意见", "12348", "不代表合规", "标注说明", "不构成本案结论"):
         assert required in text, f"界面缺少必留文案：{required}"
 
 

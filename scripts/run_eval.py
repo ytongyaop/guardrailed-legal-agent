@@ -1,4 +1,4 @@
-"""评测脚本：跑评测集 → 8 项指标（第 9 项无依据率同表输出）→ 三档消融 → 落盘。
+"""评测脚本：跑回归集或留出集 → 8 项指标（第 9 项无依据率同表输出）→ 三档消融 → 落盘。
 
     python scripts/run_eval.py                    # 三档全跑
     python scripts/run_eval.py --variant full      # 只跑完整档
@@ -204,7 +204,11 @@ def print_table(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="MLA 评测")
-    parser.add_argument("--cases", default="data/evalsets/eval_cases.jsonl")
+    parser.add_argument(
+        "--cases",
+        default="data/evalsets/eval_cases.jsonl",
+        help="回归集或留出集文件路径（默认取回归集 eval_cases.jsonl）",
+    )
     parser.add_argument("--out", default="data/evalsets/last_eval.json")
     parser.add_argument(
         "--variant",
@@ -226,6 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     generator = None if args.no_llm else (DeepSeekLLM(cfg.llm) if cfg.llm.api_key else None)
     print(f"大模型：{'已启用 ' + cfg.llm.model if generator else '未配置（生成层将拒答/为空）'}")
     print(f"抽取档：{args.extract}（regex 纯正则；llm 强制模型；auto 有 Key 才用模型）")
+    print(f"用例文件：{args.cases}（{len(cases)} 条，回归集看是否退化，留出集看能力变化）")
     rules = load_rules(cfg.paths.rules)
     retriever = build_retriever(cfg)
 

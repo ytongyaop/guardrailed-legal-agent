@@ -4,10 +4,26 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mla"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Guardrailed agent for labor-contract risk review"
 requires-python = ">=3.11"
 dependencies = ["langgraph>=1.0", "PyYAML>=6.0"]
+keywords = ["legal-tech", "labor-contract", "llm", "retrieval-augmented-generation", "guardrails"]
+authors = [{ name = "ytongyaop" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Intended Audience :: Legal Industry",
+  "Topic :: Text Processing :: Linguistic",
+]
+
+[project.urls]
+Homepage = "https://github.com/ytongyaop/guardrailed-legal-agent"
+Repository = "https://github.com/ytongyaop/guardrailed-legal-agent"
+Issues = "https://github.com/ytongyaop/guardrailed-legal-agent/issues"
 
 [project.optional-dependencies]
 ui = ["streamlit>=1.40", "pandas>=1.5", "altair>=5.0"]
@@ -19,6 +35,9 @@ mla = "mla.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "mla.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

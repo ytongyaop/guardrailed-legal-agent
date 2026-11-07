@@ -1641,7 +1641,7 @@ def _render_eval() -> None:
     st.dataframe(rows, width="stretch", hide_index=True)
     st.caption(
         f"样本 {data.get('case_count', 0)} 条 · 生成时间 {data.get('generated_at', '')} · "
-        "主评测集为官方示范文本 + 人工植入；泛化集与问答消融的评测集标注说明见 data/evalsets/README.md。"
+        "回归集为官方示范文本加人工植入；留出集与问答消融的标注说明见 data/evalsets/README.md。"
     )
     mismatches = result.get("mismatches") or []
     if mismatches:

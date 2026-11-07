@@ -1,23 +1,34 @@
-# 评测集
+# 评测数据（回归集与留出集）
 
 本目录存放随仓库分发的全部评测数据：4 个 jsonl 文件、5 份合同文本、1 份示例事实。目录是扁平结构，脚本按文件名直接读取。
 
+## 两类集合
+
+数据按纪律分成两类，读指标前先分清手里的数字来自哪一类。
+
+| 类别 | 文件 | 用途 | 纪律 |
+| --- | --- | --- | --- |
+| 回归集 | `eval_cases.jsonl`（52 条）、`clause_gold.jsonl`（95 条） | 每次改动判定逻辑后必跑，要求不退化 | 开发过程中被反复修改过：主流程用例在交付后当场改过；条款 gold 从 33 条增至 95 条的同时，触发器从 21 条增至 28 条，覆盖率才对上 38/38。这组数字是构造性覆盖，只能证明没有退化，不能当作准确率 |
+| 留出集 | `eval_generalization.jsonl`（12 条）、`qa_cases.jsonl`（20 条） | 不参与调优，用于报告能力 | 一次成型后没有再改过，是真正的留出数据。谁为了让它通过而改规则或触发器，这条样本就降级为回归集 |
+
 ## 文件一览
 
-| 文件 | 数量 | 用途 |
-| --- | --- | --- |
-| `eval_cases.jsonl` | 52 条 | 主评测集：规则判定的准确率与召回率、补问触发与不误问、越界拒答与误拒 |
-| `eval_generalization.jsonl` | 12 条 | 泛化集：非模板写法，考察抽取在自然表述下是否仍成立 |
-| `qa_cases.jsonl` | 20 条 | 问答集：检索与引用准确性 |
-| `clause_gold.jsonl` | 95 条 | 条款级 gold：存在性域的覆盖率、A 级误报与引用准确率 |
-| `contract_traps_01/02/03.txt` | 3 份 | 对抗合同，人工植入违法条款与缺失条款 |
-| `contract_compliant_01.txt` | 1 份 | 全合规对照合同 |
-| `sample_contract.txt` | 1 份 | 演示用短文，供 `python -m mla check` 直接运行 |
-| `sample_facts.json` | 1 份 | 演示用结构化事实，字段名与抽取器输出一致 |
+| 文件 | 数量 | 类别 | 用途 |
+| --- | --- | --- | --- |
+| `eval_cases.jsonl` | 52 条 | 回归集 | 规则判定的准确率与召回率、补问触发与不误问、越界拒答与误拒 |
+| `eval_generalization.jsonl` | 12 条 | 留出集 | 非模板写法，考察抽取在自然表述下是否仍成立 |
+| `qa_cases.jsonl` | 20 条 | 留出集 | 检索与引用准确性 |
+| `clause_gold.jsonl` | 95 条 | 回归集（条款级） | 存在性域的覆盖率、A 级误报与引用准确率 |
+| `contract_traps_01/02/03.txt` | 3 份 | 回归集配套 | 对抗合同，人工植入违法条款与缺失条款 |
+| `contract_compliant_01.txt` | 1 份 | 回归集配套 | 全合规对照合同 |
+| `sample_contract.txt` | 1 份 | 演示 | 演示用短文，供 `python -m mla check` 直接运行 |
+| `sample_facts.json` | 1 份 | 演示 | 演示用结构化事实，字段名与抽取器输出一致 |
 
-## 主评测集 eval_cases.jsonl
+## 回归集 eval_cases.jsonl（主流程，52 条）
 
 52 条按 `kind` 分六类：`violation` 20 条、`compliant` 8 条、`deficient` 6 条、`complete` 6 条、`boundary_out` 6 条、`boundary_in` 6 条。前四类走合同核对流程，后两类走问答流程。
+
+这 52 条在开发过程中修改过，交付后仍在改，因此它度量的是回归：改动判定逻辑后这里不退化，说明既有能力没被破坏。它不能证明准确率为 100%。
 
 字段含义：
 
@@ -29,15 +40,19 @@
 - `expect_ask`：是否应触发补问。`deficient` 类均为 true，其余为 false。
 - `question` / `mode` / `expect_refuse`：仅越界与界内边缘用例使用。`question` 为问题原文，`mode` 固定为 `qa`，`expect_refuse` 表示是否应拒答。
 
-## 泛化集 eval_generalization.jsonl
+## 留出集 eval_generalization.jsonl（12 条）
 
-12 条，字段与主集一致，另加 `notes` 记录标注理由。`violation` 11 条、`compliant` 1 条。`contract` 是自然语言描述而非模板条文，用来检验抽取脱离模板句式后的表现。
+12 条，字段与回归集一致，另加 `notes` 记录标注理由。`violation` 11 条、`compliant` 1 条。`contract` 是自然语言描述而非模板条文，用来检验抽取脱离模板句式后的表现。
 
-## 问答集 qa_cases.jsonl
+这套数据一次成型后没有再改过，也不为调优服务：它的数字用来报告能力，不用来挑规则参数。
+
+## 留出集 qa_cases.jsonl（20 条）
 
 20 条，字段为 `case_id`、`kind`（固定 `qa`）、`question`、`gold_statutes`。`gold_statutes` 是人工标注的应引法条 id，评测脚本据此计算引用命中率。
 
-## 条款 gold clause_gold.jsonl
+同样一次成型后没有再改过，用于报告检索与引用能力。
+
+## 回归集 clause_gold.jsonl（条款级，95 条）
 
 95 条，全部挂在 4 份合同上：3 份对抗合同加 1 份全合规对照。字段为 `gold_id`、`contract`（合同文件名）、`clause`（条款号）、`span`（原文片段）、`grade`、`statute_ids`、`need_facts`、`note`。
 
@@ -46,20 +61,31 @@
 - 正样本：应报出的条款，共 38 条。`grade` 为 A 的 33 条、B 的 3 条、C 的 2 条，`statute_ids` 给出应引法条。
 - 负样本：合规条款，共 57 条，`grade` 写作 `合规`，`statute_ids` 为空。系统对其报出 A 级结论即记为误报。
 
+触发器对回归集的覆盖为 38/38，但触发器与回归集是同步扩充的（gold 从 33 条增至 95 条的同时，触发器从 21 条增至 28 条），因此该数字反映的是构造性覆盖，不代表对未见合同的表现。
+
 ## 运行
 
 ```bash
-python scripts/run_eval.py --extract regex     # 主评测集，纯正则抽取档
-python scripts/run_eval.py --cases data/evalsets/eval_generalization.jsonl
-python scripts/eval_qa.py                      # 问答集
-python scripts/eval_clauses.py --runs 1        # 条款 gold
+python scripts/run_eval.py --extract regex     # 回归集，纯正则抽取档
+python scripts/run_eval.py --cases data/evalsets/eval_generalization.jsonl   # 留出集，非模板合同
+python scripts/eval_qa.py                      # 留出集，问答
+python scripts/eval_clauses.py --runs 1        # 回归集，条款级
 ```
 
 指标定义与当前结果见 [docs/evaluation.md](../../docs/evaluation.md)。
 
+## 如何新增评测样本
+
+三条纪律，新增样本时逐条对照：
+
+1. 先定性：一条新样本归入回归集还是留出集，由它是否参与过调优决定。出题时就已经看过判定逻辑、并且为了让它通过而调整过规则或提示词的，属回归集；按事先生成的口径一次写好、之后不再回改的，才进留出集。
+2. 进留出集后不再回头改判定逻辑。一条样本一旦进入留出集，就不许再为了让它通过而改规则或触发器；确实改了，这条样本即降级为回归集，并在文件名或清单里标注降级原因与日期。
+3. 两个数字分开记录。每次改判定逻辑，先跑回归集确认不退化，再跑留出集记录能力变化；回归集看是否退化，留出集看能力有没有变化，两个数字分开记录，不要混用，也不要把回归集的满分写成留出集的表现。
+
 ## 局限
 
-- 四套数据全部由本项目开发者自行构造，没有外部盲测集。
+- 两类数据全部由本项目开发者自行构造，没有外部盲测集。
 - gold 由规则推导加人工标注产生，只有一名标注者，没有第二标注者交叉复核，标注偏差无法估计。
 - `clause_gold.jsonl` 的陷阱是人工植入的，比真实合同中的风险更集中、更显眼。
+- 留出集只有 12 条与 20 条，点估计的置信区间很宽，单看数字会高估能力。
 - 因此本目录数据上的指标只描述这批样本上的表现，不能当作泛化结论引用。
