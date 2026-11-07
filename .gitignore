@@ -1,0 +1,35 @@
+# 虚拟环境与缓存
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+dist/
+build/
+
+# 过程目录与体积大的资料（不入库）
+_tmp*
+_tmp/
+_tmp_*.py
+literature/
+.playwright-mcp/
+
+# 生成物
+data/index/
+*.sqlite3
+*.db
+.coverage
+
+# 密钥（默认 DeepSeek Key 放这里，不入库）
+.streamlit/secrets.toml
+.env
+
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# 评测运行产物
+data/evalsets/last_*.json
+data/evalsets/*_history.jsonl

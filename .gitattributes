@@ -1,0 +1,11 @@
+# 统一换行（避免 Windows 上 LF/CRLF 反复告警）
+* text=auto eol=lf
+
+# 二进制
+*.docx binary
+*.pptx binary
+*.xlsx binary
+*.png binary
+*.jpg binary
+*.pdf binary
+*.sqlite3 binary

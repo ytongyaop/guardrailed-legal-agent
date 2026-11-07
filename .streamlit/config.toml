@@ -1,0 +1,60 @@
+# 主题：浅色 / 中性灰 / 克制圆角，中文优先字体栈。
+# 原则：能用配置就别写 CSS。
+
+[theme]
+base = "light"
+primaryColor = "#1E40AF"            # 深海军蓝：法律/合规场景的可信色
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F8FAFC"
+codeBackgroundColor = "#F1F5F9"
+textColor = "#0F172A"
+linkColor = "#1E40AF"
+borderColor = "#E2E8F0"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "10px"
+buttonRadius = "8px"
+baseFontSize = 16
+baseFontWeight = 400
+headingFontSizes = ["34px", "26px", "21px", "17px", "16px", "14px"]
+headingFontWeights = [700, 600, 600, 600, 500, 500]
+metricValueFontSize = "2rem"
+metricValueFontWeight = 700
+paddingTop = "2rem"
+paddingBottom = "2.5rem"
+linkUnderline = false
+font = "\"Noto Sans SC\", \"Microsoft YaHei\", \"PingFang SC\", sans-serif"
+# 字体授权：首选 OFL-1.1 免费字体（Noto Sans SC / 思源黑体同源）；雅黑、苹方仅作本机回退，
+# 不打包、不分发字体文件
+headingFont = "\"Noto Sans SC\", \"Microsoft YaHei\", \"PingFang SC\", sans-serif"
+codeFont = "monospace"
+chartCategoricalColors = ["#1E40AF", "#0F766E", "#B45309", "#7C3AED", "#BE123C", "#0369A1"]
+dataframeBorderColor = "#E2E8F0"
+dataframeHeaderBackgroundColor = "#F8FAFC"
+
+# 语义色（徽标 / 提示）
+blueColor = "#1E40AF"
+greenColor = "#15803D"
+redColor = "#B91C1C"
+yellowColor = "#A16207"
+orangeColor = "#C2410C"
+violetColor = "#6D28D9"
+grayColor = "#64748B"
+
+[theme.sidebar]
+backgroundColor = "#F8FAFC"
+secondaryBackgroundColor = "#F1F5F9"
+textColor = "#0F172A"
+borderColor = "#E2E8F0"
+primaryColor = "#1E40AF"
+dataframeHeaderBackgroundColor = "#F1F5F9"
+dataframeBorderColor = "#E2E8F0"
+
+[server]
+headless = true
+
+[client]
+toolbarMode = "viewer"
+
+[browser]
+gatherUsageStats = false

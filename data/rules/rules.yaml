@@ -1,0 +1,273 @@
+# 确定性规则表（首期 20 条）
+#
+# 约定：
+#   1) op/threshold 描述"合法区间"：violated = not op(实际值, 阈值)
+#   2) when_* / when_*2 是适用前提（区间条件，如"一年以上不满三年"）；
+#      when_mode: and（默认，两组都满足）/ or（任一满足，如"三年以上或 无固定期限"）
+#   3) evidence_span 必须是 statute_id 原文的子串（脚本校验，防止凭空造规则）
+#   4) 只有"法条明文写了数值/列举"的才能进这里；判断类（显失公平等）走检索 + 模型
+
+# ---------- 试用期（LCL-19 / LCR-15）----------
+- rule_id: R-PROBATION-1M
+  name: 合同期限三个月以上不满一年，试用期不得超过 1 个月
+  field: probation_months
+  op: "<="
+  threshold: 1
+  unit: 月
+  statute_id: LCL-19
+  severity: 硬性
+  effective_date: "2013-07-01"
+  when_field: term_years
+  when_op: ">="
+  when_value: 0.25
+  when_field2: term_years
+  when_op2: "<"
+  when_value2: 1
+  evidence_span: "劳动合同期限三个月以上不满一年的，试用期不得超过一个月"
+  note: 劳动合同法第十九条第一款
+
+- rule_id: R-PROBATION-2M
+  name: 合同期限一年以上不满三年，试用期不得超过 2 个月
+  field: probation_months
+  op: "<="
+  threshold: 2
+  unit: 月
+  statute_id: LCL-19
+  severity: 硬性
+  effective_date: "2013-07-01"
+  when_field: term_years
+  when_op: ">="
+  when_value: 1
+  when_field2: term_years
+  when_op2: "<"
+  when_value2: 3
+  evidence_span: "劳动合同期限一年以上不满三年的，试用期不得超过二个月"
+  note: 劳动合同法第十九条第一款
+
+- rule_id: R-PROBATION-6M
+  name: 三年以上固定期限或无固定期限合同，试用期不得超过 6 个月
+  field: probation_months
+  op: "<="
+  threshold: 6
+  unit: 月
+  statute_id: LCL-19
+  severity: 硬性
+  effective_date: "2013-07-01"
+  when_field: term_years
+  when_op: ">="
+  when_value: 3
+  when_field2: term_type
+  when_op2: "=="
+  when_value2: 无固定期限
+  when_mode: or
+  evidence_span: "三年以上固定期限和无固定期限的劳动合同，试用期不得超过六个月"
+  note: 劳动合同法第十九条第一款
+
+- rule_id: R-PROBATION-ONCE
+  name: 同一用人单位与同一劳动者只能约定一次试用期
+  field: probation_times
+  op: "<="
+  threshold: 1
+  unit: 次
+  statute_id: LCL-19
+  severity: 硬性
+  effective_date: "2013-07-01"
+  evidence_span: "同一用人单位与同一劳动者只能约定一次试用期"
+
+- rule_id: R-PROBATION-WAGE-80
+  name: 试用期工资不得低于本单位相同岗位最低档工资或合同约定工资的 80%
+  field: probation_wage_ratio
+  op: ">="
+  threshold: 80
+  unit: "%"
+  statute_id: LCR-15
+  severity: 硬性
+  effective_date: "2008-09-18"
+  evidence_span: "劳动者在试用期的工资不得低于本单位相同岗位最低档工资的80%或者不得低于劳动合同约定工资的80%"
+  note: 劳动合同法实施条例第十五条；与劳动合同法第二十条一致
+
+# ---------- 书面合同（LCL-10）----------
+- rule_id: R-WRITTEN-1M
+  name: 未同时订立书面合同的，应自用工之日起 1 个月内订立
+  field: months_without_contract
+  op: "<="
+  threshold: 1
+  unit: 月
+  statute_id: LCL-10
+  severity: 硬性
+  effective_date: "2013-07-01"
+  evidence_span: "应当自用工之日起一个月内订立书面劳动合同"
+
+# ---------- 竞业限制（LCL-24 / J1-38）----------
+- rule_id: R-NONCOMPETE-TERM-2Y
+  name: 竞业限制期限不得超过 2 年
+  field: noncompete_years
+  op: "<="
+  threshold: 2
+  unit: 年
+  statute_id: LCL-24
+  severity: 硬性
+  effective_date: "2013-07-01"
+  evidence_span: "竞业限制期限，不得超过二年"
+
+- rule_id: R-NONCOMPETE-UNPAID-3M
+  name: 因用人单位原因 3 个月未支付竞业限制补偿，劳动者可请求解除
+  field: noncompete_unpaid_months
+  op: "<="
+  threshold: 3
+  unit: 月
+  statute_id: J1-38
+  severity: 硬性
+  effective_date: "2021-01-01"
+  evidence_span: "因用人单位的原因导致三个月未支付经济补偿"
+
+# ---------- 工时与加班（LL-41 / LL-44）----------
+- rule_id: R-OT-DAILY-3H
+  name: 延长工作时间每日不得超过 3 小时
+  field: ot_hours_day
+  op: "<="
+  threshold: 3
+  unit: 小时
+  statute_id: LL-41
+  severity: 硬性
+  effective_date: "2018-12-29"
+  evidence_span: "延长工作时间每日不得超过三小时"
+
+- rule_id: R-OT-MONTH-36H
+  name: 延长工作时间每月不得超过 36 小时
+  field: ot_hours_month
+  op: "<="
+  threshold: 36
+  unit: 小时
+  statute_id: LL-41
+  severity: 硬性
+  effective_date: "2018-12-29"
+  evidence_span: "但是每月不得超过三十六小时"
+
+- rule_id: R-OT-WEEKDAY-150
+  name: 工作日加班，支付不低于工资的 150%
+  field: ot_weekday_ratio
+  op: ">="
+  threshold: 150
+  unit: "%"
+  statute_id: LL-44
+  severity: 硬性
+  effective_date: "2018-12-29"
+  evidence_span: "支付不低于工资的百分之一百五十的工资报酬"
+
+- rule_id: R-OT-RESTDAY-200
+  name: 休息日加班且不能补休，支付不低于工资的 200%
+  field: ot_restday_ratio
+  op: ">="
+  threshold: 200
+  unit: "%"
+  statute_id: LL-44
+  severity: 硬性
+  effective_date: "2018-12-29"
+  evidence_span: "支付不低于工资的百分之二百的工资报酬"
+
+- rule_id: R-OT-HOLIDAY-300
+  name: 法定休假日加班，支付不低于工资的 300%
+  field: ot_holiday_ratio
+  op: ">="
+  threshold: 300
+  unit: "%"
+  statute_id: LL-44
+  severity: 硬性
+  effective_date: "2018-12-29"
+  evidence_span: "支付不低于工资的百分之三百的工资报酬"
+
+# ---------- 社会保险（SIL-58 / SIL-86）----------
+- rule_id: R-SI-REGISTER-30D
+  name: 应自用工之日起 30 日内办理社会保险登记
+  field: days_to_si_register
+  op: "<="
+  threshold: 30
+  unit: 日
+  statute_id: SIL-58
+  severity: 硬性
+  effective_date: "2018-12-29"
+  evidence_span: "用人单位应当自用工之日起三十日内为其职工向社会保险经办机构申请办理社会保险登记"
+
+- rule_id: R-SI-FINE-CAP-3X
+  name: 逾期不缴社保的罚款不超过欠缴数额 3 倍
+  field: si_fine_multiple
+  op: "<="
+  threshold: 3
+  unit: 倍
+  statute_id: SIL-86
+  severity: 硬性
+  effective_date: "2018-12-29"
+  evidence_span: "处欠缴数额一倍以上三倍以下的罚款"
+
+# ---------- 带薪年休假（AL-3 / ALI-10）----------
+- rule_id: R-AL-5D
+  name: 累计工作满 1 年不满 10 年，年休假 5 天
+  field: annual_leave_days
+  op: ">="
+  threshold: 5
+  unit: 天
+  statute_id: AL-3
+  severity: 硬性
+  effective_date: "2008-01-01"
+  when_field: work_years
+  when_op: ">="
+  when_value: 1
+  when_field2: work_years
+  when_op2: "<"
+  when_value2: 10
+  evidence_span: "职工累计工作已满1年不满10年的，年休假5天"
+
+- rule_id: R-AL-10D
+  name: 累计工作满 10 年不满 20 年，年休假 10 天
+  field: annual_leave_days
+  op: ">="
+  threshold: 10
+  unit: 天
+  statute_id: AL-3
+  severity: 硬性
+  effective_date: "2008-01-01"
+  when_field: work_years
+  when_op: ">="
+  when_value: 10
+  when_field2: work_years
+  when_op2: "<"
+  when_value2: 20
+  evidence_span: "已满10年不满20年的，年休假10天"
+
+- rule_id: R-AL-15D
+  name: 累计工作满 20 年，年休假 15 天
+  field: annual_leave_days
+  op: ">="
+  threshold: 15
+  unit: 天
+  statute_id: AL-3
+  severity: 硬性
+  effective_date: "2008-01-01"
+  when_field: work_years
+  when_op: ">="
+  when_value: 20
+  evidence_span: "已满20年的，年休假15天"
+
+- rule_id: R-ALI-UNUSED-300
+  name: 未休年休假按日工资收入的 300% 支付
+  field: unused_leave_pay_ratio
+  op: ">="
+  threshold: 300
+  unit: "%"
+  statute_id: ALI-10
+  severity: 硬性
+  effective_date: "2008-09-18"
+  evidence_span: "按照其日工资收入的300%支付未休年休假工资报酬"
+
+# ---------- 工资支付（WPR-7）----------
+- rule_id: R-WPR-MONTHLY-PAY
+  name: 工资至少每月支付一次
+  field: pay_times_per_month
+  op: ">="
+  threshold: 1
+  unit: 次
+  statute_id: WPR-7
+  severity: 硬性
+  effective_date: "1995-01-01"
+  evidence_span: "工资至少每月支付一次"

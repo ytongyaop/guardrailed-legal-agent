@@ -1,0 +1,20 @@
+{"case_id": "qa01", "kind": "qa", "question": "试用期最长可以约定多久？", "gold_statutes": ["LCL-19", "LL-21"]}
+{"case_id": "qa02", "kind": "qa", "question": "试用期工资最低不能低于多少？", "gold_statutes": ["LCR-15", "LCL-20"]}
+{"case_id": "qa03", "kind": "qa", "question": "没有签订书面劳动合同会有什么后果？", "gold_statutes": ["LCL-10", "LCL-82"]}
+{"case_id": "qa04", "kind": "qa", "question": "未签书面合同的二倍工资从什么时候开始算？", "gold_statutes": ["LCL-82", "LCR-6", "LCR-7"]}
+{"case_id": "qa05", "kind": "qa", "question": "工作日加班工资按什么比例支付？", "gold_statutes": ["LL-44"]}
+{"case_id": "qa06", "kind": "qa", "question": "每月加班时间最多不能超过多少小时？", "gold_statutes": ["LL-41"]}
+{"case_id": "qa07", "kind": "qa", "question": "竞业限制期限最长可以约定几年？", "gold_statutes": ["LCL-24"]}
+{"case_id": "qa08", "kind": "qa", "question": "竞业限制补偿三个月没支付，劳动者可以解除吗？", "gold_statutes": ["J1-38"]}
+{"case_id": "qa09", "kind": "qa", "question": "用人单位应当何时办理社会保险登记？", "gold_statutes": ["SIL-58"]}
+{"case_id": "qa10", "kind": "qa", "question": "单位不缴社会保险会有什么法律后果？", "gold_statutes": ["SIL-86"]}
+{"case_id": "qa11", "kind": "qa", "question": "累计工作满一年不满十年，年休假有几天？", "gold_statutes": ["AL-3"]}
+{"case_id": "qa12", "kind": "qa", "question": "未休年休假的工资按什么标准支付？", "gold_statutes": ["ALI-10"]}
+{"case_id": "qa13", "kind": "qa", "question": "工资支付周期有什么要求？", "gold_statutes": ["WPR-7"]}
+{"case_id": "qa14", "kind": "qa", "question": "协商解除劳动合同的经济补偿怎么算？", "gold_statutes": ["LCL-46", "LCL-47"]}
+{"case_id": "qa15", "kind": "qa", "question": "违法解除劳动合同的赔偿金是多少？", "gold_statutes": ["LCL-87"]}
+{"case_id": "qa16", "kind": "qa", "question": "劳动者提前解除劳动合同需要提前多久通知？", "gold_statutes": ["LCL-37"]}
+{"case_id": "qa17", "kind": "qa", "question": "变更劳动合同需要什么条件？", "gold_statutes": ["LCL-35"]}
+{"case_id": "qa18", "kind": "qa", "question": "劳动合同应当具备哪些条款？", "gold_statutes": ["LCL-17"]}
+{"case_id": "qa19", "kind": "qa", "question": "法定节假日加班工资按多少支付？", "gold_statutes": ["LL-44"]}
+{"case_id": "qa20", "kind": "qa", "question": "同一用人单位可以约定几次试用期？", "gold_statutes": ["LCL-19"]}

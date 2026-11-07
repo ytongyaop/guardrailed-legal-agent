@@ -1,0 +1,116 @@
+# 劳动合同必备条款规格（《劳动合同法》第十七条九类）。
+#
+# 本层只判"合同正文有没有写这一类"，不判内容合法性：写了"自愿放弃社保"也算已写，
+# 违法性由触发器层（triggers.yaml）负责。
+#
+# 判据两种，互斥：
+#   mode: any  → patterns 是正则列表，**任一**命中即算已写（行内匹配）；
+#   mode: all  → groups 是关键词组列表，**每一组**至少有一个关键词命中才算已写（组跨全文，词在行内）。
+# certainty 只影响"未命中"的措辞：高 → 缺失（断言）；低 → 未见（请人工确认）。
+# 逐行判定，不跨行拼接：标题行"二、合同期限"与正文行不能拼起来凑成一条"已写"。
+#
+# 第（九）项是兜底条款，无法用关键词判定，固定 not_judged（一律"需人工确认"）。
+
+- term_id: MT-1
+  name: 用人单位名称、住所与负责人
+  clause_no: （一）
+  statute_id: LCL-17
+  evidence_span: 用人单位的名称、住所和法定代表人或者主要负责人
+  judge: presence
+  certainty: 低
+  mode: all
+  groups:
+    - [名称, 甲方, 公司, 企业, 单位]
+    - [住所, 地址, 住所地, 经营场所]
+    - [法定代表人, 负责人, 经营者, 执行事务合伙人, 投资人]
+
+- term_id: MT-2
+  name: 劳动者姓名、住址与身份证件
+  clause_no: （二）
+  statute_id: LCL-17
+  evidence_span: 劳动者的姓名、住址和居民身份证或者其他有效身份证件号码
+  judge: presence
+  certainty: 低
+  mode: all
+  groups:
+    - [乙方, 劳动者, 员工]
+    - [住址, 地址, 居住地]
+    - [身份证, 证件号码]
+
+- term_id: MT-3
+  name: 劳动合同期限
+  clause_no: （三）
+  statute_id: LCL-17
+  evidence_span: 劳动合同期限
+  judge: presence
+  certainty: 高
+  mode: any
+  patterns:
+    - 无固定期限
+    - 以完成一定工作任务为期限
+    - '期限[^。；]{0,12}[0-9一二三四五六七八九十]{1,4}年'
+    - '合同期(?:限)?(?:为|是)?[0-9一二三四五六七八九十]{1,4}年'
+    - '自\d{4}年.{0,12}至\d{4}年'
+
+- term_id: MT-4
+  name: 工作内容与工作地点
+  clause_no: （四）
+  statute_id: LCL-17
+  evidence_span: 工作内容和工作地点
+  judge: presence
+  certainty: 低
+  mode: all
+  groups:
+    - [岗位, 工作内容, 职务, 职位, 工种]
+    - [工作地点, 工作地, 办公地点, 上班地点, 派驻地点, 服务地点]
+
+- term_id: MT-5
+  name: 工作时间与休息休假
+  clause_no: （五）
+  statute_id: LCL-17
+  evidence_span: 工作时间和休息休假
+  judge: presence
+  certainty: 低
+  mode: all
+  groups:
+    - [工作时间, 工时, 上班时间, 每日工作, 每周工作, 标准工时, 综合计算工时, 不定时]
+    - [休息, 休假, 月休, 排班, 年假]
+
+- term_id: MT-6
+  name: 劳动报酬
+  clause_no: （六）
+  statute_id: LCL-17
+  evidence_span: 劳动报酬
+  judge: presence
+  certainty: 高
+  mode: any
+  patterns: [工资, 薪资, 薪酬, 报酬, 薪金, 月薪, 底薪, 奖金]
+
+- term_id: MT-7
+  name: 社会保险
+  clause_no: （七）
+  statute_id: LCL-17
+  evidence_span: 社会保险
+  judge: presence
+  certainty: 高
+  mode: any
+  patterns: [社会保险, 社保, 五险, 养老保险, 医疗保险, 工伤保险, 失业保险, 生育保险]
+
+# MT-8 的 patterns 故意不含"工伤"：traps_03 的"工伤责任由本人承担"是风险条款，
+# 不是劳动保护约定，算作"已写劳动保护"会掩盖真正的缺项。不要加回"工伤"。
+- term_id: MT-8
+  name: 劳动保护与劳动条件
+  clause_no: （八）
+  statute_id: LCL-17
+  evidence_span: 劳动保护、劳动条件和职业危害防护
+  judge: presence
+  certainty: 高
+  mode: any
+  patterns: [劳动保护, 劳动条件, 劳动安全, 安全生产, 劳动防护, 防护用品, 职业危害, 职业病, 安全卫生, 职业健康]
+
+- term_id: MT-9
+  name: 法律法规规定应当纳入的其他事项
+  clause_no: （九）
+  statute_id: LCL-17
+  evidence_span: 法律、法规规定应当纳入劳动合同的其他事项
+  judge: not_judged

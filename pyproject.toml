@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mla"
+version = "0.1.0"
+description = "Guardrailed agent for labor-contract risk review"
+requires-python = ">=3.11"
+dependencies = ["langgraph>=1.0", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+ui = ["streamlit>=1.40", "pandas>=1.5", "altair>=5.0"]
+files = ["python-docx>=1.1", "pypdf>=4.0"]
+dev = ["pytest", "ruff", "pyright"]
+
+[project.scripts]
+mla = "mla.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"
