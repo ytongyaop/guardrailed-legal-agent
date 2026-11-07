@@ -1,0 +1,59 @@
+name: 缺陷报告
+description: 报告一个可复现的问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。提交前请先确认问题可以稳定复现，并删除日志里的真实 API Key 与合同原文。
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 说明发生了什么，以及你预期它应该是什么样。
+      placeholder: 例如：合同期限留空时，命令行核对直接抛出异常，没有提示需要补充事实。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 按顺序列出能稳定复现问题的操作，附上使用到的命令。
+      placeholder: |
+        1. 执行 python -m mla init ...
+        2. 执行 python -m mla check --contract <文件>
+        3. 观察输出
+    validations:
+      required: true
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: 期望行为 vs 实际行为
+      description: 分两段写，先说期望看到的，再说实际看到的。
+      placeholder: |
+        期望行为：
+        实际行为：
+  - type: input
+    id: environment
+    attributes:
+      label: 运行环境
+      description: Python 版本与操作系统。
+      placeholder: 例如：Python 3.11.9，Windows 11
+  - type: dropdown
+    id: llm-key
+    attributes:
+      label: 是否配置了大模型 Key
+      description: 未配置 Key 时抽取会回退纯正则，条款级审查不执行。
+      options:
+        - 未配置
+        - 已配置 DeepSeek
+        - 已配置 DeepSeek 与向量 Key
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志或报错
+      description: 请勿粘贴真实 API Key 与合同原文，涉及敏感内容请先替换为占位符。
+      render: text

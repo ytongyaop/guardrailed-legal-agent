@@ -1,5 +1,9 @@
 # guardrailed-legal-agent
 
+[![CI](https://github.com/ytongyaop/guardrailed-legal-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/ytongyaop/guardrailed-legal-agent/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+
 面向小微企业（有雇工、缺专职法务）的劳动合同风险辅助核对系统。受限智能体（guardrailed agent）架构：流程由确定性代码固定，模型只负责自然语言环节，所有输出必须通过规则与证据核验才会呈现给用户。
 
 技术栈：Python 3.11+（开发环境 3.14）· LangGraph 编排（13 个固定节点）· Streamlit 1.66 界面 · SQLite 3.50 存储 · DeepSeek `deepseek-chat`（OpenAI 兼容接口）· 阿里云 `qwen3.7-text-embedding-flash` 语义向量（1024 维，无 Key 自动回退 BM25）· python-docx 导出 Word 报告。
@@ -136,7 +140,7 @@ data/
 scripts/        校验与评测脚本
 tests/          339 条测试
 docs/           architecture.md evaluation.md
-.github/        workflows/ci.yml
+.github/        workflows/ci.yml · dependabot.yml · pull_request_template.md · ISSUE_TEMPLATE/
 .streamlit/     config.toml secrets.toml.example
 LICENSE
 pyproject.toml
@@ -176,6 +180,10 @@ python scripts/eval_clauses.py --runs 1
 ## 免责声明
 
 本系统只提示"与某条法条存在冲突"并给出可定位的依据（法条编号、合同原文片段），不判定任何条款违法或无效，不构成法律意见，也不替代法律意见。正式决策请咨询执业律师或当地人力资源社会保障部门。
+
+## 版本
+
+当前版本见 [Releases](https://github.com/ytongyaop/guardrailed-legal-agent/releases) 与 [CHANGELOG.md](CHANGELOG.md)，版本号遵循语义化版本。
 
 ## License
 
