@@ -71,6 +71,9 @@ def evaluate(cases: list[dict[str, Any]], deps: Deps, variant: str) -> dict[str,
     latencies: list[float] = []
     details: list[dict[str, Any]] = []
     rule_statute = {r.rule_id: r.statute_id for r in deps.rules}
+    # 拒答有两条路：判定越界后拒答（boundary_layer 非 "llm"）属正确行为；
+    # 无法生成回答（未配模型/调用失败，boundary_layer == "llm"）不是拒答判定，不该算误拒。
+    model_absent_qa = 0
 
     for case in cases:
         init = {
@@ -89,6 +92,8 @@ def evaluate(cases: list[dict[str, Any]], deps: Deps, variant: str) -> dict[str,
         suggestions = list(final.get("suggestions") or [])
         refused = bool(final.get("refused"))
         ask_rounds = int(final.get("ask_rounds") or 0)
+        boundary_layer = str(final.get("boundary_layer") or "")
+        model_absent = refused and boundary_layer == "llm"
 
         predicted = {i.rule_id or i.item_id for i in items}
         gold = set(case.get("gold_items") or [])
@@ -117,19 +122,25 @@ def evaluate(cases: list[dict[str, Any]], deps: Deps, variant: str) -> dict[str,
             refuse_out.append(refused)
         if kind == "boundary_in":
             # 只有“给出带依据的回答”才算没误拒；空回答也算失败
-            refuse_in.append(refused or not suggestions)
+            # 但“未配置模型/模型调用失败”导致的拒答不是拒答判定，不计入误拒率
+            # 消融臂本身不启用生成层（deps.generator is None），结构上不可能作答，同样不计入
+            if model_absent or deps.generator is None:
+                model_absent_qa += 1
+            else:
+                refuse_in.append(refused or not suggestions)
         latencies.append(latency)
 
         if predicted != gold or (case.get("expect_refuse") is not None and refused != case["expect_refuse"]):
-            details.append(
-                {
-                    "case_id": case["case_id"],
-                    "kind": kind,
-                    "gold": sorted(gold),
-                    "predicted": sorted(predicted),
-                    "refused": refused,
-                }
-            )
+            if not model_absent:
+                details.append(
+                    {
+                        "case_id": case["case_id"],
+                        "kind": kind,
+                        "gold": sorted(gold),
+                        "predicted": sorted(predicted),
+                        "refused": refused,
+                    }
+                )
 
     recall = hit / gold_total if gold_total else 1.0
     metrics = {
@@ -155,10 +166,17 @@ def evaluate(cases: list[dict[str, Any]], deps: Deps, variant: str) -> dict[str,
         "n_cases": len(cases),
         "n_items": len(items_all),
         "mismatches": details,
+        "model_absent_qa": model_absent_qa,
     }
 
 
-def print_table(name: str, result: dict[str, Any]) -> None:
+def print_table(
+    name: str,
+    result: dict[str, Any],
+    *,
+    arm_has_generation: bool = True,
+    generator_enabled: bool = True,
+) -> None:
     print(f"\n== 档位 {name}（样本 {result['n_cases']}，命中条目 {result['n_items']}）==")
     print(f"{'指标':<26}{'实测':>10}{'阈值':>10}  达标")
     for key, value in result["metrics"].items():
@@ -168,6 +186,14 @@ def print_table(name: str, result: dict[str, Any]) -> None:
         threshold_text = f"{threshold:g}" if threshold is not None else "-"
         value_text = f"{value:.4f}" if value is not None else "-"
         print(f"{LABELS[key]:<24}{value_text:>12}{threshold_text:>12}  {mark}")
+    if not arm_has_generation:
+        print("本臂未启用生成层，问答类指标不参与统计。")
+    elif result.get("model_absent_qa"):
+        if generator_enabled:
+            # 生成层在，但模型没给出可采信的回答（调用失败 / 未依据条文）
+            print(f"生成层未能作答的问答用例 {result['model_absent_qa']} 条，未计入误拒率。")
+        else:
+            print(f"未配置大模型，问答用例 {result['model_absent_qa']} 条无法作答，未计入误拒率。")
     if result["mismatches"]:
         print(f"不一致样本 {len(result['mismatches'])} 条：")
         for row in result["mismatches"][:8]:
@@ -222,9 +248,15 @@ def main(argv: list[str] | None = None) -> int:
         "variants": {},
     }
     for variant in variants:
-        result = evaluate(cases, deps_for(variant), variant)
+        arm_deps = deps_for(variant)
+        result = evaluate(cases, arm_deps, variant)
         payload["variants"][variant] = result
-        print_table(variant, result)
+        print_table(
+            variant,
+            result,
+            arm_has_generation=variant in ("full", "llm_only"),
+            generator_enabled=arm_deps.generator is not None,
+        )
         if args.check_determinism:
             if args.extract != "regex" or (generator is not None and variant in ("full", "llm_only")):
                 print("[跳过] 抽取档含大模型，不做逐位确定性校验")
@@ -236,6 +268,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[失败] 确定性检查失败：{variant} 两次结果不同")
                 return 1
             print(f"[通过] 确定性检查通过：{variant} 两次指标完全一致（不计时延）")
+
+    # 顶层汇总：因未配置大模型而无法回答的问答用例数（以 full 臂为准；无 full 臂时取首个臂）；
+    # 各臂自己的数值见 variants[*]["model_absent_qa"]（消融臂本身不启用生成层，也会产生）。
+    payload["model_absent_qa"] = payload["variants"].get("full", next(iter(payload["variants"].values())))[
+        "model_absent_qa"
+    ]
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

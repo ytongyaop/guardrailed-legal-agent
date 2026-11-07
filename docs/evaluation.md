@@ -58,7 +58,7 @@
 | A 级误报 | 负样本合规条款被判为 A 级的条数 |
 | 引用准确率 | 结论引用的法条落在标注法条集合内的比例；库外条号单列统计 |
 
-脚本同时输出 span 定位率与分级一致率，本文只引用上表三项。主流程评测另有按 `--variant` 拆层的消融臂（`rules_only` / `rules_retrieval` / `llm_only` / `full`，默认 `all` 连跑 rules_only、rules_retrieval、full 三臂），条款级另设关闭程序核验的模型裸输出臂，用于度量各层的独立贡献；消融结果不作为对外指标。
+脚本同时输出 span 定位率与分级一致率，本文只引用上表三项。主流程评测另有按 `--variant` 拆层的消融臂（`rules_only` / `rules_retrieval` / `llm_only` / `full`，默认 `all` 连跑 rules_only、rules_retrieval、full 三臂），条款级另设关闭程序核验的模型裸输出臂，用于度量各层的独立贡献；消融结果不作为对外指标。未启用生成层的消融臂（`rules_only`、`rules_retrieval`）不产出问答类指标，`false_refuse` 记为无值；越界拒答率在各臂均可测。
 
 ## 结果
 
