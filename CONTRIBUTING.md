@@ -21,10 +21,10 @@ pytest
 
 测试**强制离线**：`tests/conftest.py` 把抽取固定为纯正则档（`MLA_EXTRACT_MODE=regex`）、屏蔽 secrets 里的真实 Key，并删掉 `MLA_LLM_API_KEY` / `DASHSCOPE_API_KEY`。所以跑测试**不需要任何 API Key，也不会联网、不会花钱**。写了依赖网络或真实模型的测试，请改成注入假实现。
 
-单独的 CLI 冒烟（不污染工作目录的数据库）：
+单独的 CLI 冒烟（不污染工作目录的数据库）。正常使用时首次初始化在网页里完成，下面的 `init` 只用于**无界面部署**（容器、纯命令行环境）：
 
 ```bash
-python -m mla init --admin-username admin --enterprise "示例企业"
+python -m mla init --enterprise "示例企业"   # 用户名默认 admin，口令自动生成并只打印一次
 python -m mla check --contract src/mla/data/evalsets/sample_contract.txt
 ```
 

@@ -42,7 +42,17 @@ from mla.domain.models import (
 from mla.domain.policy import ACCEPTANCE, MAX_ASK_CANDIDATES
 from mla.domain.slots import DEFAULT_SLOTS, derive_slots
 from mla.services.asking import suggest_optional
-from mla.services.auth import authenticate, delete_account, is_admin, register, require_admin
+from mla.services.auth import (
+    MIN_PASSWORD_LEN,
+    authenticate,
+    change_password,
+    create_first_admin,
+    delete_account,
+    has_admin,
+    is_admin,
+    register,
+    require_admin,
+)
 from mla.services.report import build_report_docx, merge_findings
 from mla.services.tasks import persist, run_check, run_qa
 from mla.ui.trend import trend_frame
@@ -94,19 +104,46 @@ def get_config():
     return load_config()
 
 
-def _default_llm_key(cfg) -> str:
-    """默认 Key 的优先级：st.secrets → 环境变量 → config（config 本身也读环境变量）。"""
-    key = ""
+# 模型 Key 的三处来源，顺序即优先级。三处都读原始值，不经过 load_config：
+# load_config 会把环境变量与 secrets 合成一个 api_key，混起来就分不清谁盖过谁。
+LLM_KEY_SETTING = "llm_api_key"
+KEY_SOURCE_LABELS: tuple[str, ...] = ("secrets.toml", "数据库设置", "环境变量")
+
+
+def _secrets_llm_key() -> str:
+    """只取 `.streamlit/secrets.toml` 里 [llm].api_key 这一处原始值。"""
     try:
         section = st.secrets.get("llm", {})
-        key = str(section.get("api_key", "")) if hasattr(section, "get") else ""
     except Exception:  # noqa: BLE001 - 没有 secrets 文件时按未配置处理
-        key = ""
-    return key or cfg.llm.api_key or os.environ.get("MLA_LLM_API_KEY", "")
+        return ""
+    return str(section.get("api_key", "")) if hasattr(section, "get") else ""
 
 
-def _resolve_llm(cfg) -> LLMConfig | None:
-    default_key = _default_llm_key(cfg)
+def llm_key_sources(repo: SqliteRepository | None = None) -> tuple[str, str, str]:
+    """三处原始 Key，顺序即优先级：secrets.toml / 数据库设置 / 环境变量。"""
+    db_key = repo.get_setting(LLM_KEY_SETTING) if repo is not None else ""
+    return (_secrets_llm_key(), db_key, os.environ.get("MLA_LLM_API_KEY", ""))
+
+
+def resolve_llm_key(sources: tuple[str, ...]) -> str:
+    """按优先级取第一个非空值；都为空返回空串（界面按未配置处理）。"""
+    return next((str(value) for value in sources if value), "")
+
+
+def key_source_label(sources: tuple[str, ...]) -> str:
+    """当前生效的 Key 来自哪一处；都没有就是未配置。"""
+    for label, value in zip(KEY_SOURCE_LABELS, sources, strict=False):
+        if value:
+            return label
+    return "未配置"
+
+
+def _default_llm_key(repo: SqliteRepository | None = None) -> str:
+    return resolve_llm_key(llm_key_sources(repo))
+
+
+def _resolve_llm(cfg, repo: SqliteRepository | None = None) -> LLMConfig | None:
+    default_key = _default_llm_key(repo)
     mode = st.session_state.get("llm_mode") or ("默认 Key" if default_key else "自己的 Key")
     key = default_key if mode == "默认 Key" else str(st.session_state.get("llm_key") or "")
     if not key:
@@ -114,8 +151,9 @@ def _resolve_llm(cfg) -> LLMConfig | None:
     return replace(cfg.llm, api_key=key)
 
 
-def _llm_settings(cfg) -> None:
-    default_key = _default_llm_key(cfg)
+def _llm_settings(cfg, repo: SqliteRepository | None = None) -> None:
+    sources = llm_key_sources(repo)
+    default_key = resolve_llm_key(sources)
     with st.sidebar.expander("大模型设置", icon=":material/smart_toy:"):
         st.radio(
             "Key 来源",
@@ -125,7 +163,11 @@ def _llm_settings(cfg) -> None:
             horizontal=True,
         )
         if st.session_state.get("llm_mode") == "默认 Key":
-            st.caption("默认 Key 已配置（服务端）" if default_key else "默认 Key 未配置，请选“自己的 Key”")
+            st.caption(
+                f"默认 Key 来源：{key_source_label(sources)}"
+                if default_key
+                else "默认 Key 未配置，请选“自己的 Key”"
+            )
         else:
             st.text_input(
                 "DeepSeek API Key",
@@ -133,7 +175,7 @@ def _llm_settings(cfg) -> None:
                 key="llm_key",
                 placeholder="sk-……（只保存在本次会话）",
             )
-        llm = _resolve_llm(cfg)
+        llm = _resolve_llm(cfg, repo)
         if llm is None:
             st.badge("未配置：生成式回答将拒答", color="orange")
         else:
@@ -312,9 +354,15 @@ def _build_nav(repo: SqliteRepository, user: User) -> st.Page:
         icon=":material/history:",
         url_path="history",
     )
+    NAV["设置"] = st.Page(
+        lambda: _page_settings(repo, user),
+        title="设置",
+        icon=":material/settings:",
+        url_path="settings",
+    )
     sections: dict[str, list[st.Page]] = {
         "工作台": [NAV["合同核对"]],
-        "管理": [NAV["企业档案"], NAV["合同管理"], NAV["历史记录"]],
+        "管理": [NAV["企业档案"], NAV["合同管理"], NAV["历史记录"], NAV["设置"]],
     }
     if is_admin(user):
         NAV["管理端"] = st.Page(
@@ -328,14 +376,7 @@ def _build_nav(repo: SqliteRepository, user: User) -> st.Page:
 
 
 # ---------------- 登录 ----------------
-# 只留图标 + 标题：说明句只是把标题换个说法，登录页不再渲染。
-LOGIN_FEATURES: tuple[tuple[str, str], ...] = (
-    ("fact_check", "逐条核对"),
-    ("menu_book", "依据可核验"),
-    ("help", "缺事实先追问"),
-)
-
-
+# 登录页只留图标 + 标题 + 登录/注册：用途、边界、数据去向都在首次登录的引导弹窗里说一次。
 def _login_screen(repo: SqliteRepository) -> None:
     st.space("large")
     left, right = st.columns([1.15, 1], gap="large", vertical_alignment="center")
@@ -343,14 +384,6 @@ def _login_screen(repo: SqliteRepository) -> None:
         if LOGO.exists():
             st.image(str(LOGO), width=56)
         st.title("小微企业用工风险辅助系统", anchor=False)
-        st.markdown("劳动合同逐条核对，结论回链法条原文。")
-        st.space("small")
-        for icon, title in LOGIN_FEATURES:
-            with st.container(horizontal=True, vertical_alignment="center"):
-                st.markdown(f":blue[:material/{icon}:]")
-                st.markdown(f"**{title}**")
-        st.space("small")
-        st.caption("仅处理劳动用工与劳动合同问题，越界直接拒答。")
     with right:
         with st.container(border=True):
             tab_login, tab_reg = st.tabs([":material/login: 登录", ":material/person_add: 注册"])
@@ -358,12 +391,7 @@ def _login_screen(repo: SqliteRepository) -> None:
                 with st.form("login"):
                     name = st.text_input("用户名", placeholder="请输入用户名")
                     pwd = st.text_input("密码", type="password", placeholder="请输入密码")
-                    ok = st.form_submit_button(
-                        "登录",
-                        type="primary",
-                        width="stretch",
-                        help="首次运行请执行 python -m mla init 设置管理员账号。",
-                    )
+                    ok = st.form_submit_button("登录", type="primary", width="stretch")
                 if ok:
                     user = authenticate(repo, name, pwd)
                     if user is None:
@@ -374,7 +402,7 @@ def _login_screen(repo: SqliteRepository) -> None:
             with tab_reg:
                 with st.form("register"):
                     name2 = st.text_input("用户名（≥3 字符）")
-                    pwd2 = st.text_input("密码（≥6 位）", type="password")
+                    pwd2 = st.text_input(f"密码（≥{MIN_PASSWORD_LEN} 位）", type="password")
                     ent_name = st.text_input("企业名称（可选）")
                     ok2 = st.form_submit_button("注册", width="stretch")
                 if ok2:
@@ -388,6 +416,86 @@ def _login_screen(repo: SqliteRepository) -> None:
                         st.rerun()
                     except ValueError as exc:
                         st.error(str(exc), icon=":material/error:")
+
+
+# ---------------- 首次初始化（库里还没有管理员） ----------------
+def init_form_error(repo: SqliteRepository, username: str, password: str, confirm: str) -> str:
+    """初始化表单校验：返回第一条错误，空串表示可以建号。
+
+    顺序固定：账号非空 → 两次密码一致 → 长度 → 重名；先查重名再建企业，避免留下空企业。
+    """
+    name = username.strip()
+    if not name:
+        return "请填写管理员账号"
+    if password != confirm:
+        return "两次输入的密码不一致"
+    if len(password) < MIN_PASSWORD_LEN:
+        return f"密码至少 {MIN_PASSWORD_LEN} 位"
+    if repo.get_user_by_name(name):
+        return f"用户名已存在：{name}"
+    return ""
+
+
+def _init_screen(repo: SqliteRepository) -> None:
+    """空库首次运行：先建管理员，建完直接进主界面，不用再登录一次。"""
+    st.space("large")
+    left, right = st.columns([1.15, 1], gap="large", vertical_alignment="center")
+    with left:
+        if LOGO.exists():
+            st.image(str(LOGO), width=56)
+        st.title("首次使用", anchor=False)
+    with right:
+        with st.container(border=True):
+            with st.form("init_admin"):
+                username = st.text_input("管理员账号", placeholder="请输入管理员账号")
+                pwd = st.text_input("登录密码", type="password", placeholder=f"至少 {MIN_PASSWORD_LEN} 位")
+                pwd2 = st.text_input("确认密码", type="password", placeholder="再输入一次")
+                ent_name = st.text_input("企业名称", placeholder="可留空，稍后在企业档案里补")
+                created = st.form_submit_button("创建并进入", type="primary", width="stretch")
+            if created:
+                error = init_form_error(repo, username, pwd, pwd2)
+                if error:
+                    st.error(error, icon=":material/error:")
+                else:
+                    try:
+                        user = create_first_admin(repo, username, pwd, ent_name)
+                    except ValueError as exc:
+                        st.error(str(exc), icon=":material/error:")
+                    else:
+                        st.session_state["user"] = user
+                        st.rerun()
+
+
+# ---------------- 首次登录引导（每个账号一次） ----------------
+ONBOARDING_TITLE = "开始之前"
+# 登录页删掉的说明集中在这里说一次：用途、边界、数据去向、范围。
+ONBOARDING_POINTS: tuple[str, ...] = (
+    "用途：核对劳动合同中的用工风险，每条结论都给出法条依据。",
+    "边界：只提示与法条存在冲突的地方，不判定违法或无效，不构成法律意见。",
+    "数据：核对时合同正文会发送给模型服务用于抽取；检索、追问与问答只发送结构化事实。",
+    "范围：只处理劳动用工与劳动合同问题，其他问题会拒答并建议咨询专业人士。",
+)
+
+
+def _should_onboard(user: User | None) -> bool:
+    """是否要弹首次引导：只看落库的 onboarded 字段，不看会话状态（换设备也不重弹）。"""
+    return user is not None and not user.onboarded
+
+
+def _onboarding_content() -> tuple[str, tuple[str, ...]]:
+    """引导弹窗的标题与正文条目，单独抽出来便于测试文案本身。"""
+    return ONBOARDING_TITLE, ONBOARDING_POINTS
+
+
+@st.dialog(ONBOARDING_TITLE, icon=":material/info:", on_dismiss="rerun")
+def _onboarding_dialog(repo: SqliteRepository, user: User) -> None:
+    """模态弹窗：确认后才算引导完成；点关闭等同未确认，下次登录仍会弹。"""
+    _title, points = _onboarding_content()
+    st.markdown("\n".join(f"- {point}" for point in points))
+    if st.button("我知道了", type="primary", width="stretch", icon=":material/check:"):
+        repo.mark_onboarded(user.user_id)
+        st.session_state["user"] = replace(user, onboarded=True)
+        st.rerun()
 
 
 # ---------------- 企业 ----------------
@@ -750,7 +858,7 @@ def _ask_panel(repo: SqliteRepository, user: User, pending: dict, ent_facts: dic
                 max_ask_rounds=1,
                 contract_name=str(st.session_state.get("ask_contract_name") or ""),
                 contract_id=str(st.session_state.get("ask_contract_id") or ""),
-                llm=_resolve_llm(get_config()),
+                llm=_resolve_llm(get_config(), repo),
                 clause_review=st.session_state.get("ask_clause_review"),
             )
         st.session_state["last_task"] = task
@@ -943,7 +1051,7 @@ def _optional_picks(task, repo: SqliteRepository) -> list[str]:
     candidates = candidate_fields(tuple(repo.list_rules()), facts, limit=MAX_ASK_CANDIDATES)
     picked: list[str] = []
     if candidates:
-        llm_cfg = _resolve_llm(get_config())
+        llm_cfg = _resolve_llm(get_config(), repo)
         generator = DeepSeekLLM(llm_cfg) if llm_cfg is not None else None
         picked, _errors = suggest_optional(generator, facts, candidates)
     cache[key] = list(picked)
@@ -995,7 +1103,7 @@ def _render_optional_facts(task, repo: SqliteRepository, user: User) -> None:
             max_ask_rounds=1,
             contract_name=str(st.session_state.get("ask_contract_name") or task.contract_name),
             contract_id=task.contract_id,
-            llm=_resolve_llm(get_config()),
+            llm=_resolve_llm(get_config(), repo),
             clause_review=st.session_state.get("ask_clause_review"),
         )
     st.session_state["last_task"] = new_task
@@ -1362,7 +1470,7 @@ def _render_qa_panel(task, repo: SqliteRepository, user: User) -> None:
                         question=text,
                         repo=repo,
                         enterprise_id=user.enterprise_id,
-                        llm=_resolve_llm(get_config()),
+                        llm=_resolve_llm(get_config(), repo),
                         context=_qa_context(task),
                     )
                 st.session_state["last_qa_context"] = {"task_id": task.task_id, "qa": answer}
@@ -1434,6 +1542,68 @@ def _render_qa(task, repo: SqliteRepository) -> None:
         if task.agent_trace or task.token_in or task.token_out:
             with st.expander("详情", icon=":material/info:"):
                 st.caption(_qa_detail(task))
+
+
+# ---------------- 设置 ----------------
+def _settings_flash() -> None:
+    """保存 / 清除后的提示：重跑一次再显示，避免提示跟着旧值一起刷新掉。"""
+    if msg := st.session_state.pop("settings_flash", ""):
+        st.success(msg, icon=":material/check_circle:")
+
+
+def _render_model_settings(repo: SqliteRepository) -> None:
+    """模型 Key（仅管理员）：落库后下次启动自动读取；清除即回落到下一优先级。"""
+    sources = llm_key_sources(repo)
+    st.markdown("#### :material/smart_toy: 模型设置")
+    st.caption(f"当前 Key 来源：{key_source_label(sources)}")
+    st.caption("优先级 secrets.toml > 数据库 > 环境变量")
+    with st.form("llm_key_form"):
+        new_key = st.text_input(
+            "DeepSeek API Key",
+            type="password",
+            placeholder="sk-……（保存在本机数据库，不写日志）",
+        )
+        saved = st.form_submit_button("保存", type="primary", icon=":material/save:")
+    if saved:
+        key = new_key.strip()
+        if not key:
+            st.warning("请先输入 Key；要清除已保存的 Key，用下面的清除按钮。", icon=":material/warning:")
+        else:
+            repo.set_setting(LLM_KEY_SETTING, key)
+            st.session_state["settings_flash"] = "已保存到本机数据库，下次启动自动读取"
+            st.rerun()
+    if st.button("清除数据库中的 Key", icon=":material/delete:"):
+        repo.set_setting(LLM_KEY_SETTING, "")
+        st.session_state["settings_flash"] = "已清除数据库中的 Key，回落到下一优先级"
+        st.rerun()
+
+
+def _render_account_settings(repo: SqliteRepository, user: User) -> None:
+    st.markdown("#### :material/person: 账号设置")
+    st.text_input("用户名", value=user.username, disabled=True)
+    with st.form("pwd_form"):
+        old = st.text_input("当前密码", type="password")
+        new = st.text_input(f"新密码（至少 {MIN_PASSWORD_LEN} 位）", type="password")
+        confirm = st.text_input("确认新密码", type="password")
+        changed = st.form_submit_button("修改密码", type="primary", icon=":material/key:")
+    if changed:
+        if new != confirm:
+            st.error("两次输入的新密码不一致", icon=":material/error:")
+            return
+        ok, msg = change_password(repo, user, old, new)
+        if ok:
+            st.success("密码已修改，下次登录请使用新密码。", icon=":material/check_circle:")
+        else:
+            st.error(msg, icon=":material/error:")
+
+
+def _page_settings(repo: SqliteRepository, user: User) -> None:
+    """设置页：模型 Key 只给管理员；改密码所有登录用户都能用。"""
+    page_header("settings", "设置")
+    _settings_flash()
+    if is_admin(user):
+        _render_model_settings(repo)
+    _render_account_settings(repo, user)
 
 
 # ---------------- 管理端 ----------------
@@ -1687,10 +1857,17 @@ def main() -> None:
     repo = get_repo(cfg.paths.db)
     user = st.session_state.get("user")
     if user is None:
+        # 库里还没有管理员就是首次使用：先建号，不显示登录表单。
+        if not has_admin(repo):
+            _init_screen(repo)
+            return
         _login_screen(repo)
         return
     _sidebar_chrome()
-    _llm_settings(cfg)
+    _llm_settings(cfg, repo)
+    if _should_onboard(user):
+        # 模态弹窗：确认前页面其它控件点不动，但渲染不受影响。
+        _onboarding_dialog(repo, user)
     nav = _build_nav(repo, user)
     _sidebar_footer(user)
     nav.run()

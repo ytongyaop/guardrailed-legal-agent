@@ -161,7 +161,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     """
     from .adapters.persist import SqliteRepository
     from .domain.models import Enterprise, Role
-    from .services.auth import register
+    from .services.auth import MIN_PASSWORD_LEN, register
 
     repo = SqliteRepository()
     if repo.get_user_by_name(args.admin_username):
@@ -169,8 +169,9 @@ def cmd_init(args: argparse.Namespace) -> int:
         return 1
     generated = not args.admin_password
     password = args.admin_password or _random_password()
-    if not generated and len(password) < 8:
-        print(f"警告：口令只有 {len(password)} 位，建议至少 8 位。", file=sys.stderr)
+    if not generated and len(password) < MIN_PASSWORD_LEN:
+        print(f"口令至少 {MIN_PASSWORD_LEN} 位。", file=sys.stderr)
+        return 1
     ent_id = ""
     if args.enterprise:
         ent_id = "E-" + args.admin_username[:6]
@@ -193,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     p_init.add_argument(
         "--admin-password",
         default=None,
-        help="管理员口令；不传则随机生成 16 位并只打印一次",
+        help="管理员口令；不传则随机生成 16 位并只打印一次，指定时至少 8 位",
     )
     p_init.add_argument("--enterprise", default="")
     p_init.set_defaults(func=cmd_init)

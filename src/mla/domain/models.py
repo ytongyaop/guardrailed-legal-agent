@@ -325,6 +325,7 @@ class User:
     role: Role = Role.USER
     enterprise_id: str = ""
     created_at: str = ""
+    onboarded: bool = False
 
 
 @dataclass(frozen=True)

@@ -44,7 +44,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
   user_id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL, salt TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT '用户', enterprise_id TEXT DEFAULT '', created_at TEXT
+  role TEXT NOT NULL DEFAULT '用户', enterprise_id TEXT DEFAULT '', created_at TEXT,
+  onboarded INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS enterprises (
   enterprise_id TEXT PRIMARY KEY, name TEXT NOT NULL, employer_type TEXT,
@@ -66,6 +67,9 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE TABLE IF NOT EXISTS logs (
   log_id TEXT PRIMARY KEY, task_id TEXT, user_id TEXT, action TEXT, detail TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT
 );
 """
 
@@ -91,6 +95,11 @@ TASK_MIGRATIONS: dict[str, str] = {
     "ask_items": "TEXT",
     "clause_review": "INTEGER DEFAULT 0",
     "model": "TEXT",
+}
+
+# 旧库迁移（users 表）：早期版本的 users 表没有 onboarded 列，启动时按需补。
+USER_MIGRATIONS: dict[str, str] = {
+    "onboarded": "INTEGER DEFAULT 0",
 }
 
 
@@ -231,6 +240,10 @@ class SqliteRepository:
         for name, ddl in TASK_MIGRATIONS.items():
             if name not in cols:
                 self._conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {ddl}")
+        user_cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(users)")}
+        for name, ddl in USER_MIGRATIONS.items():
+            if name not in user_cols:
+                self._conn.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
         # 旧记录只有日期：补成当天 00:00:00，保证按时间排序时新旧可比较
         for table in ("tasks", "logs"):
             self._conn.execute(
@@ -282,8 +295,8 @@ class SqliteRepository:
     # ---------- 账号 ----------
     def create_user(self, user: User) -> None:
         self._conn.execute(
-            "INSERT INTO users(user_id,username,password_hash,salt,role,enterprise_id,created_at)"
-            " VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO users(user_id,username,password_hash,salt,role,enterprise_id,created_at,onboarded)"
+            " VALUES(?,?,?,?,?,?,?,?)",
             (
                 user.user_id,
                 user.username,
@@ -292,6 +305,7 @@ class SqliteRepository:
                 str(user.role),
                 user.enterprise_id,
                 user.created_at or _now(),
+                int(user.onboarded),
             ),
         )
         self._conn.commit()
@@ -313,6 +327,19 @@ class SqliteRepository:
         self._conn.execute("UPDATE users SET enterprise_id=? WHERE user_id=?", (enterprise_id, user_id))
         self._conn.commit()
 
+    def set_user_password(self, user_id: str, password_hash: str, salt: str) -> None:
+        """改口令：只覆盖哈希与盐（调用方负责生成，明文不落库）。"""
+        self._conn.execute(
+            "UPDATE users SET password_hash=?, salt=? WHERE user_id=?",
+            (password_hash, salt, user_id),
+        )
+        self._conn.commit()
+
+    def mark_onboarded(self, user_id: str) -> None:
+        """标记"已完成首次登录引导"；重复标记幂等。"""
+        self._conn.execute("UPDATE users SET onboarded=1 WHERE user_id=?", (user_id,))
+        self._conn.commit()
+
     @staticmethod
     def _row_to_user(row: sqlite3.Row) -> User:
         return User(
@@ -323,6 +350,7 @@ class SqliteRepository:
             role=Role(row["role"]),
             enterprise_id=row["enterprise_id"] or "",
             created_at=row["created_at"] or "",
+            onboarded=bool(row["onboarded"]) if "onboarded" in row.keys() else False,
         )
 
     def delete_user(self, user_id: str, *, actor_id: str, log_id: str) -> UserDeletion:
@@ -592,6 +620,23 @@ class SqliteRepository:
             )
             for r in rows
         ]
+
+    # ---------- 设置（键值对） ----------
+    def get_setting(self, key: str) -> str:
+        """读设置；键不存在返回空串（不抛异常，界面按"未配置"处理）。"""
+        row = self._conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        if row is None:
+            return ""
+        return str(row["value"] or "")
+
+    def set_setting(self, key: str, value: str) -> None:
+        """写设置：已存在则覆盖，并记下更新时间。"""
+        self._conn.execute(
+            "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?)"
+            " ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (key, value, _now()),
+        )
+        self._conn.commit()
 
     # ---------- 序列化 ----------
     @staticmethod

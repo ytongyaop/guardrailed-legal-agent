@@ -33,9 +33,13 @@ def test_init_generates_random_password_when_omitted(capsys: pytest.CaptureFixtu
     assert authenticate(SqliteRepository(), "admin", pwd) is not None
 
 
-def test_init_warns_but_accepts_short_password(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["init", "--admin-username", "admin", "--admin-password", "short1"]) == 0
+def test_init_rejects_short_password(capsys: pytest.CaptureFixture[str]) -> None:
+    """显式给的口令不足 8 位直接拒绝，不建号、也不留半成品企业。"""
+    assert (
+        main(["init", "--admin-username", "admin", "--admin-password", "short1", "--enterprise", "示例企业"])
+        == 1
+    )
     captured = capsys.readouterr()
-    assert "警告" in captured.err
+    assert "至少 8 位" in captured.err
     assert _printed_password(captured.out) == ""  # 显式给的口令不回显
-    assert authenticate(SqliteRepository(), "admin", "short1") is not None
+    assert authenticate(SqliteRepository(), "admin", "short1") is None

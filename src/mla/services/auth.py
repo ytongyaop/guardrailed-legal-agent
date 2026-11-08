@@ -9,10 +9,13 @@ import hashlib
 import secrets
 import uuid
 
-from ..domain.models import Role, User, UserDeletion
+from ..domain.models import Enterprise, Role, User, UserDeletion
 from ..ports.repository import Repository
 
 _ITER = 120_000
+
+# 口令下限：注册、首次初始化、改口令统一用这一处，避免三条路径各说各话
+MIN_PASSWORD_LEN = 8
 
 
 def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
@@ -35,8 +38,8 @@ def register(
     username = username.strip()
     if len(username) < 3:
         raise ValueError("用户名至少 3 个字符")
-    if len(password) < 6:
-        raise ValueError("密码至少 6 位")
+    if len(password) < MIN_PASSWORD_LEN:
+        raise ValueError(f"密码至少 {MIN_PASSWORD_LEN} 位")
     if repo.get_user_by_name(username):
         raise ValueError(f"用户名已存在：{username}")
     digest, salt = hash_password(password)
@@ -70,6 +73,45 @@ def require_admin(user: User | None) -> None:
         raise PermissionError("未登录")
     if not is_admin(user):
         raise PermissionError("需要管理员权限")
+
+
+def has_admin(repo: Repository) -> bool:
+    """库里是否已有管理员：界面据此决定显示"首次初始化"还是"登录"。"""
+    return any(is_admin(u) for u in repo.list_users())
+
+
+def change_password(repo: Repository, user: User, old_password: str, new_password: str) -> tuple[bool, str]:
+    """改口令：先验旧口令，再校验新口令长度与是否与原口令相同。
+
+    返回 (成功?, 失败原因)；成功时原因是空串。密码只存哈希 + 新盐，不写日志。
+    """
+    if not verify_password(old_password, user.password_hash, user.salt):
+        return False, "当前口令不正确"
+    if len(new_password) < MIN_PASSWORD_LEN:
+        return False, f"新口令至少 {MIN_PASSWORD_LEN} 位"
+    if new_password == old_password:
+        return False, "新口令不能与当前口令相同"
+    digest, salt = hash_password(new_password)
+    repo.set_user_password(user.user_id, digest, salt)
+    return True, ""
+
+
+def create_first_admin(repo: Repository, username: str, password: str, enterprise_name: str = "") -> User:
+    """首次初始化：建管理员账号；给了企业名就同时建企业并绑定。
+
+    口令不足 8 位直接抛 ValueError（界面会先拦一道）。
+    先查用户名再建企业，避免中途报错留下孤零零的企业档案。
+    """
+    username = username.strip()
+    if len(password) < MIN_PASSWORD_LEN:
+        raise ValueError(f"管理员口令至少 {MIN_PASSWORD_LEN} 位")
+    if repo.get_user_by_name(username):
+        raise ValueError(f"用户名已存在：{username}")
+    enterprise_id = ""
+    if enterprise_name.strip():
+        enterprise_id = "E-" + uuid.uuid4().hex[:8]
+        repo.save_enterprise(Enterprise(enterprise_id=enterprise_id, name=enterprise_name.strip()))
+    return register(repo, username, password, Role.ADMIN, enterprise_id)
 
 
 def delete_account(repo: Repository, actor: User, target_username: str) -> UserDeletion:

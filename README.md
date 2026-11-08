@@ -54,21 +54,32 @@ pip install -e .
 pip install -e ".[ui,files]"
 ```
 
-装好后依次执行：
+装好后启动界面：
 
 ```bash
-python -m mla init --admin-username admin --enterprise "示例企业"
-python -m mla check --contract src/mla/data/evalsets/sample_contract.txt
 streamlit run src/mla/ui/app.py
 ```
 
-三条命令依次完成：初始化管理员账号并绑定企业、对仓库自带示例合同跑一次命令行核对、启动网页界面（Streamlit，启动后在浏览器打开命令行输出的地址；界面内可导出 Word 核对报告）。
+浏览器打开命令行输出的地址（默认 8501 端口）。库里还没有管理员账号时，页面会先显示初始化表单，填用户名、密码、企业名称，提交后直接进入主界面，不用再登录一次。
 
-`init` 不传 `--admin-password` 时自动生成 16 位随机口令，建号后只打印一次，请立即记录（之后不再显示）；要自己指定口令就加 `--admin-password`（少于 8 位会提示一条警告，不阻断）。
+- 密码至少 8 位：注册、首次初始化、改密码用同一条下限。
+- 首次登录会展示一次使用说明与免责声明，看过一次后不再弹出。
+- 账号相关操作都在设置页：管理员可在那里填写模型 Key，所有登录用户都可以修改密码。
+
+### 无界面部署（可选）
+
+没有浏览器，或者要在服务器上脚本化部署时，改用命令行完成同样的初始化：
+
+```bash
+python -m mla init --enterprise "示例企业"
+python -m mla check --contract src/mla/data/evalsets/sample_contract.txt
+```
+
+`init` 默认创建用户名为 admin 的管理员；不传 `--admin-password` 时自动生成十六位随机口令，建号后只打印一次，请立即记录（之后不再显示）；自己指定口令时至少 8 位，不足直接报错退出。`check` 对仓库自带示例合同跑一次命令行核对，不依赖界面。
 
 没有安装界面依赖（`[ui,files]`）时，`streamlit run` 与 Word 报告导出不可用；命令行核对与评测脚本不受影响。
 
-密钥按需配置：完整能力需要 `MLA_LLM_API_KEY`（DeepSeek），语义向量检索另需 `DASHSCOPE_API_KEY`（阿里云）。不配 Key 时系统不装作能用，而是显式降级：
+密钥按需配置：完整能力需要 DeepSeek 的模型 Key，语义向量检索另需 `DASHSCOPE_API_KEY`（阿里云）。模型 Key 有三处来源，优先级为 `.streamlit/secrets.toml` > 设置页保存到本机数据库 > 环境变量 `MLA_LLM_API_KEY`；在设置页配置一次后，之后每次登录自动沿用，不必反复填。不配 Key 时系统不装作能用，而是显式降级：
 
 - 关键字段抽取回退纯正则；
 - 条款级审查不执行，界面开关置灰；
@@ -77,11 +88,19 @@ streamlit run src/mla/ui/app.py
 
 ## 配置
 
-密钥只从环境变量或 `.streamlit/secrets.toml`（不入库）读取，不写进仓库、不落数据库。
+密钥来源与优先级（三处都读原始值，前一处非空即生效）：
+
+| 优先级 | 位置 | 说明 |
+| --- | --- | --- |
+| 1 | `.streamlit/secrets.toml` 的 `[llm]` 段 `api_key` | 服务端统一配置，该文件不入库 |
+| 2 | 设置页保存到本机数据库 | 管理员填一次即落库，之后各次登录自动沿用 |
+| 3 | 环境变量 `MLA_LLM_API_KEY` | 容器或 CI 里常用 |
+
+任何一处都不写进仓库、不写进日志；要换 Key 时优先改前一处，改完重启界面即可。
 
 | 变量 | 说明 | 默认 |
 | --- | --- | --- |
-| `MLA_LLM_API_KEY` | DeepSeek API 密钥；也可放 `secrets.toml` 的 `[llm]` 段 `api_key` | 空 |
+| `MLA_LLM_API_KEY` | DeepSeek API 密钥；也可放 `secrets.toml` 的 `[llm]` 段 `api_key`，或在设置页保存到本机数据库 | 空 |
 | `MLA_LLM_MODEL` | 对话模型名（OpenAI 兼容接口） | `deepseek-chat` |
 | `MLA_LLM_BASE_URL` | 接口地址 | `https://api.deepseek.com` |
 | `DASHSCOPE_API_KEY` | 阿里云密钥，用于 `qwen3.7-text-embedding-flash` 语义向量；也可放 `secrets.toml` 的 `[embedding]` 段 `api_key` | 空，未配置时检索回退 BM25 |
@@ -105,7 +124,7 @@ streamlit run src/mla/ui/app.py
 | 必备条款规格 | 9 类 | 依据《劳动合同法》第十七条 |
 | 官方案例 | 37 条 | 附在结论后供参考 |
 | 评测数据 | 回归集：主流程 52 条、条款级 95 条（正样本 38、负样本 57）；留出集：非模板合同 12 条、问答 20 条 | 两类纪律不同：回归集每次改动必跑、只要求不退化；留出集不参与调优、用于报告能力。构造方式见 [docs/evaluation.md](docs/evaluation.md) |
-| 测试 | 386 条 | 全部离线可复现：测试强制纯正则抽取并屏蔽真实 Key |
+| 测试 | 413 条 | 全部离线可复现：测试强制纯正则抽取并屏蔽真实 Key |
 
 评测结果（口径与数字同样重要，务必连着读）：
 
@@ -144,7 +163,7 @@ src/mla/
     cases/cases.jsonl            37 条官方案例
     evalsets/                    回归集 52 ＋ 95，留出集 12 ＋ 20
 scripts/        校验与评测脚本
-tests/          386 条测试
+tests/          413 条测试
 docs/           architecture.md evaluation.md
 .github/        workflows/ci.yml · dependabot.yml · pull_request_template.md · ISSUE_TEMPLATE/
 .streamlit/     config.toml secrets.toml.example
@@ -192,7 +211,7 @@ python scripts/eval_clauses.py --runs 1
 | 追问 / 问答 | 只发送问题 + 本次核对的结构化事实（已抽字段、规则命中、条款段落号与等级、命中法条） | 合同正文、条款片段原文 |
 
 - 抽取环节发送正文这件事界面有明确提示；条款审查只发候选邻近段落，因此模型看不到全文，它自己"额外发现"的问题会相应变少——这是隐私优先的取舍。
-- 账号、企业、合同、任务、日志存本地 SQLite（默认工作目录下的 `mla.sqlite3`，可用 `MLA_DB` 覆盖；5 张表：users / enterprises / contracts / tasks / logs）；一个账号绑定一个企业，任务删除为软删、日志留痕。
+- 账号、企业、合同、任务、日志存本地 SQLite（默认工作目录下的 `mla.sqlite3`，可用 `MLA_DB` 覆盖；6 张表：users / enterprises / contracts / tasks / logs / settings）；一个账号绑定一个企业，任务删除为软删、日志留痕。设置页保存的模型 Key 也在这张 `settings` 表里，明文落库、不写日志，随数据库文件一起备份或迁移。
 
 ## 免责声明
 

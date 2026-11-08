@@ -1,6 +1,6 @@
 """界面冒烟测试：用 Streamlit 官方 AppTest 真跑一遍脚本，断言没有异常。
 
-覆盖：未登录时显示登录页；注册后进入主界面（st.navigation 多页导航）。
+覆盖：空库显示首次初始化页；有管理员时登录页只留标题；注册后进入主界面（st.navigation 多页导航）。
 """
 
 from __future__ import annotations
@@ -15,40 +15,82 @@ pytest.importorskip("streamlit")
 
 from pathlib import Path
 
+import streamlit as st
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
-from mla.domain.models import Role  # noqa: E402
+from mla.adapters.persist import SqliteRepository  # noqa: E402
+from mla.domain.models import Role, User  # noqa: E402
+from mla.services.auth import hash_password  # noqa: E402
 
 APP = str(Path(__file__).resolve().parents[1] / "src" / "mla" / "ui" / "app.py")
 
 
 def _fresh_app(tmp_path, monkeypatch) -> AppTest:
-    """把数据库指到临时目录，避免污染真实库。"""
+    """把数据库指到临时目录，避免污染真实库。
+
+    `get_config` / `get_repo` 是 st.cache_resource：不清缓存的话，同一进程里后一个测试
+    会继续用第一个测试库的路径（实测过），断言就会串味。
+    """
     monkeypatch.setenv("MLA_DB", str(tmp_path / "ui.sqlite3"))
+    st.cache_resource.clear()
     return AppTest.from_file(APP, default_timeout=30)
+
+
+def _seed_admin(tmp_path, monkeypatch, *, onboarded: bool = True) -> User:
+    """直接在 AppTest 会读的那个库里建管理员，用来测“已经初始化过”的分支。"""
+    monkeypatch.setenv("MLA_DB", str(tmp_path / "ui.sqlite3"))
+    repo = SqliteRepository(db_path=str(tmp_path / "ui.sqlite3"))
+    digest, salt = hash_password("secret123")
+    user = User(
+        user_id="U-ADMIN",
+        username="admin",
+        password_hash=digest,
+        salt=salt,
+        role=Role.ADMIN,
+        onboarded=onboarded,
+    )
+    repo.create_user(user)
+    return user
 
 
 def _input(at: AppTest, label: str):
     return next(x for x in at.text_input if x.label == label)
 
 
+def test_init_page_renders_without_admin(tmp_path, monkeypatch) -> None:
+    """空库先初始化：显示管理员创建表单，不显示登录表单。"""
+    at = _fresh_app(tmp_path, monkeypatch).run()
+    assert not at.exception
+    assert any("首次使用" in t.value for t in at.title)
+    labels = [i.label for i in at.text_input]
+    for label in ("管理员账号", "登录密码", "确认密码", "企业名称"):
+        assert label in labels
+    assert not any(b.label == "登录" for b in at.button)
+    assert not any(b.label == "注册" for b in at.button)
+
+
 def test_login_page_renders(tmp_path, monkeypatch) -> None:
+    _seed_admin(tmp_path, monkeypatch)
     at = _fresh_app(tmp_path, monkeypatch).run()
     assert not at.exception
     assert any("小微企业用工风险辅助系统" in t.value for t in at.title)
     assert any(i.label == "用户名" for i in at.text_input)
 
 
-def test_login_page_keeps_titles_without_feature_notes(tmp_path, monkeypatch) -> None:
-    """登录页只留图标 + 标题：三句换说法的说明删掉，产品边界那句保留。"""
+def test_login_page_is_minimal(tmp_path, monkeypatch) -> None:
+    """登录页只留图标 + 标题 + 登录/注册：副标题、功能项、边界句都挪到首次引导弹窗。"""
+    _seed_admin(tmp_path, monkeypatch)
     at = _fresh_app(tmp_path, monkeypatch).run()
     assert not at.exception
     texts = _all_text(at)
-    for title in ("逐条核对", "依据可核验", "缺事实先追问"):
-        assert title in texts
-    for dropped in ("20 条确定性规则覆盖", "每条结论回链现行法条原文", "关键事实不齐时先追问"):
-        assert dropped not in texts
-    assert "仅处理劳动用工与劳动合同问题，越界直接拒答。" in texts
+    for dropped in (
+        "劳动合同逐条核对，结论回链法条原文。",
+        "逐条核对",
+        "依据可核验",
+        "缺事实先追问",
+        "仅处理劳动用工与劳动合同问题，越界直接拒答。",
+    ):
+        assert dropped not in texts, f"登录页仍保留已删除的说明：{dropped}"
 
 
 def test_admin_eval_design_notes_removed() -> None:
@@ -109,10 +151,11 @@ def test_admin_delete_copy_is_present() -> None:
 
 
 def test_register_then_landing(tmp_path, monkeypatch) -> None:
+    _seed_admin(tmp_path, monkeypatch)
     at = _fresh_app(tmp_path, monkeypatch).run()
     name = "ui" + uuid.uuid4().hex[:6]
     _input(at, "用户名（≥3 字符）").set_value(name)
-    _input(at, "密码（≥6 位）").set_value("secret123")
+    _input(at, "密码（≥8 位）").set_value("secret123")
     next(b for b in at.button if b.label == "注册").click().run()
 
     assert not at.exception
@@ -172,11 +215,11 @@ def _groups(lines: list[str]) -> list[str]:
 
 
 def test_navigation_groups_for_normal_user() -> None:
-    """普通用户两组：工作台只放合同核对（默认页），管理放三页，问答不再独立成页。"""
+    """普通用户两组：工作台只放合同核对（默认页），管理放四页（含设置），问答不再独立成页。"""
     lines = _nav_lines(Role.USER)
     assert _groups(lines) == ["工作台", "管理"]
     assert "GROUP:工作台=合同核对" in lines
-    assert "GROUP:管理=企业档案,合同管理,历史记录" in lines
+    assert "GROUP:管理=企业档案,合同管理,历史记录,设置" in lines
     assert "DEFAULT=合同核对" in lines
     assert not any("受限问答" in line for line in lines)
 
