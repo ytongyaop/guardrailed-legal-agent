@@ -11,8 +11,10 @@ from __future__ import annotations
 import argparse
 import json
 import secrets
+import sqlite3
 import string
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,10 @@ from .graph.build import build_graph
 from .graph.nodes import Deps
 from .graph.state import CheckState
 from .services.retrieval import build_retriever
+
+# 与界面设置页写入的键名保持一致（见 src/mla/ui/app.py 的 LLM_KEY_SETTING）。
+# 这里不 import app.py：那会连带把 streamlit 拖进命令行入口。
+LLM_KEY_SETTING = "llm_api_key"
 
 
 def _load_facts(path: str | None) -> dict[str, str]:
@@ -40,6 +46,25 @@ def _load_contract(path: str | None) -> str:
     if not path:
         return ""
     return Path(path).read_text(encoding="utf-8")
+
+
+def _sqlite_api_key() -> str:
+    """从数据库 settings 表读界面设置页保存的 Key（键 llm_api_key）。
+
+    解析顺序在 `cmd_check` 里体现：环境变量 / secrets.toml（`load_config` 已合并）优先，
+    这里只做兜底，让命令行与界面看到同一份配置。
+    库文件不存在时直接返回空串：读配置不该顺手创建数据库。
+    """
+    from .adapters.persist import SqliteRepository
+
+    db = Path(load_config().paths.db)
+    if not db.is_file():
+        return ""
+    try:
+        return SqliteRepository().get_setting(LLM_KEY_SETTING)
+    except (OSError, sqlite3.Error):
+        # 读配置失败不该让核对主流程崩掉，按未配置处理（与界面读不到 Key 同口径）
+        return ""
 
 
 def _missing_summary(terms: list) -> dict[str, Any]:
@@ -99,10 +124,12 @@ def cmd_check(args: argparse.Namespace) -> int:
         "question": args.question or "",
         "variant": args.variant,
     }
+    # 环境变量 / secrets.toml 为空时，回落到界面设置页写进 settings 表的 Key
+    api_key = cfg.llm.api_key or _sqlite_api_key()
     deps = Deps(
         rules=rules,
         retriever=build_retriever(cfg),
-        generator=DeepSeekLLM(cfg.llm) if cfg.llm.api_key else None,
+        generator=DeepSeekLLM(replace(cfg.llm, api_key=api_key)) if api_key else None,
     )
     final, order = _run(init, deps, args.trace)
 

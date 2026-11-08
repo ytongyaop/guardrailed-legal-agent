@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -56,3 +57,27 @@ def test_unknown_subcommand_exits_non_zero(capsys: pytest.CaptureFixture[str]) -
         main(["no-such-command"])
     assert excinfo.value.code not in (0, None)
     assert "no-such-command" in capsys.readouterr().err
+
+
+# ---------- 数据库里的 Key 兜底（界面设置页写 settings 表） ----------
+
+
+def test_sqlite_api_key_reads_setting_from_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """界面把 Key 存进 settings 表的 llm_api_key，命令行的兜底读取要取到同一份。"""
+    from mla.adapters.persist import SqliteRepository
+    from mla.cli import _sqlite_api_key
+
+    db = tmp_path / "key.sqlite3"
+    SqliteRepository(db_path=str(db)).set_setting("llm_api_key", "sk-local-test")
+    monkeypatch.setenv("MLA_DB", str(db))
+    assert _sqlite_api_key() == "sk-local-test"
+
+
+def test_sqlite_api_key_empty_when_db_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """库文件不存在时返回空串：读配置不创建数据库。"""
+    from mla.cli import _sqlite_api_key
+
+    db = tmp_path / "missing.sqlite3"
+    monkeypatch.setenv("MLA_DB", str(db))
+    assert _sqlite_api_key() == ""
+    assert not db.exists()
