@@ -39,10 +39,36 @@ def test_login_page_renders(tmp_path, monkeypatch) -> None:
     assert any(i.label == "用户名" for i in at.text_input)
 
 
+def test_login_page_keeps_titles_without_feature_notes(tmp_path, monkeypatch) -> None:
+    """登录页只留图标 + 标题：三句换说法的说明删掉，产品边界那句保留。"""
+    at = _fresh_app(tmp_path, monkeypatch).run()
+    assert not at.exception
+    texts = _all_text(at)
+    for title in ("逐条核对", "依据可核验", "缺事实先追问"):
+        assert title in texts
+    for dropped in ("20 条确定性规则覆盖", "每条结论回链现行法条原文", "关键事实不齐时先追问"):
+        assert dropped not in texts
+    assert "仅处理劳动用工与劳动合同问题，越界直接拒答。" in texts
+
+
+def test_admin_eval_design_notes_removed() -> None:
+    """评测页只留数据（样本数、生成时间），两条设计说明不再出现。"""
+    text = Path(APP).read_text(encoding="utf-8")
+    for dropped in ("本页只读展示最近一次结果", "阈值快照一并写入历史"):
+        assert dropped not in text, f"评测页仍保留设计说明：{dropped}"
+
+
 def test_required_copy_is_present() -> None:
     """必留文案守卫：免责、转介、边界声明、评测口径不能被删。"""
     text = Path(APP).read_text(encoding="utf-8")
-    for required in ("非法律意见", "12348", "不代表合规", "标注说明", "不构成本案结论"):
+    for required in (
+        "非法律意见",
+        "12348",
+        "不代表合规",
+        "标注说明",
+        "不构成本案结论",
+        "条款效力以仲裁机构或法院裁判为准",
+    ):
         assert required in text, f"界面缺少必留文案：{required}"
 
 
@@ -280,6 +306,25 @@ def test_clause_review_note_when_nothing_found(tmp_path) -> None:
     assert "未发现问题" not in texts
 
 
+RESULT_DISCLAIMER_TEXT = "以上为风险提示与依据定位，不构成法律意见；条款效力以仲裁机构或法院裁判为准。"
+
+
+def _disclaimer_count(at: AppTest) -> int:
+    return sum(1 for c in at.caption if c.value == RESULT_DISCLAIMER_TEXT)
+
+
+def test_result_disclaimer_always_once(tmp_path) -> None:
+    """免责常驻结果页底部：开/不开条款审查、有没有条款结论，都只有一行。"""
+    for clause_on, with_finding in ((True, True), (True, False), (False, False)):
+        at = _merged_app(tmp_path, clause_on=clause_on, with_finding=with_finding)
+        assert not at.exception
+        assert _disclaimer_count(at) == 1, f"条款审查={clause_on} 条款结论={with_finding} 时免责不是一行"
+
+    plain = _merged_app(tmp_path, clause_on=False, with_finding=False)
+    assert [c.value for c in plain.caption][-1] == RESULT_DISCLAIMER_TEXT, "免责必须在所有区块之后"
+    assert "违法" not in RESULT_DISCLAIMER_TEXT and "无效" not in RESULT_DISCLAIMER_TEXT
+
+
 HISTORY_SCRIPT = """
 from mla.adapters.persist import SqliteRepository
 from mla.config import Paths, data_path
@@ -326,7 +371,8 @@ def test_check_result_shows_missing_terms(tmp_path, monkeypatch) -> None:
     assert "必备条款完整性" in texts
     assert "劳动合同期限" in texts
     assert "劳动保护与劳动条件" in texts
-    assert "LCL-17" in texts
+    assert "第十七条" in texts
+    assert "LCL-" not in texts  # 内部编号与前缀不露给用户
     assert "MT-" not in texts  # 内部编号不露给用户
     assert "合同无效" not in texts
 
@@ -379,7 +425,7 @@ def test_check_page_empty_state_shows_guide(tmp_path) -> None:
     assert any(b.label == "开始核对" for b in at.button)
     texts = _all_text(at)
     assert "左侧粘贴或选择一份合同，点击开始核对，结果显示在这里。" in texts
-    assert "可补充事实" not in texts
+    assert "可选补充" not in texts
 
 
 def test_check_page_right_column_shows_latest_result(tmp_path) -> None:
@@ -389,7 +435,7 @@ def test_check_page_right_column_shows_latest_result(tmp_path) -> None:
 
     markdowns = [m.value for m in at.markdown]
     assert any("核对结论" in m for m in markdowns)
-    assert sum(1 for m in markdowns if "可补充事实" in m) == 1
+    assert sum(1 for m in markdowns if "可选补充" in m) == 1
     assert "左侧粘贴或选择一份合同，点击开始核对，结果显示在这里。" not in _all_text(at)
     assert not any(h.value == "核对结果" for h in at.subheader)
 
@@ -399,7 +445,7 @@ def test_result_render_alone_has_no_optional_facts(tmp_path) -> None:
     script = RESULT_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
     at = AppTest.from_string(script, default_timeout=60).run()
     assert not at.exception
-    assert "可补充事实" not in _all_text(at)
+    assert "可选补充" not in _all_text(at)
 
 
 ENTERPRISE_SCRIPT = """
@@ -482,7 +528,9 @@ def test_check_page_offers_contract_qa(tmp_path) -> None:
 
     labels = [e.label for e in at.get("expander")]
     assert "就本合同继续提问" in labels
-    assert "回答基于本次核对的结构化事实与命中法条，不发送合同正文。" in _all_text(at)
+    assert any(x.label == "问题" and "不发送合同正文" in (x.help or "") for x in at.text_area), (
+        "提问框的 help 必须说明不发送合同正文"
+    )
 
     next(x for x in at.text_area if x.label == "问题").set_value("试用期约定有什么风险？")
     next(b for b in at.button if b.label == "提问").click().run()
@@ -493,3 +541,4 @@ def test_check_page_offers_contract_qa(tmp_path) -> None:
     assert "contract_text" not in context
     assert "结论与依据（法条原文）" in _all_text(at)
     assert any("试用期最长不得超过六个月。" in m.value for m in at.markdown)
+    assert _disclaimer_count(at) == 1, "问答结论同样只留底部一行免责"

@@ -56,7 +56,7 @@ st.set_page_config(
 DISCLAIMER_FALLBACK = "非法律意见，仅供参考；重大争议请咨询专业人士。"
 CASE_NOTE = "同类情形通常如何认定，不构成本案结论。"
 # 条款审查（存在性域）：等级徽标、片段截断与免责文案集中在此，结果页与历史详情共用。
-# 等级文案只说“与法条存在冲突”，不判“违法/无效”——与 CLAUSE_DISCLAIMER 的免责口径一致，
+# 等级文案只说“与法条存在冲突”，不判“违法/无效”——与 RESULT_DISCLAIMER 的免责口径一致，
 # 也与 prompt 里“不要写该条款违法/无效”的硬性要求对齐。
 CLAUSE_GRADES: tuple[tuple[str, str, str], ...] = (
     ("A", "A 与法条明文冲突", "red"),
@@ -77,7 +77,8 @@ CLAUSE_NOT_REVIEWED_NOTE = "本次未做条款级审查，条款级风险未覆�
 CLAUSE_CLEAR_NOTE = "本次条款级审查未发现可疑条款。"
 # 出现这些诊断说明审查没跑起来或整批输出不可用，只能说“未做”，不能说“未发现”（见 _clause_review_note）。
 _NOT_REVIEWED_MARKERS: tuple[str, ...] = ("未启用", "失败", "已忽略")
-CLAUSE_DISCLAIMER = "以上为风险提示与依据定位，不构成法律意见，条款效力认定以仲裁机构或法院裁判为准。"
+# 结果页底部常驻免责：核对与问答共用一句，不依赖本次是否启用条款审查，也不判“违法/无效”。
+RESULT_DISCLAIMER = "以上为风险提示与依据定位，不构成法律意见；条款效力以仲裁机构或法院裁判为准。"
 # 必备条款汇总句末尾的分母说明：KPI 用 6/8，汇总句合计 9 类，不点明容易被读成矛盾。
 MISSING_TERMS_BASE_NOTE = "（第（九）类为兜底条款，不参与覆盖率）"
 LOGO = Path(__file__).parent / "assets" / "logo.svg"
@@ -198,11 +199,12 @@ def source_label(repo: SqliteRepository, source_id: str) -> str:
     return f"《{short}》{statute.article_no}"
 
 
-def _source_caption(repo: SqliteRepository, statute_id: str) -> None:
-    """法条来源链接：库里没记录 URL 就整行不显示（不编造链接）。"""
-    statute = repo.get_statute(statute_id)
-    if statute is not None and statute.source_url:
-        st.caption(f"来源：{statute.source_url}")
+def _statute_meta(statute) -> str:
+    """法条元信息一行：施行日期 + 来源链接；内部 ID 不对用户显示。"""
+    meta = f"施行日期：{statute.effective_date or '未记录'}"
+    if statute.source_url:
+        meta += f" · 来源：{statute.source_url}"
+    return meta
 
 
 def _facts_from_enterprise(repo: SqliteRepository, user: User) -> dict[str, str]:
@@ -222,7 +224,6 @@ def _facts_from_enterprise(repo: SqliteRepository, user: User) -> dict[str, str]
     return facts
 
 
-SLOT_NAMES = {s.slot_id: s.name for s in DEFAULT_SLOTS}
 QUESTION_TO_SLOT = {s.question: s.slot_id for s in DEFAULT_SLOTS}
 
 # 企业档案录入、但不参与规则判定的两项：没有槽位，界面仍要显示中文名而不是原始 id
@@ -230,7 +231,6 @@ ARCHIVE_FIELD_NAMES: dict[str, str] = {
     "working_hours": "工时制度",
     "social_insurance": "社保缴纳",
 }
-SLOT_NAMES.update(ARCHIVE_FIELD_NAMES)
 
 
 def fact_display_name(field_id: str) -> str:
@@ -249,9 +249,9 @@ SLOT_HINTS = {
 }
 
 
-def page_header(icon: str, title: str, subtitle: str) -> None:
+def page_header(icon: str, title: str) -> None:
+    """页面标题只写标题：分页名、导航与空态已经说明这一页做什么，不再加副标题。"""
     st.header(title, icon=f":material/{icon}:", anchor=False)
-    st.caption(subtitle)
     st.space("small")
 
 
@@ -328,10 +328,11 @@ def _build_nav(repo: SqliteRepository, user: User) -> st.Page:
 
 
 # ---------------- 登录 ----------------
-LOGIN_FEATURES: tuple[tuple[str, str, str], ...] = (
-    ("fact_check", "逐条核对", "20 条确定性规则覆盖试用期、竞业限制、加班、社保等高频风险"),
-    ("menu_book", "依据可核验", "每条结论回链现行法条原文，可点开核对条号与施行日期"),
-    ("help", "缺事实先追问", "关键事实不齐时先追问，不猜、不硬下结论"),
+# 只留图标 + 标题：说明句只是把标题换个说法，登录页不再渲染。
+LOGIN_FEATURES: tuple[tuple[str, str], ...] = (
+    ("fact_check", "逐条核对"),
+    ("menu_book", "依据可核验"),
+    ("help", "缺事实先追问"),
 )
 
 
@@ -344,11 +345,10 @@ def _login_screen(repo: SqliteRepository) -> None:
         st.title("小微企业用工风险辅助系统", anchor=False)
         st.markdown("劳动合同逐条核对，结论回链法条原文。")
         st.space("small")
-        for icon, title, text in LOGIN_FEATURES:
+        for icon, title in LOGIN_FEATURES:
             with st.container(horizontal=True, vertical_alignment="center"):
                 st.markdown(f":blue[:material/{icon}:]")
                 st.markdown(f"**{title}**")
-            st.caption(text)
         st.space("small")
         st.caption("仅处理劳动用工与劳动合同问题，越界直接拒答。")
     with right:
@@ -358,7 +358,12 @@ def _login_screen(repo: SqliteRepository) -> None:
                 with st.form("login"):
                     name = st.text_input("用户名", placeholder="请输入用户名")
                     pwd = st.text_input("密码", type="password", placeholder="请输入密码")
-                    ok = st.form_submit_button("登录", type="primary", width="stretch")
+                    ok = st.form_submit_button(
+                        "登录",
+                        type="primary",
+                        width="stretch",
+                        help="首次运行请执行 python -m mla init 设置管理员账号。",
+                    )
                 if ok:
                     user = authenticate(repo, name, pwd)
                     if user is None:
@@ -366,7 +371,6 @@ def _login_screen(repo: SqliteRepository) -> None:
                     else:
                         st.session_state["user"] = user
                         st.rerun()
-                st.caption("首次运行请执行 `python -m mla init` 设置管理员账号。")
             with tab_reg:
                 with st.form("register"):
                     name2 = st.text_input("用户名（≥3 字符）")
@@ -404,7 +408,7 @@ def enterprise_profile_errors(values: dict[str, str | None]) -> tuple[str, ...]:
 
 
 def _page_enterprise(repo: SqliteRepository, user: User) -> None:
-    page_header("domain", "企业档案", "只存企业级用工事实，不采集员工个人信息。")
+    page_header("domain", "企业档案")
     ent = repo.get_enterprise(user.enterprise_id) if user.enterprise_id else None
     with st.container(border=True):
         with st.form("ent"):
@@ -482,7 +486,7 @@ def _page_enterprise(repo: SqliteRepository, user: User) -> None:
 
 # ---------------- 合同管理 ----------------
 def _page_contracts(repo: SqliteRepository, user: User) -> None:
-    page_header("folder_open", "合同管理", "已保存的合同；可搜索、查看原文、删除。")
+    page_header("folder_open", "合同管理")
     ent_id = user.enterprise_id or ""
     if not ent_id:
         with st.container(border=True):
@@ -593,7 +597,7 @@ def _collect_input(repo: SqliteRepository, user: User) -> tuple[str, str, str]:
 
 
 def _page_check(repo: SqliteRepository, user: User) -> None:
-    page_header("fact_check", "合同核对", "逐条核对，每条结论回链法条原文。")
+    page_header("fact_check", "合同核对")
     if not user.enterprise_id:
         with st.container(border=True):
             st.warning(
@@ -608,13 +612,6 @@ def _page_check(repo: SqliteRepository, user: User) -> None:
 
     left, right = st.columns([1, 2.2], gap="medium", vertical_alignment="top")
     with left:
-        if _resolve_llm(get_config()) is None:
-            st.caption("未配置大模型：只出规则核对结论，不生成处理建议。")
-        if ent_facts:
-            names = "、".join(SLOT_NAMES.get(k, k) for k in ent_facts)
-            st.caption(f"企业档案已带入：{names}（在“企业档案”修改）")
-        st.caption("未填写的用工事实会在核对时询问。")
-
         if pending:
             _ask_panel(repo, user, pending, ent_facts)
         else:
@@ -641,19 +638,11 @@ def _clause_review_toggle(cfg, llm: LLMConfig | None) -> bool:
         value=default_on,
         key="clause_review_on",
         disabled=llm is None,
-        help=(
-            "逐条审查可疑条款并按 A/B/C 分级；约需 20–30 秒、消耗模型额度。关闭时只用确定性规则。"
-            "开启后第 20 条规则（试用期工资比例）：模型给出结论时规则条目不再重复列出，"
-            "模型失败或未命中时仍按规则判定；关闭时只按规则判定。"
-        ),
+        help="逐条审查可疑条款并按 A/B/C 分级，约需 20–30 秒并消耗模型额度。",
     )
     if llm is None:
-        st.caption("未配置大模型，条款审查不可用：本次只出规则判定，条款级风险未覆盖。")
         return False
-    if not st.session_state.get("clause_review_on", default_on):
-        st.caption("仅使用确定性规则：不调用模型审查条款。")
-        return False
-    return True
+    return bool(st.session_state.get("clause_review_on", default_on))
 
 
 def _check_form(repo: SqliteRepository, user: User, ent_facts: dict[str, str]) -> None:
@@ -721,7 +710,6 @@ def _ask_panel(repo: SqliteRepository, user: User, pending: dict, ent_facts: dic
     questions = list(pending.get("questions") or [])
     ask_items = [item for item in (pending.get("ask_items") or []) if isinstance(item, dict)]
     st.markdown(f"#### 补充 {len(questions)} 项事实")
-    st.caption("这些事实直接决定能否判定；答完自动重新核对，也可跳过并在结果中标注降级。")
     with st.form(f"ask_{pending.get('task_id', '')}"):
         answers: dict[str, str] = {}
         for i, q in enumerate(questions):
@@ -733,8 +721,17 @@ def _ask_panel(repo: SqliteRepository, user: User, pending: dict, ent_facts: dic
                 placeholder=SLOT_HINTS.get(slot_id, "请填写"),
             )
         c1, c2 = st.columns(2)
-        submitted = c1.form_submit_button("提交并重新核对", type="primary", width="stretch")
-        skipped = c2.form_submit_button("跳过，直接看结论", width="stretch")
+        submitted = c1.form_submit_button(
+            "提交并重新核对",
+            type="primary",
+            width="stretch",
+            help="按补充的事实自动重新核对。",
+        )
+        skipped = c2.form_submit_button(
+            "跳过，直接看结论",
+            width="stretch",
+            help="跳过会在结果中标注降级。",
+        )
 
     if submitted:
         facts = dict(ent_facts)
@@ -784,6 +781,14 @@ def _show_degraded_badge(task) -> bool:
     return True
 
 
+def _run_detail(task) -> str:
+    """运行详情一行：任务编号与 Token 用量，只在折叠区出现，不占正文。"""
+    parts = [f"任务 {task.task_id}"]
+    if task.token_in or task.token_out:
+        parts.append(f"Token 输入 {task.token_in} · 输出 {task.token_out}")
+    return " · ".join(parts)
+
+
 def _grade_badge(grade: str) -> str:
     """等级徽标；写法与历史页 `_status_badges` 的 markdown 徽标保持一致。"""
     for key, label, color in CLAUSE_GRADES:
@@ -829,18 +834,19 @@ def _render_clause_finding(finding, repo: SqliteRepository, *, badge: str = "") 
         if finding.reason:
             st.markdown(f"**理由**：{finding.reason}")
         if finding.statute_ids:
-            st.markdown("**依据**：" + "、".join(source_label(repo, sid) for sid in finding.statute_ids))
+            labels = [
+                source_label(repo, sid) if repo.get_statute(sid) is not None else "法源库未找到该条文"
+                for sid in finding.statute_ids
+            ]
+            st.markdown("**依据**：" + "、".join(labels))
             for sid in finding.statute_ids:
                 statute = repo.get_statute(sid)
                 if statute is None:
-                    st.caption(f"`{sid}` 未在法源库中找到，请人工核对")
                     continue
                 short = statute.law_name.replace("中华人民共和国", "")
                 with st.expander(f"《{short}》{statute.article_no} 原文"):
                     st.markdown(statute.text)
-                    st.caption(f"施行日期：{statute.effective_date or '未记录'} · ID `{statute.statute_id}`")
-                    if statute.source_url:
-                        st.caption(f"来源：{statute.source_url}")
+                    st.caption(_statute_meta(statute))
         if finding.need_facts:
             st.caption("需补充事实：" + "、".join(finding.need_facts))
 
@@ -878,23 +884,23 @@ def _missing_clause_text(repo: SqliteRepository, term) -> str:
 
 
 def _render_missing_term(term, repo: SqliteRepository, *, absent: bool) -> None:
-    """单类必备条款：状态文案 + 依据 ID + 可展开的法条原文。"""
+    """单类必备条款：状态文案 + 条文定位 + 可展开的法条原文；内部编号不显示。"""
     where = _missing_clause_text(repo, term)
     if absent:
-        st.error(f"缺失：未见{term.name}的约定（{where}）— 依据 {term.statute_id}", icon=":material/error:")
+        st.error(f"缺失：未见{term.name}的约定（{where}）", icon=":material/error:")
     else:
         st.warning(
-            f"未见{term.name}的约定（{where}）— 依据 {term.statute_id}，请人工确认",
+            f"未见{term.name}的约定（{where}），请人工确认",
             icon=":material/help:",
         )
     statute = repo.get_statute(term.statute_id)
     if statute is None:
-        st.caption(f"{term.statute_id} 未在法源库中找到，请人工核对")
+        st.caption("依据条文未在法源库中找到，请人工核对。")
         return
     short = statute.law_name.replace("中华人民共和国", "")
     with st.expander(f"{term.name}：依据条文原文"):
         st.markdown(statute.text)
-        st.caption(f"《{short}》{statute.article_no} · ID `{statute.statute_id}`")
+        st.caption(f"《{short}》{statute.article_no} · {_statute_meta(statute)}")
 
 
 def _render_missing_terms(task, repo: SqliteRepository) -> None:
@@ -954,17 +960,16 @@ def _render_optional_facts(task, repo: SqliteRepository, user: User) -> None:
     picks = _optional_picks(task, repo)
     if not picks:
         return
-    st.markdown("**可补充事实**")
-    st.caption("补充以下事实后重新核对，可提高规则覆盖；不填也能得到结论。")
+    st.markdown("**可选补充**")
     form_key = f"more_{task.task_id}"
     with st.form(form_key):
         values: dict[str, str] = {}
         for field_id in picks:
-            st.caption(field_question(field_id))
             values[field_id] = st.text_input(
                 field_name(field_id),
                 key=f"{form_key}_{field_id}",
                 placeholder=field_hint(field_id) or "请填写",
+                help=field_question(field_id),
             )
         submitted = st.form_submit_button("补充并重新核对", type="primary")
     if not submitted:
@@ -995,6 +1000,11 @@ def _render_optional_facts(task, repo: SqliteRepository, user: User) -> None:
         )
     st.session_state["last_task"] = new_task
     st.rerun()
+
+
+def _render_result_disclaimer() -> None:
+    """结果页最底部常驻免责：每个核对结果页只出现一次。"""
+    st.caption(RESULT_DISCLAIMER)
 
 
 def _render_task(
@@ -1041,7 +1051,6 @@ def _render_task(
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             icon=":material/download:",
         )
-        st.caption(f"任务 {task.task_id}")
 
     with st.container(horizontal=True):
         st.badge(
@@ -1058,10 +1067,13 @@ def _render_task(
             st.badge("已降级", icon=":material/warning:", color="orange")
 
     errors = [str(e) for e in (task.errors or [])]
+    extract_note = ""
     if any(("回退" in e or "失败" in e or "超时" in e) for e in errors):
-        st.caption("抽取已回退规则式：非常规写法的条款可能未被识别，请人工复核。")
+        extract_note = "抽取已回退规则式：非常规写法的条款可能未被识别，请人工复核。"
     elif any("未配置 Key" in e for e in errors):
-        st.caption("本次未使用模型抽取：未配置 Key")
+        extract_note = "本次未使用模型抽取：未配置 Key"
+    if extract_note:
+        st.caption(extract_note)
 
     if task.facts:
         with st.popover(f"依据事实（{len(task.facts)} 项）", icon=":material/fact_check:"):
@@ -1070,8 +1082,8 @@ def _render_task(
                 width="stretch",
                 hide_index=True,
             )
-    if task.token_in or task.token_out:
-        st.caption(f"Token：输入 {task.token_in} · 输出 {task.token_out}")
+    with st.expander("详情", icon=":material/info:"):
+        st.caption(_run_detail(task))
     if task.questions:
         st.info(
             f"本次提出 {len(task.questions)} 个追问：" + "；".join(task.questions),
@@ -1083,34 +1095,22 @@ def _render_task(
     field_count = sum(len(rows) for _, rows in field_groups)
 
     with st.container(border=True):
-        st.markdown("#### :material/rule: 核对结论")
-        conclusion_note = (
-            "规则条目来自确定性判定，条款结论由模型判定并经程序核验；"
-            "两者按同一严重度排序，逐条可回链法条原文。"
+        st.markdown(
+            "#### :material/rule: 核对结论",
+            help="等级含义：A 与法条明文冲突，B 显著失衡，C 待确认；只表示与法条存在冲突的风险。",
         )
-        if coverage is not None and coverage.total:
-            conclusion_note += (
-                f"本次 {coverage.total} 条规则中，可判定 {judged} 条，不适用 {coverage.not_applicable} 条。"
-            )
-        st.caption(conclusion_note)
         findings = list(task.clause_findings or [])
-        if findings:
-            counts = {key: sum(1 for f in findings if str(f.grade) == key) for key, _, _ in CLAUSE_GRADES}
-            st.caption(
-                "模型审查结论：" + " · ".join(f"{label} {counts[key]} 条" for key, label, _ in CLAUSE_GRADES)
-            )
         for rank, entry in merge_findings(task.items, findings):
             if rank == 0:
                 st.markdown(f":blue-badge[{FINDING_SOURCE_BADGES[0]}] **{entry.finding}**")
-                st.caption(f"依据 {source_label(repo, entry.source_id)} · 规则 {entry.rule_id}")
-                _source_caption(repo, entry.source_id)
+                cite = f"依据 {source_label(repo, entry.source_id)}"
+                statute = repo.get_statute(entry.source_id)
+                if statute is not None and statute.source_url:
+                    cite += f" · 来源：{statute.source_url}"
+                st.caption(cite)
                 continue
             color = FINDING_SOURCE_COLORS[rank]
             _render_clause_finding(entry, repo, badge=f":{color}-badge[{FINDING_SOURCE_BADGES[rank]}]")
-        if findings:
-            if any(str(f.source) == "model_extra" for f in findings):
-                st.caption("标注“模型自提”的条目未经触发器命中，等级封顶 C，建议人工抽检确认。")
-            st.caption(CLAUSE_DISCLAIMER)
         note = _clause_review_note(task, clause_review)
         if note:
             st.caption(note)
@@ -1120,7 +1120,6 @@ def _render_task(
                     f"本次未发现硬性风险项，但仍有 {field_count} 条规则因缺少事实无法判定，不代表合规。",
                     icon=":material/help:",
                 )
-                st.caption("补齐下列事实后重新核对，可提高规则覆盖。")
             else:
                 st.info("未发现可判定的硬性风险项（不代表合规，请结合事实复核）。", icon=":material/info:")
         if not task.items and 0 < task.contract_chars < 200:
@@ -1140,12 +1139,12 @@ def _render_task(
                     for fields, rows in premise_groups:
                         label = _field_label(fields)
                         st.caption(f"因缺少“{label}”，以下 {len(rows)} 条规则未判定：{_rule_names(rows)}")
-            if any(("未配置 Key" in e or "回退" in e) for e in errors):
-                st.caption("提示：纯正则抽取档可识别的字段有限，接入模型抽取可显著提高规则覆盖。")
 
     with st.container(border=True):
-        st.markdown("#### :material/tips_and_updates: 处理建议")
-        st.caption("非法律意见，每条均带法条依据；无依据不生成。")
+        st.markdown(
+            "#### :material/tips_and_updates: 处理建议（非法律意见）",
+            help="建议不构成法律意见，重大争议请咨询专业人士。",
+        )
         if task.suggestions:
             for s in task.suggestions:
                 cites = "、".join(source_label(repo, sid) for sid in s.source_ids)
@@ -1161,9 +1160,9 @@ def _render_task(
                 st.caption("本次没有可给出的建议（无依据不生成）。")
 
     with st.container(border=True):
-        st.markdown("#### :material/library_books: 类案参照")
-        st.caption(CASE_NOTE)
         cases = repo.list_cases()
+        shown: list = []
+        note = ""
         if cases:
             by_id = {c.case_id: c for c in cases}
             shown = [by_id[r.case_id] for r in task.case_refs if r.case_id in by_id]
@@ -1174,18 +1173,23 @@ def _render_task(
                 matched = [c for c in cases if set(c.statute_ids) & cited_ids]
                 shown = (matched or cases)[:5]
                 note = f"共 {len(cases)} 条官方案例，按法条匹配 {len(matched)} 条"
+        st.markdown("#### :material/library_books: 类案参照", help=f"{CASE_NOTE} {note}".strip())
+        if cases:
             for case in shown:
                 st.markdown(f"**{case.title}**")
                 st.caption(case.holding)
-                st.caption(f"{case.source} · {case.batch} · {case.dispute_type}")
+                meta = f"{case.source} · {case.dispute_type}"
                 if case.source_url:
-                    st.caption(f"来源：{case.source_url}")
-            st.caption(note)
+                    meta += f" · 来源：{case.source_url}"
+                st.caption(meta)
         else:
             st.caption("暂无官方案例，当前结论全部来自法条。")
 
     if user is not None:
         _render_qa_panel(task, repo, user)
+
+    # 免责必须在所有区块之后：问答面板也归这一页，问答结论同样被这一行覆盖。
+    _render_result_disclaimer()
 
 
 # ---------------- 历史 ----------------
@@ -1209,7 +1213,7 @@ def _status_badges(task) -> str:
 
 
 def _page_history(repo: SqliteRepository, user: User) -> None:
-    page_header("history", "核对历史", "每次核对都可回看；删除只隐藏记录，审计日志仍保留。")
+    page_header("history", "核对历史")
     ent_id = user.enterprise_id or ""
     if not ent_id:
         with st.container(border=True):
@@ -1324,17 +1328,27 @@ def _qa_context(task) -> dict:
     }
 
 
+def _qa_detail(task) -> str:
+    """问答详情一行：工具调用与 Token 用量，只在折叠区出现。"""
+    parts: list[str] = []
+    if task.agent_trace:
+        parts.append("工具调用 " + " → ".join(task.agent_trace))
+    if task.token_in or task.token_out:
+        parts.append(f"Token 输入 {task.token_in} · 输出 {task.token_out}")
+    return " · ".join(parts)
+
+
 def _render_qa_panel(task, repo: SqliteRepository, user: User) -> None:
     """核对结果底部的“就本合同提问”面板：结合本次结构化结论作答，不发合同正文。"""
     stored = st.session_state.get("last_qa_context")
     has_result = isinstance(stored, dict) and stored.get("task_id") == task.task_id
     with st.expander("就本合同继续提问", icon=":material/chat:", expanded=has_result):
-        st.caption("回答基于本次核对的结构化事实与命中法条，不发送合同正文。")
         with st.form(f"qa_{task.task_id}"):
             question = st.text_area(
                 "问题",
                 height=110,
                 placeholder="例如：这份合同的试用期约定有什么风险？",
+                help="回答基于本次核对的结构化事实与命中法条，不发送合同正文。",
             )
             asked = st.form_submit_button("提问", type="primary", icon=":material/send:")
         if asked:
@@ -1381,8 +1395,11 @@ def _render_qa(task, repo: SqliteRepository) -> None:
         return
 
     if not task.suggestions:
-        st.warning("没有检索到可引用的现行条文，已按“无依据不答”处理。", icon=":material/search_off:")
-        st.caption("建议补充事实（如合同期限、是否书面签订）后重问，或转专业咨询。")
+        st.warning(
+            "没有检索到可引用的现行条文，已按“无依据不答”处理；可补充事实（如合同期限、"
+            "是否书面签订）后重问，或转专业咨询。",
+            icon=":material/search_off:",
+        )
         if task.errors:
             st.caption(" · ".join(task.errors))
         return
@@ -1395,20 +1412,18 @@ def _render_qa(task, repo: SqliteRepository) -> None:
 
     with st.container(border=True):
         st.markdown("#### :material/menu_book: 结论与依据（法条原文）")
-        st.caption("检索命中的现行条文原文，可点开核对条号与施行日期。")
         for sid in sources:
             statute = repo.get_statute(sid)
             if statute is None:
-                st.caption(f"依据 `{sid}`（法源库未找到）")
+                st.caption("依据条文未在法源库中找到，请人工核对。")
                 continue
             short = statute.law_name.replace("中华人民共和国", "")
             with st.expander(f"《{short}》{statute.article_no}", expanded=len(sources) == 1):
                 st.markdown(statute.text)
-                st.caption(f"施行日期：{statute.effective_date or '未记录'} · ID `{statute.statute_id}`")
+                st.caption(_statute_meta(statute))
 
     with st.container(border=True):
         st.markdown("#### :material/tips_and_updates: 处理建议（非法律意见）")
-        st.caption("每条绑定法条依据，没有依据的条目不生成。")
         for s in task.suggestions:
             cites = "、".join(source_label(repo, sid) for sid in s.source_ids)
             st.markdown(f"- {s.text}")
@@ -1416,10 +1431,9 @@ def _render_qa(task, repo: SqliteRepository) -> None:
                 st.caption(f"依据 {cites} · {s.disclaimer}")
             else:
                 st.caption(f"依据 {cites}")
-        if task.agent_trace:
-            st.caption("工具调用：" + " → ".join(task.agent_trace))
-        if task.token_in or task.token_out:
-            st.caption(f"Token：输入 {task.token_in} · 输出 {task.token_out}")
+        if task.agent_trace or task.token_in or task.token_out:
+            with st.expander("详情", icon=":material/info:"):
+                st.caption(_qa_detail(task))
 
 
 # ---------------- 管理端 ----------------
@@ -1438,7 +1452,7 @@ def slot_table_rows(rules) -> list[dict[str, str]]:
 
 
 def _page_admin(repo: SqliteRepository, user: User) -> None:
-    page_header("admin_panel_settings", "管理端", "用户、法源、规则、日志与评测，仅管理员可见。")
+    page_header("admin_panel_settings", "管理端")
     try:
         require_admin(user)
     except PermissionError as exc:
@@ -1613,7 +1627,6 @@ EVAL_LOWER_BETTER = ("false_refuse", "latency_s", "unsourced_suggestion")
 def _render_eval() -> None:
     """只读展示最近一次评测结果（由 scripts/run_eval.py 生成，不在界面里跑评测）。"""
     st.markdown("#### 评测结果")
-    st.caption("数据来自 `python scripts/run_eval.py`，本页只读展示最近一次结果。")
     if not EVAL_FILE.exists():
         st.info("还没有评测结果。先在项目根目录运行：`python scripts/run_eval.py`", icon=":material/science:")
         return
@@ -1667,7 +1680,6 @@ def _render_eval() -> None:
                         }
                     )
             st.dataframe(history_rows, width="stretch", hide_index=True)
-            st.caption("每次评测会把阈值快照一并写入历史，阈值调整可对比留痕。")
 
 
 def main() -> None:
