@@ -16,13 +16,14 @@ import streamlit as st
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
 from mla.adapters.persist import SqliteRepository  # noqa: E402
-from mla.config import Paths, data_path  # noqa: E402
+from mla.config import Paths, data_path, load_config  # noqa: E402
 from mla.domain.models import Role, User  # noqa: E402
 from mla.services.auth import authenticate, has_admin, hash_password  # noqa: E402
 from mla.ui.app import (  # noqa: E402
     INIT_PASSWORD_REMINDER,
     LLM_KEY_SETTING,
     _onboarding_content,
+    _resolve_llm,
     _should_onboard,
     init_form_error,
     key_source_label,
@@ -328,3 +329,111 @@ def test_settings_page_change_password_flow(tmp_path) -> None:
     assert any("密码已修改" in s.value for s in ok.success)
     assert authenticate(repo, "alice", "newpass123") is not None
     assert authenticate(repo, "alice", "oldpass123") is None
+
+
+def test_settings_page_has_test_connection_button(tmp_path, monkeypatch) -> None:
+    """模型设置区块有测试连接：未配置 Key 时禁用并提示先保存，配好后可用。"""
+    monkeypatch.setattr("mla.ui.app._secrets_llm_key", lambda: "")
+    repo = _repo(tmp_path)
+    _make_user(repo, "admin", "secret123", Role.ADMIN, onboarded=True)
+
+    at = _settings_app(tmp_path, "admin")
+    assert not at.exception
+    button = next(b for b in at.button if b.label == "测试连接")
+    assert button.proto.disabled is True
+    assert "请先保存 Key，再测试连接。" in _all_text(at)
+
+    repo.set_setting(LLM_KEY_SETTING, "sk-local-123")
+    st.cache_resource.clear()
+    at = _settings_app(tmp_path, "admin")
+    assert not at.exception
+    assert next(b for b in at.button if b.label == "测试连接").proto.disabled is False
+    assert "请先保存 Key，再测试连接。" not in _all_text(at)
+
+
+# ---------------- 模型 Key 的解析（核对页真实入口） ----------------
+def test_resolve_llm_reads_db_key_without_repo_arg_it_is_none(tmp_path, monkeypatch) -> None:
+    """库里存了 Key 时 _resolve_llm 返回配置；漏传 repo 就是读不到（本次修的 bug）。"""
+    monkeypatch.setattr("mla.ui.app._secrets_llm_key", lambda: "")
+    monkeypatch.delenv("MLA_LLM_API_KEY", raising=False)
+    repo = _repo(tmp_path)
+    repo.set_setting(LLM_KEY_SETTING, "sk-db")
+
+    llm = _resolve_llm(load_config(), repo)
+    assert llm is not None
+    assert llm.api_key == "sk-db"
+    assert _resolve_llm(load_config()) is None
+
+
+def test_resolve_llm_key_priority_secrets_db_env(tmp_path, monkeypatch) -> None:
+    """三处来源的优先级在 _resolve_llm 上仍然是 secrets > 数据库 > 环境变量。"""
+
+    def _key(repo) -> str:
+        llm = _resolve_llm(load_config(), repo)
+        return llm.api_key if llm is not None else ""
+
+    repo = _repo(tmp_path)
+    repo.set_setting(LLM_KEY_SETTING, "sk-db")
+    monkeypatch.setenv("MLA_LLM_API_KEY", "sk-env")
+
+    monkeypatch.setattr("mla.ui.app._secrets_llm_key", lambda: "sk-secrets")
+    assert _key(repo) == "sk-secrets"
+
+    monkeypatch.setattr("mla.ui.app._secrets_llm_key", lambda: "")
+    assert _key(repo) == "sk-db"
+
+    repo.set_setting(LLM_KEY_SETTING, "")
+    assert _key(repo) == "sk-env"
+
+    monkeypatch.delenv("MLA_LLM_API_KEY")
+    assert _key(repo) == ""
+
+
+# ---------------- 侧栏只剩登录信息 ----------------
+def _logged_in_app(tmp_path, monkeypatch, *, db_key: str = "") -> AppTest:
+    """真跑 app.py：库里建好管理员并塞进会话，落在默认页（合同核对）。"""
+    monkeypatch.setattr("mla.ui.app._secrets_llm_key", lambda: "")
+    monkeypatch.delenv("MLA_LLM_API_KEY", raising=False)
+    repo = _repo(tmp_path)
+    if db_key:
+        repo.set_setting(LLM_KEY_SETTING, db_key)
+    user = _make_user(repo, "admin", "secret123", Role.ADMIN, onboarded=True, enterprise_id="E1")
+    at = _app(tmp_path, monkeypatch)
+    at.session_state["user"] = user
+    return at.run()
+
+
+def _sidebar_text(at: AppTest) -> str:
+    return "\n".join(
+        [e.value for e in list(at.sidebar.markdown) + list(at.sidebar.caption)]
+        + [e.label for e in at.sidebar.button]
+    )
+
+
+def test_sidebar_drops_llm_settings_entry(tmp_path, monkeypatch) -> None:
+    """模型设置只留设置页：侧栏没有“大模型设置”，只剩账号与退出登录。"""
+    at = _logged_in_app(tmp_path, monkeypatch)
+    assert not at.exception
+    sidebar = _sidebar_text(at)
+    assert "大模型设置" not in sidebar
+    assert "大模型设置" not in _all_text(at)
+    assert "admin · 管理员" in sidebar
+    assert "退出登录" in sidebar
+
+
+def test_check_page_enables_clause_review_with_db_key(tmp_path, monkeypatch) -> None:
+    """库里有 Key、环境变量清空时，核对页的条款审查开关可用（bug 修复的实测）。"""
+    at = _logged_in_app(tmp_path, monkeypatch, db_key="sk-db-only")
+    assert not at.exception
+    box = next(c for c in at.checkbox if c.label == "启用条款审查（模型辅助）")
+    assert box.proto.disabled is False
+    assert box.value is True
+
+
+def test_check_page_disables_clause_review_without_key(tmp_path, monkeypatch) -> None:
+    """三处来源都没有 Key 时仍然置灰，说明上一例不是恒为可用。"""
+    at = _logged_in_app(tmp_path, monkeypatch)
+    assert not at.exception
+    box = next(c for c in at.checkbox if c.label == "启用条款审查（模型辅助）")
+    assert box.proto.disabled is True
+    assert box.value is False

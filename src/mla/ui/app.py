@@ -143,58 +143,14 @@ def _default_llm_key(repo: SqliteRepository | None = None) -> str:
 
 
 def _resolve_llm(cfg, repo: SqliteRepository | None = None) -> LLMConfig | None:
-    default_key = _default_llm_key(repo)
-    mode = st.session_state.get("llm_mode") or ("默认 Key" if default_key else "自己的 Key")
-    key = default_key if mode == "默认 Key" else str(st.session_state.get("llm_key") or "")
+    """只认三处来源（secrets.toml / 数据库 / 环境变量），不读任何会话级 Key。
+
+    调用点必须传 repo：否则数据库里保存的 Key 读不到，界面会误判“未配置模型”。
+    """
+    key = _default_llm_key(repo)
     if not key:
         return None
     return replace(cfg.llm, api_key=key)
-
-
-def _llm_settings(cfg, repo: SqliteRepository | None = None) -> None:
-    sources = llm_key_sources(repo)
-    default_key = resolve_llm_key(sources)
-    with st.sidebar.expander("大模型设置", icon=":material/smart_toy:"):
-        st.radio(
-            "Key 来源",
-            ["默认 Key", "自己的 Key"],
-            index=0 if default_key else 1,
-            key="llm_mode",
-            horizontal=True,
-        )
-        if st.session_state.get("llm_mode") == "默认 Key":
-            st.caption(
-                f"默认 Key 来源：{key_source_label(sources)}"
-                if default_key
-                else "默认 Key 未配置，请选“自己的 Key”"
-            )
-        else:
-            st.text_input(
-                "DeepSeek API Key",
-                type="password",
-                key="llm_key",
-                placeholder="sk-……（只保存在本次会话）",
-            )
-        llm = _resolve_llm(cfg, repo)
-        if llm is None:
-            st.badge("未配置：生成式回答将拒答", color="orange")
-        else:
-            st.badge(f"已启用 {llm.model}", color="green")
-        if st.button("测试连接", key="llm_test", width="stretch"):
-            with st.spinner("连接 DeepSeek……"):
-                probe = DeepSeekLLM(llm) if llm else None
-                ok = probe.health() if probe else False
-            st.session_state["llm_test_msg"] = (
-                "连接正常" if ok else f"连接失败：{(probe.last_error if probe else '未配置 Key')[:80]}"
-            )
-        if msg := st.session_state.get("llm_test_msg"):
-            st.caption(msg)
-        emb = cfg.embedding
-        if emb.api_key:
-            st.badge(f"向量检索：{emb.model}", color="green")
-        else:
-            st.badge("向量检索：仅 BM25（回退）", color="gray")
-        st.caption("只接 DeepSeek；Key 不写库、不写日志。")
 
 
 def _trend_chart(frame) -> alt.Chart:
@@ -780,7 +736,7 @@ def _check_form(repo: SqliteRepository, user: User, ent_facts: dict[str, str]) -
     if text.strip():
         st.badge(f"将核对 {len(text)} 字", icon=":material/description:", color="blue")
     cfg = get_config()
-    llm = _resolve_llm(cfg)
+    llm = _resolve_llm(cfg, repo)
     if llm is not None:
         st.caption(
             "核对时会把合同正文发送至模型服务（DeepSeek）用于抽取关键条款；"
@@ -1146,7 +1102,7 @@ def _render_task(
                 f"无法生成回答：{task.boundary_reason or '未配置大模型或调用失败'}",
                 icon=":material/smart_toy:",
             )
-            st.caption("按“无依据不答”原则不给出生成式回答；请在左侧“大模型设置”配置 DeepSeek Key 后重试。")
+            st.caption("按“无依据不答”原则不给出生成式回答；请在设置页配置 DeepSeek Key 后重试。")
         else:
             st.error(
                 f"越界拒答（判定层：{task.boundary_layer or '未记录'}）："
@@ -1511,7 +1467,7 @@ def _render_qa(task, repo: SqliteRepository) -> None:
                 f"无法生成回答：{task.boundary_reason or '未配置大模型或调用失败'}",
                 icon=":material/smart_toy:",
             )
-            st.caption("按“无依据不答”原则不给出生成式回答；请在左侧“大模型设置”配置 DeepSeek Key 后重试。")
+            st.caption("按“无依据不答”原则不给出生成式回答；请在设置页配置 DeepSeek Key 后重试。")
         else:
             st.error(
                 f"越界拒答（判定层：{task.boundary_layer or '未记录'}）："
@@ -1567,13 +1523,18 @@ def _render_qa(task, repo: SqliteRepository) -> None:
 
 # ---------------- 设置 ----------------
 def _settings_flash() -> None:
-    """保存 / 清除后的提示：重跑一次再显示，避免提示跟着旧值一起刷新掉。"""
+    """保存 / 清除 / 测试连接后的提示：重跑一次再显示，避免提示跟着旧值一起刷新掉。"""
     if msg := st.session_state.pop("settings_flash", ""):
         st.success(msg, icon=":material/check_circle:")
+    if msg := st.session_state.pop("settings_error", ""):
+        st.error(msg, icon=":material/error:")
 
 
 def _render_model_settings(repo: SqliteRepository) -> None:
-    """模型 Key（仅管理员）：落库后下次启动自动读取；清除即回落到下一优先级。"""
+    """模型 Key（仅管理员）：落库后下次启动自动读取；清除即回落到下一优先级。
+
+    这是模型设置的唯一入口：侧栏不再提供会话级 Key，测试连接也放在这里。
+    """
     sources = llm_key_sources(repo)
     st.markdown("#### :material/smart_toy: 模型设置")
     st.caption(f"当前 Key 来源：{key_source_label(sources)}")
@@ -1597,6 +1558,26 @@ def _render_model_settings(repo: SqliteRepository) -> None:
         repo.set_setting(LLM_KEY_SETTING, "")
         st.session_state["settings_flash"] = "已清除数据库中的 Key，回落到下一优先级"
         st.rerun()
+
+    llm = _resolve_llm(get_config(), repo)
+    if st.button("测试连接", icon=":material/network_check:", disabled=llm is None):
+        with st.spinner("连接 DeepSeek……"):
+            probe = DeepSeekLLM(llm) if llm is not None else None
+            ok = probe.health() if probe is not None else False
+        if ok:
+            st.session_state["settings_flash"] = "连接正常"
+        else:
+            detail = (probe.last_error if probe is not None else "未配置 Key")[:80]
+            st.session_state["settings_error"] = f"连接失败：{detail}"
+        st.rerun()
+    if llm is None:
+        st.caption("请先保存 Key，再测试连接。")
+    emb = get_config().embedding
+    if emb.api_key:
+        st.caption(f"向量检索：{emb.model}")
+    else:
+        st.caption("向量检索：未配置 Key，回退 BM25")
+    st.caption("只接 DeepSeek；Key 不写日志。")
 
 
 def _render_account_settings(repo: SqliteRepository, user: User) -> None:
@@ -1885,7 +1866,6 @@ def main() -> None:
         _login_screen(repo)
         return
     _sidebar_chrome()
-    _llm_settings(cfg, repo)
     if _should_onboard(user):
         # 模态弹窗：确认前页面其它控件点不动，但渲染不受影响。
         _onboarding_dialog(repo, user)
