@@ -13,9 +13,16 @@ from ..adapters.extract import RegexExtractor
 from ..config import PolicyConfig, load_config
 from ..domain.boundary import classify_by_terms
 from ..domain.checklist import attach_cases
-from ..domain.field_catalog import field_question
+from ..domain.field_catalog import field_absence, field_question
 from ..domain.missing import detect_missing_terms, load_missing_terms
-from ..domain.models import CheckItem, ItemKind, MissingTerm, RuleCoverage, UndeterminedRule
+from ..domain.models import (
+    CheckItem,
+    ItemKind,
+    MissingTerm,
+    RuleCoverage,
+    UndeterminedRule,
+    UnmetTerm,
+)
 from ..domain.rules import RuleEntry, RuleOutcome, RuleStatus, evaluate, judge_all
 from ..domain.slots import missing_slots
 from ..domain.verify import verify as run_verify
@@ -184,18 +191,37 @@ def _undetermined_reason(outcome: RuleOutcome) -> str:
     return "premise_missing" if premise & set(outcome.missing_fields) else "field_missing"
 
 
+def _absence_bucket(outcome: RuleOutcome) -> str:
+    """按缺失字段的处置策略给一条判不了的规则分流：required / statutory / external。
+
+    `required` 优先：只要有一个字段法律规定必须约定，就算"合同未约定"而不是"判不了"。
+    `missing_fields` 为空（字段值或阈值无法解析）不属于任何一种未约定，按 external 留在待补事实。
+    """
+    strategies = {field_absence(f) for f in outcome.missing_fields}
+    if "required" in strategies:
+        return "required"
+    if strategies and strategies <= {"statutory", "optional"}:
+        return "statutory"
+    return "external"
+
+
 def rule_check(state: CheckState, deps: Deps) -> CheckState:
     """确定性规则判定：命中违规即产出风险条目（带法条 ID）。llm_only 档关闭规则。
 
     `items` 仍由 `evaluate` 的违规集合生成，条目顺序、字段、文案与旧口径逐字节一致；
-    `undetermined` 与 `rule_coverage` 是旁路留痕，不参与 `items` 构造、不进 `items`。
+    `unmet` / `undetermined` / `rule_coverage` 是旁路留痕，不参与 `items` 构造、不进 `items`。
+    缺字段的规则按 `FIELD_ABSENCE` 分三路：required 进 `unmet`（合同未约定）、
+    statutory/optional 计入不适用（按法定标准或无此项）、其余留在 `undetermined`（需补事实）。
+    `unknown` 仍按判定原状态计数（含转列到 `unmet` 的那几条），四态之和恒等于 total。
     llm_only 档整层不跑，分布返回全零而非 None：下游统计不必再区分"没跑"与"跑了但全空"。
     """
     if (state.get("variant") or "full") == "llm_only":
         return {
             "rule_hits": [],
             "items": [],
+            "unmet": [],
             "undetermined": [],
+            "statutory_na": 0,
             "rule_coverage": RuleCoverage(total=0, violated=0, compliant=0, not_applicable=0, unknown=0),
         }
     facts = dict(state.get("facts") or {})
@@ -214,29 +240,48 @@ def rule_check(state: CheckState, deps: Deps) -> CheckState:
         if h.violated
     ]
     outcomes = judge_all(deps.rules, facts)
-    undetermined = [
-        UndeterminedRule(
-            rule_id=o.rule.rule_id,
-            name=o.rule.name,
-            statute_id=o.rule.statute_id,
-            missing_fields=o.missing_fields,
-            reason=_undetermined_reason(o),
-        )
-        for o in outcomes
-        if o.status is RuleStatus.UNKNOWN
-    ]
+    unmet: list[UnmetTerm] = []
+    undetermined: list[UndeterminedRule] = []
+    statutory_na = 0
+    for o in outcomes:
+        if o.status is not RuleStatus.UNKNOWN:
+            continue
+        bucket = _absence_bucket(o)
+        if bucket == "required":
+            unmet.append(
+                UnmetTerm(
+                    rule_id=o.rule.rule_id,
+                    name=o.rule.name,
+                    statute_id=o.rule.statute_id,
+                    fields=o.missing_fields,
+                )
+            )
+        elif bucket == "statutory":
+            statutory_na += 1
+        else:
+            undetermined.append(
+                UndeterminedRule(
+                    rule_id=o.rule.rule_id,
+                    name=o.rule.name,
+                    statute_id=o.rule.statute_id,
+                    missing_fields=o.missing_fields,
+                    reason=_undetermined_reason(o),
+                )
+            )
     counts = Counter(o.status for o in outcomes)
     coverage = RuleCoverage(
         total=len(deps.rules),
         violated=counts[RuleStatus.VIOLATED],
         compliant=counts[RuleStatus.COMPLIANT],
-        not_applicable=counts[RuleStatus.NOT_APPLICABLE],
-        unknown=counts[RuleStatus.UNKNOWN],
+        not_applicable=counts[RuleStatus.NOT_APPLICABLE] + statutory_na,
+        unknown=counts[RuleStatus.UNKNOWN] - statutory_na,
     )
     return {
         "rule_hits": hits,
         "items": items,
+        "unmet": unmet,
         "undetermined": undetermined,
+        "statutory_na": statutory_na,
         "rule_coverage": coverage,
     }
 

@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-from ..domain.models import CaseRef, CheckItem, MissingTerm, RuleCoverage, Suggestion, UndeterminedRule
+from ..domain.models import (
+    CaseRef,
+    CheckItem,
+    MissingTerm,
+    RuleCoverage,
+    Suggestion,
+    UndeterminedRule,
+    UnmetTerm,
+)
 
 
 class CheckState(TypedDict, total=False):
@@ -29,6 +37,8 @@ class CheckState(TypedDict, total=False):
     retrieved: list  # list[StatuteEntry]
     rule_hits: list  # list[RuleHit]
     undetermined: list[UndeterminedRule]  # 判不了的规则（缺字段）
+    unmet: list[UnmetTerm]  # 合同未约定的必备约定（缺 required 字段）
+    statutory_na: int  # 因未约定而按法定标准适用、规则不判的条数
     rule_coverage: RuleCoverage | None  # 规则层四态分布
     missing_terms: list[MissingTerm]  # 必备条款缺项（旁路，不进 items）
     # 产出

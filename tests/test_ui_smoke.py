@@ -563,6 +563,64 @@ ui_app._render_task(task, repo, user)
 """
 
 
+SPLIT_SCRIPT = """
+from mla.adapters.persist import SqliteRepository
+from mla.config import Paths, data_path
+from mla.domain.models import CheckTask, RuleCoverage, TaskMode, UndeterminedRule, UnmetTerm
+from mla.ui.app import _render_task
+
+repo = SqliteRepository(
+    paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
+    db_path=DB_PATH,
+)
+task = CheckTask(
+    task_id="T-SPLIT",
+    mode=TaskMode.CHECK,
+    enterprise_id="E1",
+    undetermined=[
+        UndeterminedRule(
+            rule_id="R-SI-REGISTER-30D",
+            name="应自用工之日起 30 日内办理社会保险登记",
+            statute_id="SIL-58",
+            missing_fields=("days_to_si_register",),
+            reason="field_missing",
+        )
+    ],
+    unmet=[
+        UnmetTerm(
+            rule_id="R-WPR-MONTHLY-PAY",
+            name="工资至少每月支付一次",
+            statute_id="WPR-7",
+            fields=("pay_times_per_month",),
+        )
+    ],
+    statutory_na=8,
+    rule_coverage=RuleCoverage(total=20, violated=0, compliant=3, not_applicable=10, unknown=1),
+)
+_render_task(task, repo)
+"""
+
+
+def test_result_splits_unmet_statutory_and_missing_facts(tmp_path) -> None:
+    """三个区块各出现一次、互不重复：合同未约定 / 需补充事实 / 法定兜底汇总。"""
+    script = SPLIT_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
+    at = AppTest.from_string(script, default_timeout=60).run()
+    assert not at.exception
+
+    markdowns = [m.value for m in at.markdown]
+    assert markdowns.count("**合同未约定**") == 1
+    assert markdowns.count("**需补充事实**") == 1
+    texts = _all_text(at)
+    assert "未约定每月发薪次数，无法判断是否满足“工资至少每月支付一次”" in texts
+    assert "《工资支付暂行规定》第七条" in texts
+    assert "社保登记超期天数" in texts
+    assert "另有 8 条规则因合同未约定而适用法定标准。" in texts
+    assert "未能判定的规则" not in texts
+    # 互斥：未约定项不进「需补充事实」，合同外事实不进「合同未约定」
+    assert texts.count("每月发薪次数") == 1
+    assert texts.count("社保登记超期天数") == 1
+
+
 def test_check_page_offers_contract_qa(tmp_path) -> None:
     """核对结果底部有可折叠的提问区；提问后渲染结论与依据，上下文不带合同正文。"""
     script = QA_PANEL_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))

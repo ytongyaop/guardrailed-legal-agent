@@ -21,6 +21,7 @@ from mla.domain.models import (
     RuleCoverage,
     TaskMode,
     UndeterminedRule,
+    UnmetTerm,
     User,
 )
 from mla.services.report import build_report_docx, merge_findings
@@ -275,6 +276,32 @@ def test_report_handles_empty_task(tmp_path) -> None:
     assert task.mode is TaskMode.CHECK
     blob = build_report_docx(task, repo)
     assert len(blob) > 1000
+
+
+def test_report_shows_unmet_and_statutory_summary(tmp_path) -> None:
+    """报告分区：合同未约定逐条列，法定兜底只给一句汇总。"""
+    repo = _repo(tmp_path)
+    task = CheckTask(
+        task_id="T-UNMET-R",
+        mode=TaskMode.CHECK,
+        enterprise_id="E1",
+        unmet=[
+            UnmetTerm(
+                rule_id="R-WPR-MONTHLY-PAY",
+                name="工资至少每月支付一次",
+                statute_id="WPR-7",
+                fields=("pay_times_per_month",),
+            )
+        ],
+        statutory_na=8,
+        rule_coverage=RuleCoverage(total=20, violated=0, compliant=5, not_applicable=13, unknown=1),
+    )
+    text = "\n".join(p.text for p in Document(io.BytesIO(build_report_docx(task, repo))).paragraphs)
+    assert "合同未约定：" in text
+    assert "未约定每月发薪次数，无法判断是否满足“工资至少每月支付一次”" in text
+    assert "《工资支付暂行规定》第七条" in text
+    assert "另有 8 条规则因合同未约定而适用法定标准。" in text
+    assert "pay_times_per_month" not in text
 
 
 def test_report_shows_undetermined_rules(tmp_path) -> None:

@@ -243,6 +243,8 @@ def _run(
         clause_review=review_ran,
         clause_findings=clause_findings,
         undetermined=list(final.get("undetermined") or []),
+        unmet=list(final.get("unmet") or []),
+        statutory_na=int(final.get("statutory_na") or 0),
         rule_coverage=final.get("rule_coverage"),
         missing_terms=list(final.get("missing_terms") or []),
         token_in=int(getattr(deps.generator, "usage_in", 0) or 0),

@@ -160,12 +160,13 @@ def _expected_items(facts: dict[str, str]) -> list[CheckItem]:
 
 def _rule_layer(
     facts: dict[str, str], variant: str = "full"
-) -> tuple[list[CheckItem], list[UndeterminedRule], RuleCoverage | None]:
-    """直接调 `rule_check`，用 `.get` 取三个非必选键（不触发非必选键的静态告警）。"""
+) -> tuple[list[CheckItem], list[UndeterminedRule], list, RuleCoverage | None]:
+    """直接调 `rule_check`，用 `.get` 取非必选键（不触发非必选键的静态告警）。"""
     out = rule_check({"facts": facts, "variant": variant}, DEPS)
     return (
         list(out.get("items") or []),
         list(out.get("undetermined") or []),
+        list(out.get("unmet") or []),
         out.get("rule_coverage"),
     )
 
@@ -176,7 +177,7 @@ def test_items_are_identical_to_legacy_filter() -> None:
     assert len(cases) >= 50, "带事实的评测用例数变了"
     produced = 0
     for facts in cases:
-        items, _, _ = _rule_layer(facts)
+        items, _, _, _ = _rule_layer(facts)
         assert [_item_key(i) for i in items] == [_item_key(i) for i in _expected_items(facts)], facts
         produced += len(items)
     assert produced > 0, "没有任何用例命中规则，这条测试等于没跑"
@@ -184,45 +185,98 @@ def test_items_are_identical_to_legacy_filter() -> None:
 
 def test_undetermined_separates_field_from_premise() -> None:
     """两类"判不了"必须分开：前提已满足缺判定字段 vs 前提字段就缺。"""
-    _, undetermined, _ = _rule_layer({"work_years": "12"})
+    _, undetermined, _, _ = _rule_layer({})
     by_id = {u.rule_id: u for u in undetermined}
 
-    judged_field = by_id["R-AL-10D"]  # 满 10 年不满 20 年：前提满足，缺年休假天数
+    judged_field = by_id["R-PROBATION-ONCE"]  # 约定过几次试用期属于合同外事实
     assert judged_field.reason == "field_missing"
-    assert judged_field.missing_fields == ("annual_leave_days",)
-    assert judged_field.statute_id == "AL-3"
+    assert judged_field.missing_fields == ("probation_times",)
+    assert judged_field.statute_id == "LCL-19"
 
-    premise = by_id["R-PROBATION-1M"]  # 连合同期限都没给：是否适用都不确定
+    premise = by_id["R-AL-5D"]  # 连累计工龄都没给：是否适用都不确定
     assert premise.reason == "premise_missing"
-    assert premise.missing_fields == ("term_years",)
+    assert premise.missing_fields == ("work_years",)
 
 
 def test_undetermined_never_enters_items() -> None:
-    items, undetermined, _ = _rule_layer({"work_years": "12"})
+    items, undetermined, _, _ = _rule_layer({"work_years": "12"})
     assert undetermined, "这组事实本应判不了"
     assert items == []
     assert {u.rule_id for u in undetermined} & {i.rule_id for i in items} == set()
 
 
+def test_absence_policy_splits_unmet_from_undetermined() -> None:
+    """未约定按类型分流：法律要求写的算缺项，法定兜底不占「判不了」，合同外事实才需补。"""
+    facts = {"term_years": "3", "probation_months": "2"}
+    out = rule_check({"facts": facts, "variant": "full"}, DEPS)
+    unmet = list(out.get("unmet") or [])
+    undetermined = list(out.get("undetermined") or [])
+    coverage = out.get("rule_coverage")
+    items = list(out.get("items") or [])
+
+    # 没写发薪周期 → 合同未约定（不是判不了）
+    assert [u.rule_id for u in unmet] == ["R-WPR-MONTHLY-PAY"]
+    assert unmet[0].fields == ("pay_times_per_month",)
+    assert unmet[0].statute_id == "WPR-7"
+    # 没写加班倍率 / 年假 / 社保罚款 → 按法定标准适用，不出现
+    for rule_id in ("R-OT-WEEKDAY-150", "R-OT-RESTDAY-200", "R-OT-HOLIDAY-300", "R-ALI-UNUSED-300"):
+        assert rule_id not in {u.rule_id for u in undetermined}
+        assert rule_id not in {u.rule_id for u in unmet}
+    # 留下的只有合同外事实
+    assert {u.rule_id for u in undetermined} == {
+        "R-PROBATION-ONCE",
+        "R-WRITTEN-1M",
+        "R-NONCOMPETE-UNPAID-3M",
+        "R-SI-REGISTER-30D",
+        "R-AL-5D",
+        "R-AL-10D",
+        "R-AL-15D",
+    }
+    assert items == []
+    assert out.get("statutory_na") == 9
+    assert coverage is not None
+    assert coverage.not_applicable == 11
+    assert coverage.unknown == len(undetermined) + len(unmet)
+    assert (
+        coverage.violated + coverage.compliant + coverage.not_applicable + coverage.unknown == coverage.total
+    )
+    # 把法定兜底字段补上后，不适用条数应下降（说明确实是被分流，不是被吞）
+    filled = {
+        **facts,
+        "pay_times_per_month": "1",
+        "probation_wage_ratio": "90",
+        "ot_hours_day": "1",
+        "ot_hours_month": "10",
+        "ot_weekday_ratio": "150",
+        "ot_restday_ratio": "200",
+        "ot_holiday_ratio": "300",
+        "si_fine_multiple": "2",
+    }
+    _, _, _, filled_coverage = _rule_layer(filled)
+    assert filled_coverage is not None
+    assert coverage.not_applicable > filled_coverage.not_applicable
+
+
 def test_llm_only_returns_zero_coverage() -> None:
     """llm_only 档整层不跑：条目与未判定都为空，分布是全零而不是 None。"""
-    items, undetermined, coverage = _rule_layer(
+    items, undetermined, unmet, coverage = _rule_layer(
         {"term_years": "3", "probation_months": "12"}, variant="llm_only"
     )
     assert items == []
     assert undetermined == []
+    assert unmet == []
     assert coverage is not None and coverage.total == 0
 
 
 def test_rule_coverage_covers_every_rule() -> None:
-    items, undetermined, coverage = _rule_layer({**BASE_FACTS, "probation_months": "12"})
+    items, undetermined, unmet, coverage = _rule_layer({**BASE_FACTS, "probation_months": "12"})
     assert coverage is not None
     assert coverage.total == len(RULES)
     assert (
         coverage.violated + coverage.compliant + coverage.not_applicable + coverage.unknown == coverage.total
     )
     assert coverage.violated == len(items)
-    assert coverage.unknown == len(undetermined)
+    assert coverage.unknown == len(undetermined) + len(unmet)
 
 
 def test_graph_carries_coverage_and_undetermined() -> None:

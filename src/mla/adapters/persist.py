@@ -34,6 +34,7 @@ from ..domain.models import (
     Suggestion,
     TaskMode,
     UndeterminedRule,
+    UnmetTerm,
     User,
     UserDeletion,
 )
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   contract_id TEXT, contract_name TEXT, contract_chars INTEGER DEFAULT 0,
   deleted INTEGER DEFAULT 0, case_refs TEXT, agent_trace TEXT, clause_findings TEXT,
   undetermined TEXT, rule_coverage TEXT, missing_terms TEXT, ask_items TEXT,
+  unmet TEXT, statutory_na INTEGER DEFAULT 0,
   clause_review INTEGER DEFAULT 0, model TEXT
 );
 CREATE TABLE IF NOT EXISTS logs (
@@ -90,6 +92,8 @@ TASK_MIGRATIONS: dict[str, str] = {
     "agent_trace": "TEXT",
     "clause_findings": "TEXT",
     "undetermined": "TEXT",
+    "unmet": "TEXT",
+    "statutory_na": "INTEGER DEFAULT 0",
     "rule_coverage": "TEXT",
     "missing_terms": "TEXT",
     "ask_items": "TEXT",
@@ -151,6 +155,27 @@ def _undetermined_from_row(row: sqlite3.Row) -> list[UndeterminedRule]:
                 statute_id=str(entry.get("statute_id", "")),
                 missing_fields=tuple(str(x) for x in fields) if isinstance(fields, list) else (),
                 reason=str(entry.get("reason", "")),
+            )
+        )
+    return out
+
+
+def _unmet_from_row(row: sqlite3.Row) -> list[UnmetTerm]:
+    """还原"合同未约定"；坏行逐条跳过，旧库缺列时读成空列表。"""
+    data = _json_column(row, "unmet")
+    if not isinstance(data, list):
+        return []
+    out: list[UnmetTerm] = []
+    for entry in data:
+        if not isinstance(entry, dict) or "rule_id" not in entry:
+            continue
+        fields = entry.get("fields")
+        out.append(
+            UnmetTerm(
+                rule_id=str(entry["rule_id"]),
+                name=str(entry.get("name", "")),
+                statute_id=str(entry.get("statute_id", "")),
+                fields=tuple(str(x) for x in fields) if isinstance(fields, list) else (),
             )
         )
     return out
@@ -510,8 +535,8 @@ class SqliteRepository:
             "verify_ok,degraded,latency_s,token_in,token_out,created_at,"
             "questions,ask_rounds,refused,boundary_layer,boundary_reason,ask_history,errors,"
             "contract_id,contract_name,contract_chars,deleted,case_refs,agent_trace,clause_findings,"
-            "undetermined,rule_coverage,missing_terms,ask_items,clause_review,model)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "undetermined,rule_coverage,missing_terms,ask_items,unmet,statutory_na,clause_review,model)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task.task_id,
                 task.enterprise_id,
@@ -555,6 +580,8 @@ class SqliteRepository:
                 else "",
                 json.dumps([self._missing_to_dict(t) for t in task.missing_terms], ensure_ascii=False),
                 json.dumps(task.ask_items, ensure_ascii=False),
+                json.dumps([self._unmet_to_dict(u) for u in task.unmet], ensure_ascii=False),
+                int(task.statutory_na),
                 int(task.clause_review),
                 task.model,
             ),
@@ -680,6 +707,15 @@ class SqliteRepository:
         }
 
     @staticmethod
+    def _unmet_to_dict(u: UnmetTerm) -> dict:
+        return {
+            "rule_id": u.rule_id,
+            "name": u.name,
+            "statute_id": u.statute_id,
+            "fields": list(u.fields),
+        }
+
+    @staticmethod
     def _coverage_to_dict(c: RuleCoverage) -> dict:
         return {
             "total": c.total,
@@ -768,6 +804,8 @@ class SqliteRepository:
             contract_chars=int(row["contract_chars"] or 0),
             deleted=bool(row["deleted"]),
             undetermined=_undetermined_from_row(row),
+            unmet=_unmet_from_row(row),
+            statutory_na=int(row["statutory_na"] or 0),
             rule_coverage=_coverage_from_row(row),
             missing_terms=_missing_terms_from_row(row),
             created_at=_parse_dt(row["created_at"]),

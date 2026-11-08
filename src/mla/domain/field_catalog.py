@@ -56,6 +56,40 @@ FIELD_QUESTIONS: dict[str, str] = {
     "written_contract": "是否已与员工签订书面劳动合同？",
 }
 
+# 字段缺失时的处置策略（未登记的字段一律按 external，保守处理）：
+# - statutory：合同不必写，未写就按法定标准适用，规则不适用；
+# - required：法律要求写进合同，没写就是缺项；
+# - optional：约定才有，不约定即视为无此项；
+# - external：合同外事实，要么问人，要么另行判断。
+FIELD_ABSENCE: dict[str, str] = {
+    # statutory：未约定按法定标准，规则不适用
+    "probation_wage_ratio": "statutory",
+    "ot_hours_day": "statutory",
+    "ot_hours_month": "statutory",
+    "ot_weekday_ratio": "statutory",
+    "ot_restday_ratio": "statutory",
+    "ot_holiday_ratio": "statutory",
+    "si_fine_multiple": "statutory",
+    "annual_leave_days": "statutory",
+    "unused_leave_pay_ratio": "statutory",
+    # required：法律要求约定，缺了算缺项
+    "pay_times_per_month": "required",
+    "term_years": "required",
+    # optional：约定才有，没有即无此项
+    "probation_months": "optional",
+    "noncompete_years": "optional",
+    # external：合同外事实，需要问人或另行判断
+    "work_years": "external",
+    "probation_times": "external",
+    "months_without_contract": "external",
+    "noncompete_unpaid_months": "external",
+    "days_to_si_register": "external",
+    "employer_type": "external",
+    "written_contract": "external",
+    "term_type": "external",
+}
+FIELD_ABSENCE_DEFAULT = "external"
+
 # 填写提示：界面输入框占位用，写一条能照着填的示例或取值集合。
 FIELD_HINTS: dict[str, str] = {
     "term_years": "例如：3（无固定期限填 0）",
@@ -97,3 +131,8 @@ def field_question(field_id: str) -> str:
 def field_hint(field_id: str) -> str:
     """返回字段填写提示；目录里没有该 id 时给空串，由界面自行兜底。"""
     return FIELD_HINTS.get(field_id, "")
+
+
+def field_absence(field_id: str) -> str:
+    """返回字段缺失时的处置策略；目录里没有该 id 时按 external 处理（保守）。"""
+    return FIELD_ABSENCE.get(field_id, FIELD_ABSENCE_DEFAULT)

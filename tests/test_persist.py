@@ -21,6 +21,7 @@ from mla.domain.models import (
     Suggestion,
     TaskMode,
     UndeterminedRule,
+    UnmetTerm,
     User,
 )
 from mla.services.auth import hash_password
@@ -156,6 +157,42 @@ def test_task_roundtrip_preserves_rule_coverage(tmp_path) -> None:
     got = repo.list_tasks("E1")[0]
     assert got.undetermined == undetermined
     assert got.rule_coverage == coverage
+
+
+def test_task_roundtrip_preserves_unmet(tmp_path) -> None:
+    """ "合同未约定"与法定兜底条数必须完整往返（历史详情靠它分区展示）。"""
+    repo = _repo(tmp_path)
+    unmet = [
+        UnmetTerm(
+            rule_id="R-WPR-MONTHLY-PAY",
+            name="工资至少每月支付一次",
+            statute_id="WPR-7",
+            fields=("pay_times_per_month",),
+        )
+    ]
+    repo.save_task(
+        CheckTask(
+            task_id="T-UNMET",
+            mode=TaskMode.CHECK,
+            enterprise_id="E1",
+            unmet=unmet,
+            statutory_na=8,
+            created_at=datetime(2026, 11, 8, 9, 0),
+        )
+    )
+    got = repo.list_tasks("E1")[0]
+    assert got.unmet == unmet
+    assert got.unmet[0].fields == ("pay_times_per_month",)
+    assert got.statutory_na == 8
+
+
+def test_unmet_absent_roundtrips_as_empty(tmp_path) -> None:
+    """没跑过规则层的任务读回来是空列表与 0，旧库缺列也不能报错。"""
+    repo = _repo(tmp_path)
+    repo.save_task(CheckTask(task_id="T-NOUNMET", mode=TaskMode.CHECK, enterprise_id="E1"))
+    got = repo.list_tasks("E1")[0]
+    assert got.unmet == []
+    assert got.statutory_na == 0
 
 
 def test_task_roundtrip_preserves_missing_terms(tmp_path) -> None:

@@ -220,6 +220,20 @@ class UndeterminedRule:
 
 
 @dataclass(frozen=True)
+class UnmetTerm:
+    """一条"合同未约定"的必备约定（旁路留痕，不进 `items`）。
+
+    与 `UndeterminedRule` 的区别：这里缺的字段是法律要求写进合同的（`required`），
+    合同没写就是缺项，不该说成"信息不足判不了"。
+    """
+
+    rule_id: str
+    name: str
+    statute_id: str
+    fields: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class RuleCoverage:
     """规则层的结局分布：四态计数之和恒等于 `total`（规则表条数）。"""
 
@@ -283,6 +297,8 @@ class CheckTask:
     clause_review: bool = False  # 本次是否真的跑了条款审查（历史详情据此区分「未做」与「未发现」）
     clause_findings: list[ClauseFinding] = field(default_factory=list)  # 条款审查结论（存在性域）
     undetermined: list[UndeterminedRule] = field(default_factory=list)  # 判不了的规则（缺字段，不混进 items）
+    unmet: list[UnmetTerm] = field(default_factory=list)  # 合同未约定的必备约定（旁路，不进 items）
+    statutory_na: int = 0  # 因合同未约定、按法定标准适用而不判的规则条数
     rule_coverage: RuleCoverage | None = None  # 规则层四态分布；未跑规则层时为空
     missing_terms: list[MissingTerm] = field(default_factory=list)  # 必备条款缺项（旁路，不进 items）
     latency_s: float | None = None

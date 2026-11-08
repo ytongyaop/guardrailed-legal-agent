@@ -901,6 +901,22 @@ def _rule_names(rows: list) -> str:
     return "、".join(str(r.name) for r in rows)
 
 
+def _unmet_line(row, repo: SqliteRepository) -> str:
+    """一条"合同未约定"：缺了哪项约定、因此判不了哪条要求、依据在哪。"""
+    fields = "、".join(fact_display_name(f) for f in row.fields) or "相关事项"
+    return f"未约定{fields}，无法判断是否满足“{row.name}”（依据 {source_label(repo, row.statute_id)}）"
+
+
+def _render_unmet_terms(task, repo: SqliteRepository) -> None:
+    """合同未约定区块：法律要求约定却没写的项目，逐条一行（不进“需补充事实”）。"""
+    rows = sorted(list(getattr(task, "unmet", None) or []), key=lambda r: r.rule_id)
+    if not rows:
+        return
+    st.markdown("**合同未约定**")
+    for row in rows:
+        st.caption(_unmet_line(row, repo))
+
+
 def _render_clause_finding(finding, repo: SqliteRepository, *, badge: str = "") -> None:
     """单条条款结论：来源与等级 → 片段 → 理由 → 依据原文 → 待补事实。"""
     with st.container(border=True):
@@ -1211,9 +1227,10 @@ def _render_task(
             st.caption(f"合同正文仅 {task.contract_chars} 字，条款覆盖有限；0 风险不等于合同合规。")
 
         _render_missing_terms(task, repo)
+        _render_unmet_terms(task, repo)
 
         if field_groups or premise_groups:
-            st.markdown("**未能判定的规则**")
+            st.markdown("**需补充事实**")
             for fields, rows in field_groups:
                 st.caption(
                     f"因缺少“{_field_label(fields)}”，以下 {len(rows)} 条规则无法判定：{_rule_names(rows)}"
@@ -1224,6 +1241,9 @@ def _render_task(
                     for fields, rows in premise_groups:
                         label = _field_label(fields)
                         st.caption(f"因缺少“{label}”，以下 {len(rows)} 条规则未判定：{_rule_names(rows)}")
+
+        if task.statutory_na:
+            st.caption(f"另有 {task.statutory_na} 条规则因合同未约定而适用法定标准。")
 
     with st.container(border=True):
         st.markdown(

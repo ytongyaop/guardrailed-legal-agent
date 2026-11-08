@@ -165,11 +165,22 @@ def build_report_docx(task: CheckTask, repo: Repository) -> bytes:
             f"本次 {coverage.total} 条规则中，可判定 {judged} 条，"
             f"不适用 {coverage.not_applicable} 条，无法判定 {coverage.unknown} 条。"
         )
-    for fields, rows in _group_undetermined(task.undetermined, "field_missing"):
+    if task.unmet:
+        doc.add_paragraph("合同未约定：")
+        for row in sorted(task.unmet, key=lambda r: r.rule_id):
+            doc.add_paragraph(_unmet_line(repo, row))
+    if task.statutory_na:
+        doc.add_paragraph(f"另有 {task.statutory_na} 条规则因合同未约定而适用法定标准。")
+
+    field_undetermined = _group_undetermined(task.undetermined, "field_missing")
+    premise_undetermined = _group_undetermined(task.undetermined, "premise_missing")
+    if field_undetermined or premise_undetermined:
+        doc.add_paragraph("需补充事实：")
+    for fields, rows in field_undetermined:
         doc.add_paragraph(
             f"因缺少{_field_label(fields)}，以下 {len(rows)} 条规则无法判定：{_rule_names(rows)}"
         )
-    for fields, rows in _group_undetermined(task.undetermined, "premise_missing"):
+    for fields, rows in premise_undetermined:
         doc.add_paragraph(
             f"另因缺少“{_field_label(fields)}”，以下 {len(rows)} 条规则未判定：{_rule_names(rows)}"
         )
@@ -343,3 +354,9 @@ def _field_label(fields: tuple[str, ...]) -> str:
 
 def _rule_names(rows: list) -> str:
     return "、".join(str(r.name) for r in rows)
+
+
+def _unmet_line(repo: Repository, row) -> str:
+    """一条"合同未约定"：缺了哪项约定、因此判不了哪条要求、依据在哪。"""
+    fields = "、".join(field_name(f) for f in row.fields) or "相关事项"
+    return f"未约定{fields}，无法判断是否满足“{row.name}”（依据 {_statute_label(repo, row.statute_id)}）。"
