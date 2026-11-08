@@ -23,6 +23,7 @@ from pathlib import Path
 import altair as alt
 import streamlit as st
 
+from mla.adapters.files import parse_contract_bytes
 from mla.adapters.llm import DeepSeekLLM
 from mla.adapters.persist import SqliteRepository
 from mla.config import LLMConfig, data_path, load_config
@@ -195,6 +196,13 @@ def source_label(repo: SqliteRepository, source_id: str) -> str:
         return source_id
     short = statute.law_name.replace("中华人民共和国", "")
     return f"《{short}》{statute.article_no}"
+
+
+def _source_caption(repo: SqliteRepository, statute_id: str) -> None:
+    """法条来源链接：库里没记录 URL 就整行不显示（不编造链接）。"""
+    statute = repo.get_statute(statute_id)
+    if statute is not None and statute.source_url:
+        st.caption(f"来源：{statute.source_url}")
 
 
 def _facts_from_enterprise(repo: SqliteRepository, user: User) -> dict[str, str]:
@@ -531,21 +539,6 @@ def _page_contracts(repo: SqliteRepository, user: User) -> None:
 
 
 # ---------------- 合同核对 ----------------
-def parse_contract_bytes(filename: str, data: bytes) -> str:
-    """解析上传的合同文件；PDF 需要 pypdf（未安装时抛 ImportError 由界面提示）。"""
-    name = filename.lower()
-    if name.endswith(".docx"):
-        from docx import Document
-
-        return "\n".join(p.text for p in Document(io.BytesIO(data)).paragraphs)
-    if name.endswith(".pdf"):
-        from pypdf import PdfReader
-
-        reader = PdfReader(io.BytesIO(data))
-        return "\n".join((page.extract_text() or "") for page in reader.pages)
-    return data.decode("utf-8", errors="ignore")
-
-
 def _collect_input(repo: SqliteRepository, user: User) -> tuple[str, str, str]:
     """返回（合同正文, 合同名, 合同 ID）；合同名用于历史列表自解释。"""
     contracts = repo.list_contracts(user.enterprise_id) if user.enterprise_id else []
@@ -846,6 +839,8 @@ def _render_clause_finding(finding, repo: SqliteRepository, *, badge: str = "") 
                 with st.expander(f"《{short}》{statute.article_no} 原文"):
                     st.markdown(statute.text)
                     st.caption(f"施行日期：{statute.effective_date or '未记录'} · ID `{statute.statute_id}`")
+                    if statute.source_url:
+                        st.caption(f"来源：{statute.source_url}")
         if finding.need_facts:
             st.caption("需补充事实：" + "、".join(finding.need_facts))
 
@@ -1108,6 +1103,7 @@ def _render_task(
             if rank == 0:
                 st.markdown(f":blue-badge[{FINDING_SOURCE_BADGES[0]}] **{entry.finding}**")
                 st.caption(f"依据 {source_label(repo, entry.source_id)} · 规则 {entry.rule_id}")
+                _source_caption(repo, entry.source_id)
                 continue
             color = FINDING_SOURCE_COLORS[rank]
             _render_clause_finding(entry, repo, badge=f":{color}-badge[{FINDING_SOURCE_BADGES[rank]}]")
@@ -1182,6 +1178,8 @@ def _render_task(
                 st.markdown(f"**{case.title}**")
                 st.caption(case.holding)
                 st.caption(f"{case.source} · {case.batch} · {case.dispute_type}")
+                if case.source_url:
+                    st.caption(f"来源：{case.source_url}")
             st.caption(note)
         else:
             st.caption("暂无官方案例，当前结论全部来自法条。")

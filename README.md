@@ -105,7 +105,7 @@ streamlit run src/mla/ui/app.py
 | 必备条款规格 | 9 类 | 依据《劳动合同法》第十七条 |
 | 官方案例 | 37 条 | 附在结论后供参考 |
 | 评测数据 | 回归集：主流程 52 条、条款级 95 条（正样本 38、负样本 57）；留出集：非模板合同 12 条、问答 20 条 | 两类纪律不同：回归集每次改动必跑、只要求不退化；留出集不参与调优、用于报告能力。构造方式见 [docs/evaluation.md](docs/evaluation.md) |
-| 测试 | 371 条 | 全部离线可复现：测试强制纯正则抽取并屏蔽真实 Key |
+| 测试 | 386 条 | 全部离线可复现：测试强制纯正则抽取并屏蔽真实 Key |
 
 评测结果（口径与数字同样重要，务必连着读）：
 
@@ -144,12 +144,14 @@ src/mla/
     cases/cases.jsonl            37 条官方案例
     evalsets/                    回归集 52 ＋ 95，留出集 12 ＋ 20
 scripts/        校验与评测脚本
-tests/          371 条测试
+tests/          386 条测试
 docs/           architecture.md evaluation.md
 .github/        workflows/ci.yml · dependabot.yml · pull_request_template.md · ISSUE_TEMPLATE/
 .streamlit/     config.toml secrets.toml.example
 mla.sqlite3     运行后在工作目录生成（不入库）
 LICENSE
+CONTRIBUTING.md
+SECURITY.md
 pyproject.toml
 .gitignore
 .gitattributes
@@ -163,7 +165,7 @@ pyproject.toml
 提交代码前全部执行，任何一条失败都不合入：
 
 ```bash
-pytest
+pytest --cov=mla --cov-fail-under=75
 ruff check src tests scripts
 pyright src
 python scripts/check_ui_text.py
@@ -176,7 +178,7 @@ python scripts/run_eval.py --extract regex
 python scripts/eval_clauses.py --runs 1
 ```
 
-`validate_*` 脚本分别校验法源、规则、触发器、必备条款规格与条款 gold 的结构一致性——数据文件是判定依据的一部分，数据坏了等于代码坏了。测试离线可复现：`tests/conftest.py` 强制 `MLA_EXTRACT_MODE=regex` 并屏蔽真实 Key。
+`validate_*` 脚本分别校验法源、规则、触发器、必备条款规格与条款 gold 的结构一致性——数据文件是判定依据的一部分，数据坏了等于代码坏了。测试离线可复现：`tests/conftest.py` 强制 `MLA_EXTRACT_MODE=regex` 并屏蔽真实 Key；覆盖率下限 75%，与 CI 一致。`pyright` 只检 `src`，`tests` 里有既有的类型报错，不属于本次门禁范围。
 
 ## 隐私与边界
 
@@ -195,6 +197,11 @@ python scripts/eval_clauses.py --runs 1
 ## 免责声明
 
 本系统只提示"与某条法条存在冲突"并给出可定位的依据（法条编号、合同原文片段），不判定任何条款违法或无效，不构成法律意见，也不替代法律意见。正式决策请咨询执业律师或当地人力资源社会保障部门。
+
+## 参与贡献
+
+- 开发环境、门禁命令、改数据（规则 / 触发器 / 评测集）的硬规矩与 PR 要求：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 报告安全漏洞请勿开公开 Issue，按 [SECURITY.md](SECURITY.md) 的渠道联系
 
 ## 版本
 

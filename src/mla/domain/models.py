@@ -137,6 +137,7 @@ class CaseEntry:
     dispute_type: str = ""
     region: str = "全国"
     level: str = ""
+    source_url: str = ""  # 官方发布页链接；空串表示未记录，界面与报告都不显示
 
 
 @dataclass(frozen=True)
@@ -271,7 +272,9 @@ class CheckTask:
     questions: list[str] = field(default_factory=list)  # 最近一轮追问（界面承接 / 指标 4）
     ask_items: list[dict] = field(default_factory=list)  # 追问的结构化形态（字段 id + 问句 + 来源）
     refused: bool = False  # 是否越界拒答（界面据此显示判定层与理由）
-    boundary_layer: str = ""  # 拒答由哪一层触发：terms / zero_hit / default
+    boundary_layer: str = (
+        ""  # 拒答由哪一层触发：terms / default（规则判定）、facts（无正文）、llm（问答拒答）
+    )
     boundary_reason: str = ""
     verify_ok: bool = True  # 依据校验是否通过（不是"有没有条目"）
     degraded: bool = False  # 是否降级（补问超限或依据不足）

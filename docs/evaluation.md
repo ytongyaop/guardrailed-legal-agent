@@ -112,7 +112,7 @@
 
 | 命令 | 内容 |
 | --- | --- |
-| `pytest` | 371 条测试，强制纯正则抽取并屏蔽真实 Key，离线可复现 |
+| `pytest` | 386 条测试，强制纯正则抽取并屏蔽真实 Key，离线可复现 |
 | `python scripts/run_eval.py --extract regex` | 回归集，纯正则抽取档 |
 | `python scripts/run_eval.py --extract llm` | 回归集，模型抽取档（需配置 `MLA_LLM_API_KEY`） |
 | `python scripts/run_eval.py --variant rules_only` | 消融臂示例：只跑确定性规则，不接模型 |

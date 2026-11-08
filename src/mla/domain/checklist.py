@@ -30,11 +30,6 @@ def _template_for(item: CheckItem) -> str:
     return DEFAULT_SUGGESTION
 
 
-def build_items(extracted: dict, rule_hits: list, evidence: list) -> list[CheckItem]:
-    """规则命中已在节点里转成条目；此函数留给模型生成时合并检索证据。"""
-    return []
-
-
 def build_suggestions(items: list[CheckItem], evidence: list | None = None) -> list[Suggestion]:
     """为每条风险生成一条建议；来源绑定该条目的法条 ID（保证可回链）。
 

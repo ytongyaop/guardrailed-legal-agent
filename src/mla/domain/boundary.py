@@ -1,10 +1,11 @@
-"""越界判定（拒答第一、三层）：纯规则，不调模型，可单测。
+"""越界判定（拒答判定层）：纯规则，不调模型，可单测。
 
-三层设计（目标：该拒的拒、不该拒的别误拒）：
-- 第一层 `classify_by_terms`：劳动用工术语白名单 / 明确越界词 → 直接定向；
-- 第二层 `zero_hit_fallback`：检索零命中 → 视为越界（在节点里调用检索器后判断）；
-- 第三层 `default_deny`：两层都判不了 → **保守拒答**（宁可少答，也不乱答）。
+两层设计（都实现在 `classify_by_terms` 里，目标：该拒的拒、不该拒的别误拒）：
+- 第一层：命中劳动用工术语白名单 → 在范围内；命中明确越界词 → 直接拒答（`layer="terms"`）；
+- 第二层：未命中任何领域词 → **保守拒答**（`layer="default"`，宁可少答，也不乱答）。
 
+`boundary` 节点跑在 `retrieve` 之前，拿不到检索结果，所以没有"检索零命中兜底"这一层；
+`facts`（只有结构化事实、无自由文本）与 `llm`（问答时模型判为越界）两处归因由节点另行标注。
 返回 `BoundaryDecision(in_scope, layer, reason)`，`layer` 用于归因判定发生在哪一层。
 """
 
@@ -78,7 +79,7 @@ class BoundaryDecision:
     """判定结果：in_scope=False 时应走拒答分支。"""
 
     in_scope: bool
-    layer: str  # terms / zero_hit / default（指标归因用）
+    layer: str  # terms / default（指标归因用）
     reason: str
 
 
@@ -93,10 +94,3 @@ def classify_by_terms(text: str) -> BoundaryDecision:
     if out_hits:
         return BoundaryDecision(False, "terms", f"命中越界词：{out_hits[:3]}")
     return BoundaryDecision(False, "default", "未命中任何领域词，保守拒答")
-
-
-def zero_hit_fallback(hit_count: int, text: str) -> BoundaryDecision:
-    """第二层：检索兜底。检索零命中且无领域词 → 越界。"""
-    if hit_count > 0:
-        return BoundaryDecision(True, "zero_hit", f"检索命中 {hit_count} 条")
-    return BoundaryDecision(False, "zero_hit", "检索零命中")

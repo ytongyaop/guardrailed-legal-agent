@@ -18,7 +18,7 @@ class CheckState(TypedDict, total=False):
     qa_context: dict  # 问答附带的核对摘要（只放结构化结论，不放合同原文）
     # 过程
     in_scope: bool
-    boundary_layer: str  # classify / retrieval / whitelist（拒答归因，指标 6/7）
+    boundary_layer: str  # terms / facts / llm / default（拒答归因，指标 6/7）
     boundary_reason: str  # 判定理由（写进拒答说明）
     missing_slots: list[str]
     ask_rounds: int

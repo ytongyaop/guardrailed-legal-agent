@@ -54,7 +54,7 @@ def intake(state: CheckState, deps: Deps) -> CheckState:
 
 
 def boundary(state: CheckState, deps: Deps) -> CheckState:
-    """越界判定（三层）：术语定向 → 检索兜底（节点内）→ 默认保守拒答。"""
+    """越界判定：术语定向 → 未命中即保守拒答（拿不到检索结果，故无检索兜底）。"""
     text = " ".join(filter(None, [state.get("question", ""), state.get("contract_text", "")])).strip()
     if not text:
         # 只有结构化事实、没有自由文本：属于"纯规则核对"，视为范围内

@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   contract_id TEXT, contract_name TEXT, contract_chars INTEGER DEFAULT 0,
   deleted INTEGER DEFAULT 0, case_refs TEXT, agent_trace TEXT, clause_findings TEXT,
   undetermined TEXT, rule_coverage TEXT, missing_terms TEXT, ask_items TEXT,
-  clause_review INTEGER DEFAULT 0
+  clause_review INTEGER DEFAULT 0, model TEXT
 );
 CREATE TABLE IF NOT EXISTS logs (
   log_id TEXT PRIMARY KEY, task_id TEXT, user_id TEXT, action TEXT, detail TEXT, created_at TEXT
@@ -90,6 +90,7 @@ TASK_MIGRATIONS: dict[str, str] = {
     "missing_terms": "TEXT",
     "ask_items": "TEXT",
     "clause_review": "INTEGER DEFAULT 0",
+    "model": "TEXT",
 }
 
 
@@ -273,6 +274,7 @@ class SqliteRepository:
                     dispute_type=str(r.get("dispute_type", "")),
                     region=str(r.get("region", "全国")),
                     level=str(r.get("level", "")),
+                    source_url=str(r.get("source_url", "")),
                 )
             )
         return out
@@ -480,8 +482,8 @@ class SqliteRepository:
             "verify_ok,degraded,latency_s,token_in,token_out,created_at,"
             "questions,ask_rounds,refused,boundary_layer,boundary_reason,ask_history,errors,"
             "contract_id,contract_name,contract_chars,deleted,case_refs,agent_trace,clause_findings,"
-            "undetermined,rule_coverage,missing_terms,ask_items,clause_review)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "undetermined,rule_coverage,missing_terms,ask_items,clause_review,model)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task.task_id,
                 task.enterprise_id,
@@ -526,6 +528,7 @@ class SqliteRepository:
                 json.dumps([self._missing_to_dict(t) for t in task.missing_terms], ensure_ascii=False),
                 json.dumps(task.ask_items, ensure_ascii=False),
                 int(task.clause_review),
+                task.model,
             ),
         )
         self._conn.commit()
@@ -679,6 +682,7 @@ class SqliteRepository:
             mode=TaskMode(row["mode"]),
             enterprise_id=row["enterprise_id"] or "",
             variant=row["variant"] or "full",
+            model=row["model"] or "",
             facts=json.loads(row["facts"] or "{}"),
             items=items,
             suggestions=suggestions,

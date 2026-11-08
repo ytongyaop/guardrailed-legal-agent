@@ -1,11 +1,24 @@
 """状态图装配。
 
-    START → intake → boundary ─否→ refuse → END
-                         └是→ slots_check ─缺(且未超轮数)→ ask → slots_check
-                                       └齐→ extract → retrieve → rule_check
-                                            → checklist → verify
-                                                ├通过→ output
-                                                └失败→ degrade → output → END
+以下按 `build_graph` 里 `add_node` / `add_edge` 的**真实顺序**写，共 13 个节点：
+
+    START → intake → extract → boundary
+    boundary ─┬─ 越界 → refuse → END
+              ├─ 问答 → retrieve
+              └─ 核对 → slots_check ─缺项且轮数未超→ ask → slots_check
+                                             └齐备/轮数已满→ retrieve
+    retrieve ─┬─ 问答 → qa_answer → verify
+              └─ 核对 → rule_check → checklist → verify
+    verify ─┬─ 校验通过 → output → END
+            └─ 校验失败 → degrade → output
+
+条件边只有四条（分别在 boundary / slots_check / retrieve / verify 之后）：
+- `boundary`：refuse（越界）/ qa→retrieve / check→slots_check；
+- `slots_check`：ask（缺项且未超轮数）/ ready→retrieve；
+- `retrieve`：qa→qa_answer / check→rule_check；
+- `verify`：ok→output / degrade→degrade。
+`intake → extract → boundary` 全是普通边：抽取排在越界判定之前，
+因此 boundary 拿不到检索结果（这也是它只做术语判定的原因）。
 
 节点用闭包绑定 `Deps`（实例不进 state），因此可以注入假实现做单测。
 """

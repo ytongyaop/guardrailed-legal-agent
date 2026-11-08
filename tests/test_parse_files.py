@@ -6,7 +6,7 @@ import io
 
 import pytest
 
-from mla.ui.app import parse_contract_bytes
+from mla.adapters.files import parse_contract_bytes
 
 
 def _minimal_pdf(text: str) -> bytes:

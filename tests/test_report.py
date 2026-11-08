@@ -10,6 +10,7 @@ from docx import Document
 from mla.adapters.persist import SqliteRepository
 from mla.config import Paths, data_path
 from mla.domain.models import (
+    CaseRef,
     CheckItem,
     CheckTask,
     ClauseFinding,
@@ -127,6 +128,32 @@ def test_report_merges_clause_findings_into_conclusion(tmp_path) -> None:
     assert "不构成法律意见，条款效力认定以仲裁机构或法院裁判为准" in merged
     # 条款结论引用的法条原文也要附在引用条文里
     assert repo.get_statute("LCL-20").text[:20] in merged
+
+
+def test_report_shows_source_urls(tmp_path) -> None:
+    """来源链接要打通：结论条目的法条来源、类案条目都带一行来源（数据里有就必须显示）。"""
+    repo = _repo(tmp_path)
+    task = CheckTask(
+        task_id="T-SRC",
+        mode=TaskMode.CHECK,
+        enterprise_id="E1",
+        items=[_rule_item("R-PROBATION-6M", finding="试用期约定超过法定上限")],
+        case_refs=[CaseRef(case_id="C-001", holding="示例裁判要点")],
+    )
+    merged = "\n".join(p.text for p in Document(io.BytesIO(build_report_docx(task, repo))).paragraphs)
+
+    assert "来源：https://www.mohrss.gov.cn/" in merged  # 法条来源（LCL-19 的官方发布页）
+    assert "四、类案参照" in merged  # 有 case_refs 才出这一节
+    assert "来源：https://www.court.gov.cn/" in merged  # 案例来源
+    assert "不构成本次结论" in merged
+
+
+def test_report_omits_case_section_without_refs(tmp_path) -> None:
+    """没有类案引用就不出这一节，避免空标题。"""
+    repo = _repo(tmp_path)
+    task = CheckTask(task_id="T-NOCASE", mode=TaskMode.CHECK, enterprise_id="E1")
+    merged = "\n".join(p.text for p in Document(io.BytesIO(build_report_docx(task, repo))).paragraphs)
+    assert "四、类案参照" not in merged
 
 
 def test_merge_findings_orders_rules_then_grades() -> None:

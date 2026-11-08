@@ -40,9 +40,11 @@ def test_run_check_persists_task_and_log(tmp_path) -> None:
     assert all(it.source_id for it in task.items)
     assert task.suggestions == []  # 无模型不生成建议
     assert task.latency_s is not None
+    assert task.model == "none"  # 没配模型时记 none，而不是空串
 
     saved = repo.list_tasks("E1")
     assert saved and saved[0].task_id == task.task_id
+    assert saved[0].model == "none"
     logs = repo.list_logs()
     assert logs and logs[0].task_id == task.task_id
     assert "条目" in logs[0].detail

@@ -1,20 +1,22 @@
 [build-system]
-requires = ["setuptools>=68"]
+# PEP 639 的 `project.license-files` 需要 setuptools>=77
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "mla"
 dynamic = ["version"]
 description = "Guardrailed agent for labor-contract risk review"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
-dependencies = ["langgraph>=1.0", "PyYAML>=6.0"]
+dependencies = ["langgraph>=1.0,<2.0", "PyYAML>=6.0,<7.0"]
 keywords = ["legal-tech", "labor-contract", "llm", "retrieval-augmented-generation", "guardrails"]
 authors = [{ name = "ytongyaop" }]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
-  "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Intended Audience :: Legal Industry",
   "Topic :: Text Processing :: Linguistic",
@@ -26,9 +28,9 @@ Repository = "https://github.com/ytongyaop/guardrailed-legal-agent"
 Issues = "https://github.com/ytongyaop/guardrailed-legal-agent/issues"
 
 [project.optional-dependencies]
-ui = ["streamlit>=1.40", "pandas>=1.5", "altair>=5.0"]
-files = ["python-docx>=1.1", "pypdf>=4.0"]
-dev = ["pytest", "ruff", "pyright"]
+ui = ["streamlit>=1.40,<2.0", "pandas>=1.5", "altair>=5.0"]
+files = ["python-docx>=1.1,<2.0", "pypdf>=4.0,<7.0"]
+dev = ["pytest", "pytest-cov", "ruff", "pyright"]
 
 [project.scripts]
 mla = "mla.cli:main"

@@ -213,11 +213,18 @@ def _run(
     items = _dedupe_demoted_rule(list(final.get("items") or []), clause_findings)
     latency = time.perf_counter() - started
 
+    # 记录本次实际使用的模型名（历史记录要能回答"这次用的哪个模型"）：
+    # 未配置模型（没有生成器）时写 "none" 而不是空串，避免与"旧库没这一列"混为一谈。
+    model_name = "none"
+    if deps.generator is not None:
+        model_name = str(getattr(getattr(deps.generator, "cfg", None), "model", "") or "none")
+
     task = CheckTask(
         task_id=str(init.get("task_id") or ""),
         mode=TaskMode(str(init.get("mode") or "核对")),
         enterprise_id=enterprise_id or user.enterprise_id,
         variant=str(init.get("variant") or "full"),
+        model=model_name,
         facts=dict(final.get("facts") or {}),
         items=items,
         suggestions=list(final.get("suggestions") or []),

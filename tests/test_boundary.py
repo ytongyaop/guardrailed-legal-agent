@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mla.domain.boundary import classify_by_terms, zero_hit_fallback
+from mla.domain.boundary import classify_by_terms
 
 
 def test_in_scope_terms() -> None:
@@ -21,8 +21,3 @@ def test_unknown_defaults_to_refuse() -> None:
     d = classify_by_terms("今天天气怎么样")
     assert d.in_scope is False
     assert d.layer == "default"
-
-
-def test_zero_hit_fallback() -> None:
-    assert zero_hit_fallback(3, "试用期").in_scope is True
-    assert zero_hit_fallback(0, "试用期").in_scope is False

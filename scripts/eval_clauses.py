@@ -5,8 +5,8 @@
     python scripts/eval_clauses.py --contracts src/mla/data/evalsets/contract_traps_01.txt
     # 多合同：逐合同各出一张表，末尾给汇总表
     python scripts/eval_clauses.py --runs 1 --contracts \
-        src/mla/data/evalsets/contract_traps_01.txt data/evalsets/contract_traps_02.txt \
-        src/mla/data/evalsets/contract_traps_03.txt data/evalsets/contract_compliant_01.txt
+        src/mla/data/evalsets/contract_traps_01.txt src/mla/data/evalsets/contract_traps_02.txt \
+        src/mla/data/evalsets/contract_traps_03.txt src/mla/data/evalsets/contract_compliant_01.txt
 
 三条臂：
     rule_only  只有现有 20 条数值规则出结论（不跑触发器、不调模型）；规则命中的 rule_id

@@ -214,6 +214,26 @@ def test_task_roundtrip_preserves_clause_review_flag(tmp_path) -> None:
     assert got["T-NOREV"].clause_review is False
 
 
+def test_task_roundtrip_preserves_model_name(tmp_path) -> None:
+    """本次用的模型名要落库：历史记录要能回答「这次用的哪个模型」。"""
+    repo = _repo(tmp_path)
+    repo.save_task(
+        CheckTask(task_id="T-MODEL", mode=TaskMode.CHECK, enterprise_id="E1", model="deepseek-chat")
+    )
+    repo.save_task(CheckTask(task_id="T-NOMODEL", mode=TaskMode.CHECK, enterprise_id="E1", model="none"))
+    got = {t.task_id: t for t in repo.list_tasks("E1")}
+    assert got["T-MODEL"].model == "deepseek-chat"
+    assert got["T-NOMODEL"].model == "none"
+
+
+def test_cases_load_source_url(tmp_path) -> None:
+    """案例的官方发布页链接不能静默丢弃：加载时读进 CaseEntry.source_url。"""
+    repo = _repo(tmp_path)
+    cases = repo.list_cases()
+    assert cases, "案例库不应为空"
+    assert all(case.source_url.startswith("http") for case in cases)
+
+
 def test_missing_terms_absent_roundtrips_as_empty(tmp_path) -> None:
     """没有判过的任务读回来是空列表，不报错。"""
     repo = _repo(tmp_path)

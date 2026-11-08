@@ -30,6 +30,8 @@ MISSING_SHORT_NOTE = "必备条款完整性：正文过短，未做必备条款�
 # 汇总句合计 9 类，而覆盖率分母是 8：不点明兜底条款容易被读成与 KPI 矛盾。
 MISSING_BASE_NOTE = "（第（九）类为兜底条款，不参与覆盖率）"
 SPAN_LIMIT = 80
+CASE_HOLDING_LIMIT = 120
+CASE_NOTE = "同类情形通常如何认定，不构成本次结论；以裁判文书为准。"
 # 合并列表的来源标注：档位 0 = 规则确定性判定，1/2/3 = 模型审查的 A/B/C 级。
 FINDING_SOURCES = ("规则判定", "模型审查 A 级", "模型审查 B 级", "模型审查 C 级")
 CLAUSE_GRADE_RANK = {"A": 1, "B": 2, "C": 3}
@@ -132,6 +134,7 @@ def build_report_docx(task: CheckTask, repo: Repository) -> bytes:
             if rank == 0:
                 _finding_paragraph(doc, f"{idx}. {FINDING_SOURCES[0]}：{entry.finding}")
                 _meta_paragraph(doc, f"依据：{_statute_label(repo, entry.source_id)} · 规则 {entry.rule_id}")
+                _statute_source_paragraph(doc, repo, entry.source_id)
                 continue
             _finding_paragraph(
                 doc, f"{idx}. {FINDING_SOURCES[rank]}：第 {entry.paragraph} 段：{_clip(entry.span)}"
@@ -139,6 +142,8 @@ def build_report_docx(task: CheckTask, repo: Repository) -> bytes:
             _meta_paragraph(doc, f"理由：{entry.reason}")
             cites = "、".join(f"{_statute_label(repo, sid)}（{sid}）" for sid in entry.statute_ids)
             _meta_paragraph(doc, f"依据：{cites or '未给出法条依据'}")
+            for sid in entry.statute_ids:
+                _statute_source_paragraph(doc, repo, sid)
             if entry.need_facts:
                 _meta_paragraph(doc, "待补事实：" + "、".join(entry.need_facts))
             if str(getattr(entry, "source", "trigger")) == "model_extra":
@@ -194,6 +199,8 @@ def build_report_docx(task: CheckTask, repo: Repository) -> bytes:
         [item.source_id for item in task.items]
         + [sid for finding in findings for sid in finding.statute_ids],
     )
+
+    _case_refs_paragraphs(doc, task, repo)
 
     doc.add_paragraph()
     note = doc.add_paragraph(DISCLAIMER)
@@ -286,6 +293,37 @@ def _statute_label(repo: Repository, statute_id: str) -> str:
         return statute_id
     short = statute.law_name.replace("中华人民共和国", "")
     return f"《{short}》{statute.article_no}"
+
+
+def _statute_source_paragraph(doc: DocxDocument, repo: Repository, statute_id: str) -> None:
+    """法条来源链接：法源库里没有 URL 就整行不写（不编造）。"""
+    statute = repo.get_statute(statute_id)
+    if statute is not None and statute.source_url:
+        _meta_paragraph(doc, f"来源：{statute.source_url}")
+
+
+def _case_refs_paragraphs(doc: DocxDocument, task: CheckTask, repo: Repository) -> None:
+    """类案参照：只作参照、不进结论；案例库查不到就跳过，不编造标题与链接。"""
+    ids = [ref.case_id for ref in (task.case_refs or [])]
+    if not ids:
+        return
+    by_id = {case.case_id: case for case in repo.list_cases()}
+    cases = [by_id[case_id] for case_id in ids if case_id in by_id]
+    if not cases:
+        return
+    doc.add_paragraph()
+    _heading(doc, "四、类案参照")
+    doc.add_paragraph(CASE_NOTE)
+    for case in cases:
+        title = doc.add_paragraph()
+        run = title.add_run(case.title)
+        run.bold = True
+        run.font.size = Pt(10)
+        _apply_ea(run)
+        doc.add_paragraph(_clip(case.holding, CASE_HOLDING_LIMIT))
+        _meta_paragraph(doc, f"{case.source} · {case.dispute_type}")
+        if case.source_url:
+            _meta_paragraph(doc, f"来源：{case.source_url}")
 
 
 def _group_undetermined(rows, reason: str) -> list[tuple[tuple[str, ...], list]]:
