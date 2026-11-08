@@ -25,7 +25,7 @@
 ## 校验
 
 ```
-python scripts/validate_statutes.py data/statutes/statutes.jsonl
+python scripts/validate_statutes.py src/mla/data/statutes/statutes.jsonl
 ```
 
 逐字比对需要官方原文快照，可通过 `--snapshot-dir` 指定快照根目录（按法源前缀分子目录）；

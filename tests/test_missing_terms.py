@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from mla.config import LLMConfig
+from mla.config import LLMConfig, data_path
 from mla.domain.missing import detect_missing_terms, load_missing_terms
 from mla.domain.models import CheckTask, MissingStatus, Role, TaskMode, User
 from mla.services.tasks import run_check
 
-SPECS = load_missing_terms(Path("data/clauses/missing_terms.yaml"))
-EVAL_DIR = Path("data/evalsets")
+SPECS = load_missing_terms(Path(data_path("clauses/missing_terms.yaml")))
+EVAL_DIR = Path(data_path("evalsets"))
 TERM_IDS = [f"MT-{i}" for i in range(1, 10)]
 NO_LLM = LLMConfig(api_key="")  # 测试不读 secrets、不联网
 BASE_FACTS = {"employer_type": "有限责任公司", "written_contract": "是", "term_years": "3"}

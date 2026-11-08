@@ -1,7 +1,7 @@
 """必备条款缺项检测调试打印（纯规则，不联网、不调模型）。
 
 用法：
-    python scripts/detect_missing_terms.py data/evalsets/contract_traps_03.txt   # 单份合同逐类判定
+    python scripts/detect_missing_terms.py src/mla/data/evalsets/contract_traps_03.txt   # 单份合同逐类判定
     python scripts/detect_missing_terms.py                                      # 4 份基线合同出矩阵表
 """
 
@@ -11,11 +11,13 @@ import argparse
 import sys
 from pathlib import Path
 
-from mla.config import load_config
-from mla.domain.missing import detect_missing_terms, load_missing_terms
-from mla.domain.models import CheckTask, MissingStatus, MissingTerm, TaskMode
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-EVAL_DIR = Path("data/evalsets")
+from mla.config import data_path, load_config  # noqa: E402
+from mla.domain.missing import detect_missing_terms, load_missing_terms  # noqa: E402
+from mla.domain.models import CheckTask, MissingStatus, MissingTerm, TaskMode  # noqa: E402
+
+EVAL_DIR = Path(data_path("evalsets"))
 DEFAULT_CONTRACTS = (
     "contract_compliant_01.txt",
     "contract_traps_01.txt",

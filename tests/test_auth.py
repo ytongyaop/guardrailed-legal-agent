@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from mla.adapters.persist import SqliteRepository
-from mla.config import Paths
+from mla.config import Paths, data_path
 from mla.domain.models import Role
 from mla.services.auth import (
     authenticate,
@@ -19,7 +19,7 @@ from mla.services.auth import (
 
 def _repo(tmp_path) -> SqliteRepository:
     return SqliteRepository(
-        paths=Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml"),
+        paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
         db_path=str(tmp_path / "auth.sqlite3"),
     )
 

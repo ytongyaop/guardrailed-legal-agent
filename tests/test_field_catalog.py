@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from mla.config import data_path
 from mla.domain.field_catalog import FIELD_NAMES, field_name
 from mla.domain.rules import load_rules
 
-RULES = "data/rules/rules.yaml"
+RULES = data_path("rules/rules.yaml")
 
 
 def test_every_rule_field_has_chinese_name() -> None:

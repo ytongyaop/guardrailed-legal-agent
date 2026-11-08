@@ -168,19 +168,19 @@ RESULT_SCRIPT = """
 from pathlib import Path
 
 from mla.adapters.persist import SqliteRepository
-from mla.config import Paths
+from mla.config import Paths, data_path
 from mla.domain.models import Role, User
 from mla.services.tasks import run_check
 from mla.ui.app import _render_task
 
 repo = SqliteRepository(
-    paths=Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml"),
+    paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
     db_path=DB_PATH,
 )
 user = User(
     user_id="U1", username="ui", password_hash="x", salt="y", role=Role.USER, enterprise_id="E1"
 )
-text = Path("data/evalsets/contract_traps_03.txt").read_text(encoding="utf-8")
+text = Path(data_path("evalsets/contract_traps_03.txt")).read_text(encoding="utf-8")
 task = run_check(user=user, contract_text=text, repo=repo, enterprise_id="E1", save=False)
 _render_task(task, repo)
 """
@@ -188,12 +188,12 @@ _render_task(task, repo)
 
 MERGED_SCRIPT = """
 from mla.adapters.persist import SqliteRepository
-from mla.config import Paths
+from mla.config import Paths, data_path
 from mla.domain.models import CheckItem, CheckTask, ClauseFinding, ItemKind, TaskMode
 from mla.ui.app import _render_task
 
 repo = SqliteRepository(
-    paths=Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml"),
+    paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
     db_path=DB_PATH,
 )
 task = CheckTask(
@@ -282,12 +282,12 @@ def test_clause_review_note_when_nothing_found(tmp_path) -> None:
 
 HISTORY_SCRIPT = """
 from mla.adapters.persist import SqliteRepository
-from mla.config import Paths
+from mla.config import Paths, data_path
 from mla.domain.models import CheckTask, TaskMode
 from mla.ui.app import _render_task
 
 repo = SqliteRepository(
-    paths=Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml"),
+    paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
     db_path=DB_PATH,
 )
 task = CheckTask(task_id="T-HIST", mode=TaskMode.CHECK, enterprise_id="E1", clause_review=FLAG)
@@ -339,13 +339,13 @@ from pathlib import Path
 
 import streamlit as st
 from mla.adapters.persist import SqliteRepository
-from mla.config import Paths
+from mla.config import Paths, data_path
 from mla.domain.models import Role, User
 from mla.services.tasks import run_check
 import mla.ui.app as ui_app
 
 repo = SqliteRepository(
-    paths=Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml"),
+    paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
     db_path=DB_PATH,
 )
 user = User(
@@ -353,7 +353,7 @@ user = User(
 )
 st.session_state["user"] = user
 if WITH_TASK:
-    text = Path("data/evalsets/contract_traps_03.txt").read_text(encoding="utf-8")
+    text = Path(data_path("evalsets/contract_traps_03.txt")).read_text(encoding="utf-8")
     st.session_state["last_task"] = run_check(
         user=user, contract_text=text, repo=repo, enterprise_id="E1", save=False
     )
@@ -405,12 +405,12 @@ def test_result_render_alone_has_no_optional_facts(tmp_path) -> None:
 ENTERPRISE_SCRIPT = """
 import streamlit as st
 from mla.adapters.persist import SqliteRepository
-from mla.config import Paths
+from mla.config import Paths, data_path
 from mla.domain.models import Role, User
 import mla.ui.app as ui_app
 
 repo = SqliteRepository(
-    paths=Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml"),
+    paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
     db_path=DB_PATH,
 )
 user = User(
@@ -437,12 +437,12 @@ def test_enterprise_save_requires_three_choices(tmp_path) -> None:
 
 QA_PANEL_SCRIPT = """
 from mla.adapters.persist import SqliteRepository
-from mla.config import Paths
+from mla.config import Paths, data_path
 from mla.domain.models import CheckTask, Role, Suggestion, TaskMode, User
 import mla.ui.app as ui_app
 
 repo = SqliteRepository(
-    paths=Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml"),
+    paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
     db_path=DB_PATH,
 )
 user = User(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from mla.config import data_path
 from mla.domain.field_catalog import FIELD_HINTS, FIELD_NAMES, FIELD_QUESTIONS
 from mla.domain.models import RuleEntry
 from mla.domain.rules import load_rules
@@ -16,7 +17,7 @@ from mla.domain.slots import (
     missing_slots,
 )
 
-RULES = load_rules(Path("data/rules/rules.yaml"))
+RULES = load_rules(Path(data_path("rules/rules.yaml")))
 
 # 规则表实际依赖 19 个字段，加 2 项合同外事实（主体类型、是否书面订立）
 EXPECTED_FIELDS = 21

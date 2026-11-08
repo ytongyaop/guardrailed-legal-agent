@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime
 
 from mla.adapters.persist import SqliteRepository
-from mla.config import Paths
+from mla.config import Paths, data_path
 from mla.domain.models import (
     CheckItem,
     CheckTask,
@@ -27,7 +27,7 @@ from mla.services.auth import hash_password
 
 
 def _repo(tmp_path) -> SqliteRepository:
-    paths = Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml")
+    paths = Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml"))
     return SqliteRepository(paths=paths, db_path=str(tmp_path / "t.sqlite3"))
 
 
@@ -52,8 +52,8 @@ def test_enterprise_and_contract(tmp_path) -> None:
     )
     contracts = repo.list_contracts("E1")
     assert len(contracts) == 1 and contracts[0].text == "合同正文"
-    assert repo.get_contract("C1") is not None
-    assert repo.get_contract("C1").filename == "a.txt"  # type: ignore[union-attr]
+    assert repo.get_contract("C1", "E1") is not None
+    assert repo.get_contract("C1", "E1").filename == "a.txt"  # type: ignore[union-attr]
 
 
 def test_task_roundtrip_preserves_items(tmp_path) -> None:
@@ -326,7 +326,7 @@ def test_legacy_tasks_table_is_migrated(tmp_path) -> None:
     conn.commit()
     conn.close()
 
-    paths = Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml")
+    paths = Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml"))
     repo = SqliteRepository(paths=paths, db_path=str(db))
     old = repo.list_tasks("E1")[0]
     assert old.task_id == "T-OLD"
@@ -358,7 +358,7 @@ def test_legacy_tasks_table_without_rule_columns(tmp_path) -> None:
     conn.commit()
     conn.close()
 
-    paths = Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml")
+    paths = Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml"))
     repo = SqliteRepository(paths=paths, db_path=str(db))
     old = repo.list_tasks("E1")[0]
     assert old.task_id == "T-OLD2"
@@ -390,9 +390,36 @@ def test_enterprise_delete_removes_contracts(tmp_path) -> None:
 def test_contract_delete(tmp_path) -> None:
     repo = _repo(tmp_path)
     repo.save_contract(ContractRecord(contract_id="C1", enterprise_id="E1", filename="a.txt", text="正文"))
-    repo.delete_contract("C1")
-    assert repo.get_contract("C1") is None
+    repo.delete_contract("C1", "E1")
+    assert repo.get_contract("C1", "E1") is None
     assert repo.list_contracts("E1") == []
+
+
+def test_get_contract_requires_matching_enterprise(tmp_path) -> None:
+    """跨企业取合同：A 企业的 ID 拿不到 B 企业的合同；空企业 ID 也不返回合同。"""
+    repo = _repo(tmp_path)
+    repo.save_contract(
+        ContractRecord(contract_id="C-B", enterprise_id="E-B", filename="b.txt", text="B 的正文")
+    )
+
+    assert repo.get_contract("C-B", "E-A") is None
+    assert repo.get_contract("C-B", "") is None
+    assert repo.get_contract("C-B", "E-B") is not None
+
+
+def test_delete_contract_requires_matching_enterprise(tmp_path) -> None:
+    """跨企业删合同：A 企业的 ID 删不掉 B 企业的合同；空企业 ID 什么都不删。"""
+    repo = _repo(tmp_path)
+    repo.save_contract(
+        ContractRecord(contract_id="C-B", enterprise_id="E-B", filename="b.txt", text="B 的正文")
+    )
+
+    repo.delete_contract("C-B", "E-A")
+    repo.delete_contract("C-B", "")
+    assert len(repo.list_contracts("E-B")) == 1
+
+    repo.delete_contract("C-B", "E-B")
+    assert repo.list_contracts("E-B") == []
 
 
 def test_logs_are_newest_first(tmp_path) -> None:

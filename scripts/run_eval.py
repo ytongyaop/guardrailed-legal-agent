@@ -4,7 +4,7 @@
     python scripts/run_eval.py --variant full      # 只跑完整档
     python scripts/run_eval.py --check-determinism # 同集跑两次，断言结果一致
 
-结果写到 data/evalsets/last_eval.json，管理端“评测”页只读展示。
+结果写到 src/mla/data/evalsets/last_eval.json，管理端“评测”页只读展示。
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from mla.adapters.extract import RegexExtractor  # noqa: E402
 from mla.adapters.extract_llm import LLMExtractor  # noqa: E402
 from mla.adapters.llm import DeepSeekLLM  # noqa: E402
-from mla.config import load_config  # noqa: E402
+from mla.config import data_path, load_config  # noqa: E402
 from mla.domain.models import CheckItem, Suggestion  # noqa: E402
 from mla.domain.policy import ACCEPTANCE  # noqa: E402
 from mla.domain.rules import load_rules  # noqa: E402
@@ -206,10 +206,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="MLA 评测")
     parser.add_argument(
         "--cases",
-        default="data/evalsets/eval_cases.jsonl",
+        default=data_path("evalsets/eval_cases.jsonl"),
         help="回归集或留出集文件路径（默认取回归集 eval_cases.jsonl）",
     )
-    parser.add_argument("--out", default="data/evalsets/last_eval.json")
+    parser.add_argument("--out", default=data_path("evalsets/last_eval.json"))
     parser.add_argument(
         "--variant",
         default="all",

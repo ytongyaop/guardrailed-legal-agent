@@ -4,7 +4,7 @@
 本脚本只调用纯函数 `mla.domain.clauses.detect_clauses`，不联网、不调模型。
 
 用法：
-    python scripts/detect_clauses.py --contract data/evalsets/contract_traps_01.txt
+    python scripts/detect_clauses.py --contract src/mla/data/evalsets/contract_traps_01.txt
     python scripts/detect_clauses.py --contract <path> --trigger TR-SI-WAIVER
 """
 
@@ -15,9 +15,12 @@ import json
 import sys
 from pathlib import Path
 
-from mla.domain.clauses import detect_clauses, load_triggers
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-TRIGGERS_PATH = Path("data/clauses/triggers.yaml")
+from mla.config import data_path  # noqa: E402
+from mla.domain.clauses import detect_clauses, load_triggers  # noqa: E402
+
+TRIGGERS_PATH = Path(data_path("clauses/triggers.yaml"))
 
 
 def main(argv: list[str] | None = None) -> int:

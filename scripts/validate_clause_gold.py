@@ -16,7 +16,7 @@
 涉及法条去重数。
 
 用法：
-    python scripts/validate_clause_gold.py [data/evalsets/clause_gold.jsonl]
+    python scripts/validate_clause_gold.py [src/mla/data/evalsets/clause_gold.jsonl]
 """
 
 from __future__ import annotations
@@ -26,7 +26,10 @@ import json
 import sys
 from pathlib import Path
 
-from mla.adapters.extract import _norm
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from mla.adapters.extract import _norm  # noqa: E402
+from mla.config import data_path  # noqa: E402
 
 REQUIRED_FIELDS = (
     "gold_id",
@@ -54,8 +57,8 @@ def load_statutes(path: Path) -> dict[str, dict]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("gold", nargs="?", default="data/evalsets/clause_gold.jsonl")
-    ap.add_argument("--statutes", default="data/statutes/statutes.jsonl")
+    ap.add_argument("gold", nargs="?", default=data_path("evalsets/clause_gold.jsonl"))
+    ap.add_argument("--statutes", default=data_path("statutes/statutes.jsonl"))
     args = ap.parse_args(argv)
 
     gold_path = Path(args.gold)

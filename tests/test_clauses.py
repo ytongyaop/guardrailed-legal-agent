@@ -12,12 +12,13 @@ from pathlib import Path
 import pytest
 
 from mla.adapters.extract import _norm
+from mla.config import data_path
 from mla.domain.clauses import MAX_SPAN, Trigger, detect_clauses, load_triggers
 
-TRIGGERS_PATH = Path("data/clauses/triggers.yaml")
-GOLD_PATH = Path("data/evalsets/clause_gold.jsonl")
-STATUTES_PATH = Path("data/statutes/statutes.jsonl")
-TRAPS_CONTRACT = Path("data/evalsets/contract_traps_01.txt")
+TRIGGERS_PATH = Path(data_path("clauses/triggers.yaml"))
+GOLD_PATH = Path(data_path("evalsets/clause_gold.jsonl"))
+STATUTES_PATH = Path(data_path("statutes/statutes.jsonl"))
+TRAPS_CONTRACT = Path(data_path("evalsets/contract_traps_01.txt"))
 MAX_CANDIDATES = 40  # 单份合同候选上限（pattern 太松会突破这个数）
 
 TRIGGERS = load_triggers(TRIGGERS_PATH)

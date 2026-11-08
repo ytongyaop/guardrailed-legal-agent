@@ -113,7 +113,7 @@
 - rule_id: R-NONCOMPETE-UNPAID-3M
   name: 因用人单位原因 3 个月未支付竞业限制补偿，劳动者可请求解除
   field: noncompete_unpaid_months
-  op: "<="
+  op: "<"
   threshold: 3
   unit: 月
   statute_id: J1-38

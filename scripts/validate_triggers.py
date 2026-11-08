@@ -3,10 +3,10 @@
 检查项：
 1. `trigger_id` 唯一、以 `TR-` 开头
 2. `patterns` 非空、每条都能被 `re` 编译
-3. `candidate_statute_ids` 非空，且全部存在于 `data/statutes/statutes.jsonl`（闭集引用）
+3. `candidate_statute_ids` 非空，且全部存在于 `src/mla/data/statutes/statutes.jsonl`（闭集引用）
 4. `severity_hint` ∈ {A, B, C}；`ask_fields` 是字符串列表
 5. **硬门禁**——以下四条任一不满足即 `FAIL` 并以退出码 1 结束：
-   a. gold 正样本覆盖率 = 38/38（`data/evalsets/clause_gold.jsonl` 中 grade ≠ 合规的样本）
+   a. gold 正样本覆盖率 = 38/38（`src/mla/data/evalsets/clause_gold.jsonl` 中 grade ≠ 合规的样本）
    b. 负样本（grade = 合规）被触发 = 0 条
    c. `contract_compliant_01.txt` 候选 = 0 条
    d. 四份合同候选数 = 22 / 9 / 12 / 0
@@ -31,13 +31,16 @@ import re
 import sys
 from pathlib import Path
 
-from mla.adapters.extract import _norm
-from mla.domain.clauses import ClauseCandidate, detect_clauses, load_triggers
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-TRIGGERS_PATH = Path("data/clauses/triggers.yaml")
-GOLD_PATH = Path("data/evalsets/clause_gold.jsonl")
-STATUTES_PATH = Path("data/statutes/statutes.jsonl")
-CONTRACT_DIR = Path("data/evalsets")
+from mla.adapters.extract import _norm  # noqa: E402
+from mla.config import data_path  # noqa: E402
+from mla.domain.clauses import ClauseCandidate, detect_clauses, load_triggers  # noqa: E402
+
+TRIGGERS_PATH = Path(data_path("clauses/triggers.yaml"))
+GOLD_PATH = Path(data_path("evalsets/clause_gold.jsonl"))
+STATUTES_PATH = Path(data_path("statutes/statutes.jsonl"))
+CONTRACT_DIR = Path(data_path("evalsets"))
 TRIGGER_ID_RE = re.compile(r"^TR-[A-Z0-9-]+$")
 
 # ---- 硬门禁基线（改动前先读模块 docstring 第 5 条）----

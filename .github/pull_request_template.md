@@ -22,4 +22,4 @@ python scripts/check_ui_text.py
 - [ ] 已运行 `ruff check src tests scripts`
 - [ ] 已运行 `python scripts/check_ui_text.py`
 - [ ] 若改了判定逻辑，已跑回归集确认不退化
-- [ ] 若新增评测样本，已按 `data/evalsets/README.md` 的纪律归入回归集或留出集
+- [ ] 若新增评测样本，已按 `src/mla/data/evalsets/README.md` 的纪律归入回归集或留出集

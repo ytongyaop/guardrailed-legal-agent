@@ -13,7 +13,11 @@ import sqlite3
 import sys
 from pathlib import Path
 
-DB = Path("data/mla.sqlite3")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from mla.config import load_config  # noqa: E402
+
+DB = Path(load_config().paths.db)
 
 
 def main(argv: list[str] | None = None) -> int:

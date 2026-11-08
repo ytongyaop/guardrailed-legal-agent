@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from mla.config import data_path
 from mla.domain.rules import RuleHit, evaluate, load_rules
 
-RULES_PATH = Path("data/rules/rules.yaml")
-STATUTES = Path("data/statutes/statutes.jsonl")
+RULES_PATH = Path(data_path("rules/rules.yaml"))
+STATUTES = Path(data_path("statutes/statutes.jsonl"))
 
 
 def _hits(facts: dict[str, str]) -> list[RuleHit]:

@@ -25,21 +25,21 @@
 
 ## 集合构造
 
-### 回归集（主流程，52 条，`data/evalsets/eval_cases.jsonl`）
+### 回归集（主流程，52 条，`src/mla/data/evalsets/eval_cases.jsonl`）
 
 每条用例带合同片段或结构化事实，标注应命中的规则 ID（`gold_items`）与是否应触发补问（`expect_ask`）。用例覆盖违规命中、事实缺失、事实齐全、越界提问、界内边缘提问等类别：第一类测判定准确，后几类分别测补问触发、不误问、拒答与不误拒。正样本合同取自官方示范文本；负样本在示范文本上人工植入违法或缺失条款，gold 由脚本按植入清单自动生成、人工只做抽样复核，植入清单另行保存、不随回归集公布。
 
 这套用例在开发过程中被修改过，交付后仍在改，用途是回归：改动判定逻辑后这里不退化，说明既有能力没被破坏。它的满分不能读成准确率 100%。
 
-### 留出集（非模板合同，12 条，`data/evalsets/eval_generalization.jsonl`）
+### 留出集（非模板合同，12 条，`src/mla/data/evalsets/eval_generalization.jsonl`）
 
 非模板合同，检验脱离模板句式后抽取与判定是否仍然成立。一次成型后没有再改过，也不为调优服务。条款级评测对这 12 条只做噪音检查（报候选数、结论数与等级分布，供人工判断有无明显离谱结论），不算准确率、不造 gold。
 
-### 留出集（问答，20 条，`data/evalsets/qa_cases.jsonl`）
+### 留出集（问答，20 条，`src/mla/data/evalsets/qa_cases.jsonl`）
 
 每条一个自然语言问题，附人工标注的应引法条 ID。评测脚本按消融臂运行：模型单跑、加 BM25、加向量、加 RRF 融合，度量可答率、引用存在率（引用条号都在法源库内）、引用命中率（引用里至少有一条是标注的应引法条）、工具轮数与平均耗时。模型单跑臂是对照，用来检验没有检索时引用是否可靠。这套问答用例一次成型后没有再改过。
 
-### 回归集（条款级，95 条，`data/evalsets/clause_gold.jsonl`）
+### 回归集（条款级，95 条，`src/mla/data/evalsets/clause_gold.jsonl`）
 
 基于 4 份合同：3 份对抗合同植入 38 条陷阱（正样本），1 份全合规对照含 57 条合规条款（负样本）。逐条标注应判等级与应引法条，用于存在性域的覆盖率、误报与引用评测。
 
@@ -112,11 +112,11 @@
 
 | 命令 | 内容 |
 | --- | --- |
-| `pytest` | 339 条测试，强制纯正则抽取并屏蔽真实 Key，离线可复现 |
+| `pytest` | 371 条测试，强制纯正则抽取并屏蔽真实 Key，离线可复现 |
 | `python scripts/run_eval.py --extract regex` | 回归集，纯正则抽取档 |
 | `python scripts/run_eval.py --extract llm` | 回归集，模型抽取档（需配置 `MLA_LLM_API_KEY`） |
 | `python scripts/run_eval.py --variant rules_only` | 消融臂示例：只跑确定性规则，不接模型 |
-| `python scripts/run_eval.py --cases data/evalsets/eval_generalization.jsonl` | 留出集（非模板合同） |
+| `python scripts/run_eval.py --cases src/mla/data/evalsets/eval_generalization.jsonl` | 留出集（非模板合同） |
 | `python scripts/run_eval.py --check-determinism` | 校验相同输入下结果的确定性 |
 | `python scripts/eval_clauses.py --runs 1` | 回归集（条款级）单轮；加大 `--runs` 可观察等级稳定率 |
 | `python scripts/eval_qa.py` | 问答检索消融（留出集）；模型与向量臂需配置 Key，BM25 臂可离线 |

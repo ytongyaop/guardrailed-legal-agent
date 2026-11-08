@@ -28,6 +28,15 @@ jobs:
       - name: Test
         run: python -m pytest
 
+      - name: Smoke test installed wheel
+        run: |
+          rm -rf /tmp/whl /tmp/mla-wheel-run
+          python -m pip wheel . --no-deps -w /tmp/whl
+          python -m pip install --force-reinstall --no-deps /tmp/whl/*.whl
+          mkdir -p /tmp/mla-wheel-run
+          cd /tmp/mla-wheel-run
+          python -m mla check --contract "$(python -c 'import os, mla; print(os.path.join(os.path.dirname(mla.__file__), "data", "evalsets", "sample_contract.txt"))')"
+
       - name: Lint
         run: ruff check src tests scripts
 
@@ -36,7 +45,7 @@ jobs:
 
       - name: Validate data
         run: |
-          python scripts/validate_statutes.py data/statutes/statutes.jsonl
+          python scripts/validate_statutes.py src/mla/data/statutes/statutes.jsonl
           python scripts/validate_rules.py
           python scripts/validate_triggers.py
           python scripts/validate_missing_terms.py

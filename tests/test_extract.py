@@ -5,8 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from mla.adapters.extract import cn_to_int, extract_facts
+from mla.config import data_path
 
-CONTRACT = Path("data/evalsets/sample_contract.txt")
+CONTRACT = Path(data_path("evalsets/sample_contract.txt"))
 
 
 def test_cn_to_int() -> None:

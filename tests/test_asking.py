@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from mla.adapters.persist import SqliteRepository
-from mla.config import Paths
+from mla.config import Paths, data_path
 from mla.domain.asking import candidate_fields
 from mla.domain.field_catalog import field_question
 from mla.domain.models import CheckTask, TaskMode
@@ -18,7 +18,7 @@ from mla.graph.nodes import Deps, ask
 from mla.graph.state import CheckState
 from mla.services.asking import _verify_asks, polish_questions, suggest_optional
 
-RULES = load_rules(Path("data/rules/rules.yaml"))
+RULES = load_rules(Path(data_path("rules/rules.yaml")))
 DEPS = Deps(rules=RULES)
 
 BLOCKING = list(BLOCKING_SLOTS)  # employer_type / written_contract / term_years
@@ -305,7 +305,7 @@ def test_verify_asks_caps_item_count() -> None:
 
 def test_ask_items_survive_roundtrip(tmp_path) -> None:
     """追问清单要能落库再读回：界面靠字段 id 回填，丢了这个键就会按问句原文硬猜。"""
-    paths = Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml")
+    paths = Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml"))
     repo = SqliteRepository(paths=paths, db_path=str(tmp_path / "t.sqlite3"))
     ask_items = [
         {"slot_id": "employer_type", "question": field_question("employer_type"), "source": "llm"},

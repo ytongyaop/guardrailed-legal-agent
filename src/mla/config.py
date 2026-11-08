@@ -12,6 +12,22 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+PACKAGE_DATA_DIR = Path(__file__).resolve().parent / "data"
+
+
+def data_path(relative: str) -> str:
+    """把相对包内数据目录的路径解析成绝对路径字符串。
+
+    数据随包分发：仓库里是 `src/mla/data`，安装后在 `site-packages/mla/data`。
+    因此不能依赖运行时工作目录。需要指向别处时用对应的 `MLA_*` 环境变量覆盖。
+    """
+    return str(PACKAGE_DATA_DIR / relative)
+
+
+def _cwd_path(name: str) -> str:
+    """运行期可写文件（数据库 / 向量缓存）默认放在工作目录，不写进只读的包目录。"""
+    return str(Path.cwd() / name)
+
 
 def _env(env: Mapping[str, str] | None) -> Mapping[str, str]:
     return os.environ if env is None else env
@@ -42,7 +58,8 @@ class RetrievalConfig:
     top_k: int = 8
     rrf_k: int = 60
     embed_model: str = "qwen3.7-text-embedding-flash"
-    index_dir: str = "data/index"
+    # 向量缓存是可写的运行期产物，默认落在工作目录（安装后包目录可能只读）
+    index_dir: str = field(default_factory=lambda: str(Path.cwd() / "data" / "index"))
 
 
 @dataclass(frozen=True)
@@ -77,13 +94,14 @@ class MissingTermsConfig:
 
 @dataclass(frozen=True)
 class Paths:
-    statutes: str = "data/statutes/statutes.jsonl"
-    rules: str = "data/rules/rules.yaml"
-    cases: str = "data/cases/cases.jsonl"
-    clauses: str = "data/clauses/triggers.yaml"
-    missing_terms: str = "data/clauses/missing_terms.yaml"
-    evalsets: str = "data/evalsets"
-    db: str = "data/mla.sqlite3"
+    statutes: str = data_path("statutes/statutes.jsonl")
+    rules: str = data_path("rules/rules.yaml")
+    cases: str = data_path("cases/cases.jsonl")
+    clauses: str = data_path("clauses/triggers.yaml")
+    missing_terms: str = data_path("clauses/missing_terms.yaml")
+    evalsets: str = data_path("evalsets")
+    # 数据库是运行期可写文件：默认落在工作目录，不进包目录（site-packages 可能只读）
+    db: str = field(default_factory=lambda: _cwd_path("mla.sqlite3"))
 
 
 @dataclass(frozen=True)
@@ -141,7 +159,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
             dimension=int(e.get("MLA_EMBED_DIM", "1024")),
             timeout_s=int(e.get("MLA_EMBED_TIMEOUT", "30")),
         ),
-        retrieval=RetrievalConfig(),
+        retrieval=RetrievalConfig(index_dir=e.get("MLA_INDEX_DIR", str(Path.cwd() / "data" / "index"))),
         policy=PolicyConfig(),
         extraction=ExtractionConfig(
             mode=e.get("MLA_EXTRACT_MODE", "auto").strip().lower(),
@@ -156,12 +174,12 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
             min_chars=int(e.get("MLA_MISSING_MIN_CHARS", "400")),
         ),
         paths=Paths(
-            statutes=e.get("MLA_STATUTES", "data/statutes/statutes.jsonl"),
-            rules=e.get("MLA_RULES", "data/rules/rules.yaml"),
-            cases=e.get("MLA_CASES", "data/cases/cases.jsonl"),
-            clauses=e.get("MLA_CLAUSES", "data/clauses/triggers.yaml"),
-            missing_terms=e.get("MLA_MISSING_TERMS", "data/clauses/missing_terms.yaml"),
-            evalsets=e.get("MLA_EVALSETS", "data/evalsets"),
-            db=e.get("MLA_DB", "data/mla.sqlite3"),
+            statutes=e.get("MLA_STATUTES", data_path("statutes/statutes.jsonl")),
+            rules=e.get("MLA_RULES", data_path("rules/rules.yaml")),
+            cases=e.get("MLA_CASES", data_path("cases/cases.jsonl")),
+            clauses=e.get("MLA_CLAUSES", data_path("clauses/triggers.yaml")),
+            missing_terms=e.get("MLA_MISSING_TERMS", data_path("clauses/missing_terms.yaml")),
+            evalsets=e.get("MLA_EVALSETS", data_path("evalsets")),
+            db=e.get("MLA_DB", _cwd_path("mla.sqlite3")),
         ),
     )

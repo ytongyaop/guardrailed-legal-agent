@@ -25,7 +25,7 @@ _HIGH = "高"
 
 @dataclass(frozen=True)
 class MissingTermSpec:
-    """一条必备条款规格（数据来自 `data/clauses/missing_terms.yaml`）。"""
+    """一条必备条款规格（数据来自 `src/mla/data/clauses/missing_terms.yaml`）。"""
 
     term_id: str
     name: str

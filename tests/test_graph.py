@@ -6,13 +6,14 @@ import json
 from pathlib import Path
 from typing import Any
 
+from mla.config import data_path
 from mla.domain.models import CheckItem, ItemKind, RuleCoverage, UndeterminedRule
 from mla.domain.rules import evaluate, load_rules
 from mla.graph.build import build_graph
 from mla.graph.nodes import Deps, rule_check
 from mla.graph.state import CheckState
 
-RULES = load_rules(Path("data/rules/rules.yaml"))
+RULES = load_rules(Path(data_path("rules/rules.yaml")))
 DEPS = Deps(rules=RULES)
 
 # 阻断项齐全（主体类型 / 是否书面合同 / 合同期限），用于「不进入补问」的用例
@@ -118,7 +119,7 @@ def _facts_cases() -> list[dict[str, str]]:
     """评测集里全部带**非空**结构化事实的用例（问答类没有 facts，跳过）。"""
     out: list[dict[str, str]] = []
     for name in ("eval_cases.jsonl", "eval_generalization.jsonl"):
-        path = Path("data/evalsets") / name
+        path = Path(data_path("evalsets")) / name
         for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue

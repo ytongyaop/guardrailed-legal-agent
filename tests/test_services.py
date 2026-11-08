@@ -5,17 +5,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from mla.adapters.persist import SqliteRepository
-from mla.config import LLMConfig, Paths
+from mla.config import LLMConfig, Paths, data_path
 from mla.domain.models import Role, TaskMode, User
 from mla.services.tasks import run_check, run_qa
 
-CONTRACT = Path("data/evalsets/sample_contract.txt").read_text(encoding="utf-8")
+CONTRACT = Path(data_path("evalsets/sample_contract.txt")).read_text(encoding="utf-8")
 NO_LLM = LLMConfig(api_key="")  # 测试不读 secrets、不联网
 
 
 def _repo(tmp_path) -> SqliteRepository:
     return SqliteRepository(
-        paths=Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml"),
+        paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
         db_path=str(tmp_path / "svc.sqlite3"),
     )
 

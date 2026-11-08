@@ -8,7 +8,7 @@ from pathlib import Path
 from docx import Document
 
 from mla.adapters.persist import SqliteRepository
-from mla.config import Paths
+from mla.config import Paths, data_path
 from mla.domain.models import (
     CheckItem,
     CheckTask,
@@ -25,12 +25,12 @@ from mla.domain.models import (
 from mla.services.report import build_report_docx, merge_findings
 from mla.services.tasks import run_check
 
-CONTRACT = Path("data/evalsets/sample_contract.txt").read_text(encoding="utf-8")
+CONTRACT = Path(data_path("evalsets/sample_contract.txt")).read_text(encoding="utf-8")
 
 
 def _repo(tmp_path) -> SqliteRepository:
     return SqliteRepository(
-        paths=Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml"),
+        paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
         db_path=str(tmp_path / "report.sqlite3"),
     )
 

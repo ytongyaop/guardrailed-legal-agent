@@ -1,7 +1,7 @@
 """命令行入口：核对一份合同文本或一组事实，走 LangGraph 状态图。
 
-    python -m mla check --contract data/evalsets/sample_contract.txt --trace
-    python -m mla check --facts data/evalsets/sample_facts.json
+    python -m mla check --contract src/mla/data/evalsets/sample_contract.txt --trace
+    python -m mla check --facts src/mla/data/evalsets/sample_facts.json
 
 `--trace` 打印实际经过的节点顺序（证明"行为可复现"）；校验不通过退出码为 1。
 """
@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
+import string
 import sys
 from pathlib import Path
 from typing import Any
@@ -143,8 +145,20 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0 if final.get("verify_ok") else 1
 
 
+def _random_password(length: int = 16) -> str:
+    """生成随机口令：字母 + 数字混排，保证两类字符都出现。"""
+    alphabet = string.ascii_letters + string.digits
+    while True:
+        pwd = "".join(secrets.choice(alphabet) for _ in range(length))
+        if any(c.isalpha() for c in pwd) and any(c.isdigit() for c in pwd):
+            return pwd
+
+
 def cmd_init(args: argparse.Namespace) -> int:
-    """初始化：建管理员账号（首次验收用）。"""
+    """初始化：建管理员账号（首次验收用）。
+
+    不传 `--admin-password` 时生成随机口令并只打印一次：公开部署时没有可猜的默认口令。
+    """
     from .adapters.persist import SqliteRepository
     from .domain.models import Enterprise, Role
     from .services.auth import register
@@ -153,12 +167,19 @@ def cmd_init(args: argparse.Namespace) -> int:
     if repo.get_user_by_name(args.admin_username):
         print(f"账号已存在：{args.admin_username}")
         return 1
+    generated = not args.admin_password
+    password = args.admin_password or _random_password()
+    if not generated and len(password) < 8:
+        print(f"警告：口令只有 {len(password)} 位，建议至少 8 位。", file=sys.stderr)
     ent_id = ""
     if args.enterprise:
         ent_id = "E-" + args.admin_username[:6]
         repo.save_enterprise(Enterprise(enterprise_id=ent_id, name=args.enterprise))
-    register(repo, args.admin_username, args.admin_password, Role.ADMIN, ent_id)
+    register(repo, args.admin_username, password, Role.ADMIN, ent_id)
     print(f"已创建管理员：{args.admin_username}（企业：{args.enterprise or '未建'}）")
+    if generated:
+        print(f"管理员口令：{password}")
+        print("请立即记录，之后不再显示。")
     return 0
 
 
@@ -169,7 +190,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p_init = sub.add_parser("init", help="初始化管理员账号（首次运行）")
     p_init.add_argument("--admin-username", default="admin")
-    p_init.add_argument("--admin-password", default="admin12345")
+    p_init.add_argument(
+        "--admin-password",
+        default=None,
+        help="管理员口令；不传则随机生成 16 位并只打印一次",
+    )
     p_init.add_argument("--enterprise", default="")
     p_init.set_defaults(func=cmd_init)
 

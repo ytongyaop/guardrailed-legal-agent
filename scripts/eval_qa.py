@@ -19,13 +19,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from mla.adapters.embedding import DashScopeEmbedder  # noqa: E402
 from mla.adapters.llm import DeepSeekLLM  # noqa: E402
 from mla.adapters.rag import Bm25Retriever, DenseRetriever, HybridRetriever  # noqa: E402
-from mla.config import load_config  # noqa: E402
+from mla.config import data_path, load_config  # noqa: E402
 from mla.services.qa_agent import run_qa_agent  # noqa: E402
 
 MODEL_SYSTEM = """你是劳动用工问答助手。只输出 JSON：{"answers":[{"text":"结论","source_ids":["法条ID"]}]}。
 不得编造条号；没有把握就返回 {"answers":[]}。"""
 
-QA_FILE = "data/evalsets/qa_cases.jsonl"
+QA_FILE = data_path("evalsets/qa_cases.jsonl")
 
 
 class DenseOnly:
@@ -45,7 +45,7 @@ def _load_cases() -> list[dict]:
         return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
     rows = [
         json.loads(x)
-        for x in Path("data/evalsets/eval_cases.jsonl").read_text(encoding="utf-8").splitlines()
+        for x in Path(data_path("evalsets/eval_cases.jsonl")).read_text(encoding="utf-8").splitlines()
         if x.strip()
     ]
     return [
@@ -120,7 +120,7 @@ def main() -> None:
             f"{hit / total:>10.2f}{rounds / total:>8.2f}{elapsed / total:>9.2f}"
         )
 
-    out = Path("data/evalsets/last_qa_eval.json")
+    out = Path(data_path("evalsets/last_qa_eval.json"))
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n已写入 {out}")
 

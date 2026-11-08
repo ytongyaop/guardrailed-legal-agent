@@ -25,7 +25,7 @@ import streamlit as st
 
 from mla.adapters.llm import DeepSeekLLM
 from mla.adapters.persist import SqliteRepository
-from mla.config import LLMConfig, load_config
+from mla.config import LLMConfig, data_path, load_config
 from mla.domain.asking import candidate_fields
 from mla.domain.field_catalog import field_hint, field_name, field_question
 from mla.domain.models import (
@@ -358,7 +358,7 @@ def _login_screen(repo: SqliteRepository) -> None:
                     else:
                         st.session_state["user"] = user
                         st.rerun()
-                st.caption("演示账号 `admin` / `admin12345`（仅本地演示）")
+                st.caption("首次运行请执行 `python -m mla init` 设置管理员账号。")
             with tab_reg:
                 with st.form("register"):
                     name2 = st.text_input("用户名（≥3 字符）")
@@ -497,7 +497,7 @@ def _page_contracts(repo: SqliteRepository, user: User) -> None:
         st.warning(f"确认删除合同 {pending}？删除后不可在“从历史合同选择”里找到。", icon=":material/delete:")
         c1, c2, _ = st.columns([1, 1, 4])
         if c1.button("确认删除", type="primary", key="confirm_contract_del"):
-            repo.delete_contract(pending)
+            repo.delete_contract(pending, ent_id)
             st.session_state.pop("pending_contract_delete", None)
             st.session_state.pop("view_contract", None)
             st.rerun()
@@ -584,7 +584,7 @@ def _collect_input(repo: SqliteRepository, user: User) -> tuple[str, str, str]:
                 "合同原文", value=chosen.text, height=200, disabled=True, key=f"view_{chosen.contract_id}"
             )
             if st.button("删除这份合同", icon=":material/delete:", key=f"del_{chosen.contract_id}"):
-                repo.delete_contract(chosen.contract_id)
+                repo.delete_contract(chosen.contract_id, chosen.enterprise_id)
                 st.rerun()
         return chosen.text, chosen.filename, chosen.contract_id
     return (
@@ -1596,7 +1596,7 @@ def _page_admin(repo: SqliteRepository, user: User) -> None:
         _render_eval()
 
 
-EVAL_FILE = Path("data/evalsets/last_eval.json")
+EVAL_FILE = Path(data_path("evalsets/last_eval.json"))
 EVAL_LABELS = {
     "accuracy": "风险/缺项识别准确率",
     "recall": "风险/缺项召回率",
@@ -1641,14 +1641,14 @@ def _render_eval() -> None:
     st.dataframe(rows, width="stretch", hide_index=True)
     st.caption(
         f"样本 {data.get('case_count', 0)} 条 · 生成时间 {data.get('generated_at', '')} · "
-        "回归集为官方示范文本加人工植入；留出集与问答消融的标注说明见 data/evalsets/README.md。"
+        "回归集为官方示范文本加人工植入；留出集与问答消融的标注说明见 src/mla/data/evalsets/README.md。"
     )
     mismatches = result.get("mismatches") or []
     if mismatches:
         with st.expander(f"不一致样本（{len(mismatches)} 条）"):
             st.dataframe(mismatches, width="stretch", hide_index=True)
 
-    history_file = Path("data/evalsets/eval_history.jsonl")
+    history_file = Path(data_path("evalsets/eval_history.jsonl"))
     if history_file.exists():
         lines = [x for x in history_file.read_text(encoding="utf-8").splitlines() if x.strip()]
         with st.expander(f"历史评测记录（{len(lines)} 次）", icon=":material/history:"):

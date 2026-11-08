@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("streamlit")
 
 from mla.adapters.persist import SqliteRepository  # noqa: E402
-from mla.config import Paths  # noqa: E402
+from mla.config import Paths, data_path  # noqa: E402
 from mla.domain.models import Enterprise, User  # noqa: E402
 from mla.ui.app import (  # noqa: E402
     _facts_from_enterprise,
@@ -20,7 +20,7 @@ THREE = {"employer_type": "个体工商户", "working_hours": "标准工时", "s
 
 
 def _repo(tmp_path) -> SqliteRepository:
-    paths = Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml")
+    paths = Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml"))
     return SqliteRepository(paths=paths, db_path=str(tmp_path / "ui.sqlite3"))
 
 

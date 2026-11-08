@@ -57,12 +57,14 @@ pip install -e ".[ui,files]"
 装好后依次执行：
 
 ```bash
-python -m mla init --admin-username admin --admin-password admin12345 --enterprise "示例企业"
-python -m mla check --contract data/evalsets/sample_contract.txt
+python -m mla init --admin-username admin --enterprise "示例企业"
+python -m mla check --contract src/mla/data/evalsets/sample_contract.txt
 streamlit run src/mla/ui/app.py
 ```
 
 三条命令依次完成：初始化管理员账号并绑定企业、对仓库自带示例合同跑一次命令行核对、启动网页界面（Streamlit，启动后在浏览器打开命令行输出的地址；界面内可导出 Word 核对报告）。
+
+`init` 不传 `--admin-password` 时自动生成 16 位随机口令，建号后只打印一次，请立即记录（之后不再显示）；要自己指定口令就加 `--admin-password`（少于 8 位会提示一条警告，不阻断）。
 
 没有安装界面依赖（`[ui,files]`）时，`streamlit run` 与 Word 报告导出不可用；命令行核对与评测脚本不受影响。
 
@@ -86,10 +88,14 @@ streamlit run src/mla/ui/app.py
 | `MLA_EXTRACT_MODE` | 抽取档位：`auto`＝正则优先、模型补缺失字段；`llm`＝强制模型；`regex`＝纯正则 | `auto` |
 | `MLA_CLAUSE_REVIEW` | 条款级审查（存在性域）开关，`on` / `true` / `1` / `yes` 为开 | `on` |
 | `MLA_EXTRACT_MAX_CHARS` | 发送给模型的合同正文字数上限 | `20000` |
+| `MLA_DB` | SQLite 数据库路径（账号/企业/合同/任务/日志） | 工作目录下的 `mla.sqlite3` |
+| `MLA_INDEX_DIR` | 向量缓存目录 | 工作目录下的 `data/index/` |
+
+数据库与向量缓存是运行期可写文件，默认落在**当前工作目录**，不写进包目录（`site-packages` 可能只读）。数据文件本身（法源、规则、条款、案例、评测集）随包只读分发；需要指向别处时用上表中的 `MLA_*` 变量覆盖。
 
 ## 数据与评测
 
-数据资产全部以文件形式存放在 `data/` 目录，随仓库分发：
+数据资产全部以文件形式存放在 `src/mla/data/` 目录，随包分发（`pip install` 后位于 `site-packages/mla/data/`），代码通过 `mla.config.data_path()` 解析，不依赖运行时工作目录：
 
 | 数据 | 规模 | 说明 |
 | --- | --- | --- |
@@ -99,7 +105,7 @@ streamlit run src/mla/ui/app.py
 | 必备条款规格 | 9 类 | 依据《劳动合同法》第十七条 |
 | 官方案例 | 37 条 | 附在结论后供参考 |
 | 评测数据 | 回归集：主流程 52 条、条款级 95 条（正样本 38、负样本 57）；留出集：非模板合同 12 条、问答 20 条 | 两类纪律不同：回归集每次改动必跑、只要求不退化；留出集不参与调优、用于报告能力。构造方式见 [docs/evaluation.md](docs/evaluation.md) |
-| 测试 | 339 条 | 全部离线可复现：测试强制纯正则抽取并屏蔽真实 Key |
+| 测试 | 371 条 | 全部离线可复现：测试强制纯正则抽取并屏蔽真实 Key |
 
 评测结果（口径与数字同样重要，务必连着读）：
 
@@ -130,18 +136,19 @@ src/mla/
   cli.py
   config.py
   __main__.py
-data/
-  statutes/statutes.jsonl        143 条法源
-  rules/rules.yaml               20 条规则
-  clauses/triggers.yaml          28 条触发器
-  clauses/missing_terms.yaml     9 类必备条款
-  cases/cases.jsonl              37 条官方案例
-  evalsets/                      回归集 52 ＋ 95，留出集 12 ＋ 20
+  data/                          随包分发的数据（只读）
+    statutes/statutes.jsonl      143 条法源
+    rules/rules.yaml             20 条规则
+    clauses/triggers.yaml        28 条触发器
+    clauses/missing_terms.yaml   9 类必备条款
+    cases/cases.jsonl            37 条官方案例
+    evalsets/                    回归集 52 ＋ 95，留出集 12 ＋ 20
 scripts/        校验与评测脚本
-tests/          339 条测试
+tests/          371 条测试
 docs/           architecture.md evaluation.md
 .github/        workflows/ci.yml · dependabot.yml · pull_request_template.md · ISSUE_TEMPLATE/
 .streamlit/     config.toml secrets.toml.example
+mla.sqlite3     运行后在工作目录生成（不入库）
 LICENSE
 pyproject.toml
 .gitignore
@@ -160,7 +167,7 @@ pytest
 ruff check src tests scripts
 pyright src
 python scripts/check_ui_text.py
-python scripts/validate_statutes.py data/statutes/statutes.jsonl
+python scripts/validate_statutes.py src/mla/data/statutes/statutes.jsonl
 python scripts/validate_rules.py
 python scripts/validate_triggers.py
 python scripts/validate_missing_terms.py
@@ -173,9 +180,17 @@ python scripts/eval_clauses.py --runs 1
 
 ## 隐私与边界
 
-- 核对时，合同正文会发送给模型（DeepSeek）用于抽取关键字段，界面有明确提示。正则已抽到的字段优先，模型只补缺失字段；调用失败自动回退纯正则。
-- 检索、追问、问答三条路径只发送问题与结构化事实（已抽字段、规则命中、条款段落号与等级、命中法条），不发送合同正文。
-- 账号、企业、合同、任务、日志存本地 SQLite（`data/mla.sqlite3`，5 张表：users / enterprises / contracts / tasks / logs）；一个账号绑定一个企业，任务删除为软删、日志留痕。
+按外发内容分四条路径，口径写死，不含糊：
+
+| 路径 | 发送给模型的内容 | 不发送的内容 |
+|---|---|---|
+| 抽取（LLM 档） | 合同正文，上限由 `MLA_EXTRACT_MAX_CHARS` 控制（默认 20000 字）；正则已抽到的字段优先，模型只补缺失字段，调用失败自动回退纯正则 | — |
+| 条款审查 | 只发送被触发器召回的**候选条款原文**及其**前后各 2 行邻近段落** | 合同全文，以及与审查无关的段落（姓名、住址、身份证号、工资数等） |
+| 检索（含向量 `dense_query`） | 只发送问题本身 | 合同正文、条款片段、结构化事实 |
+| 追问 / 问答 | 只发送问题 + 本次核对的结构化事实（已抽字段、规则命中、条款段落号与等级、命中法条） | 合同正文、条款片段原文 |
+
+- 抽取环节发送正文这件事界面有明确提示；条款审查只发候选邻近段落，因此模型看不到全文，它自己"额外发现"的问题会相应变少——这是隐私优先的取舍。
+- 账号、企业、合同、任务、日志存本地 SQLite（默认工作目录下的 `mla.sqlite3`，可用 `MLA_DB` 覆盖；5 张表：users / enterprises / contracts / tasks / logs）；一个账号绑定一个企业，任务删除为软删、日志留痕。
 
 ## 免责声明
 

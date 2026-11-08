@@ -9,7 +9,7 @@
 5. 规则 ID 全局唯一
 
 用法：
-    python scripts/validate_rules.py [data/rules/rules.yaml]
+    python scripts/validate_rules.py [src/mla/data/rules/rules.yaml]
 """
 
 from __future__ import annotations
@@ -20,7 +20,11 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
 import yaml
+
+from mla.config import data_path  # noqa: E402
 
 CN_DIGITS = "零一二三四五六七八九"
 
@@ -82,8 +86,8 @@ def number_variants(value: float) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("rules", nargs="?", default="data/rules/rules.yaml")
-    ap.add_argument("--statutes", default="data/statutes/statutes.jsonl")
+    ap.add_argument("rules", nargs="?", default=data_path("rules/rules.yaml"))
+    ap.add_argument("--statutes", default=data_path("statutes/statutes.jsonl"))
     args = ap.parse_args(argv)
 
     rules = yaml.safe_load(Path(args.rules).read_text(encoding="utf-8")) or []

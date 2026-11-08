@@ -67,7 +67,7 @@
 
 ```bash
 python scripts/run_eval.py --extract regex     # 回归集，纯正则抽取档
-python scripts/run_eval.py --cases data/evalsets/eval_generalization.jsonl   # 留出集，非模板合同
+python scripts/run_eval.py --cases src/mla/data/evalsets/eval_generalization.jsonl   # 留出集，非模板合同
 python scripts/eval_qa.py                      # 留出集，问答
 python scripts/eval_clauses.py --runs 1        # 回归集，条款级
 ```

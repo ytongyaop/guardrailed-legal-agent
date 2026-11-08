@@ -6,6 +6,7 @@ import json
 import random
 from pathlib import Path
 
+from mla.config import data_path
 from mla.domain.rules import (
     RuleEntry,
     RuleOutcome,
@@ -17,10 +18,10 @@ from mla.domain.rules import (
     rule_applies,
 )
 
-RULES_PATH = Path("data/rules/rules.yaml")
+RULES_PATH = Path(data_path("rules/rules.yaml"))
 EVALSETS = (
-    Path("data/evalsets/eval_cases.jsonl"),
-    Path("data/evalsets/eval_generalization.jsonl"),
+    Path(data_path("evalsets/eval_cases.jsonl")),
+    Path(data_path("evalsets/eval_generalization.jsonl")),
 )
 
 # 随机事实的取值范围：按各字段在合同里的常见区间取整数，允许整字段缺失。

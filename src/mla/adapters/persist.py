@@ -440,12 +440,27 @@ class SqliteRepository:
         ).fetchall()
         return [self._row_to_contract(r) for r in rows]
 
-    def get_contract(self, contract_id: str) -> ContractRecord | None:
-        row = self._conn.execute("SELECT * FROM contracts WHERE contract_id=?", (contract_id,)).fetchone()
+    def get_contract(self, contract_id: str, enterprise_id: str = "") -> ContractRecord | None:
+        """按 ID 取合同，必须带企业 ID（企业隔离）。
+
+        企业 ID 为空时直接返回 None，不退化成"按主键查全库"，避免跨账号读到别人的合同。
+        """
+        if not enterprise_id:
+            return None
+        row = self._conn.execute(
+            "SELECT * FROM contracts WHERE contract_id=? AND enterprise_id=?",
+            (contract_id, enterprise_id),
+        ).fetchone()
         return self._row_to_contract(row) if row else None
 
-    def delete_contract(self, contract_id: str) -> None:
-        self._conn.execute("DELETE FROM contracts WHERE contract_id=?", (contract_id,))
+    def delete_contract(self, contract_id: str, enterprise_id: str = "") -> None:
+        """删合同，必须带企业 ID；企业 ID 为空直接忽略（与 `list_tasks` 口径一致）。"""
+        if not enterprise_id:
+            return
+        self._conn.execute(
+            "DELETE FROM contracts WHERE contract_id=? AND enterprise_id=?",
+            (contract_id, enterprise_id),
+        )
         self._conn.commit()
 
     @staticmethod

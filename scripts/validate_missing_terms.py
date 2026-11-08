@@ -3,7 +3,7 @@
 检查项：
 1. 规格表结构（judge / mode 与 patterns / groups 搭配、正则可编译）由 `load_missing_terms` 把关；
 2. `term_id` 恰为 MT-1..MT-9，顺序与唯一性都要对；
-3. `statute_id` 必须存在于 `data/statutes/statutes.jsonl`；
+3. `statute_id` 必须存在于 `src/mla/data/statutes/statutes.jsonl`；
 4. `evidence_span` 必须是 `LCL-17` 条文原文的子串（依据片段不许自造）。
 
 用法：`python scripts/validate_missing_terms.py`；任一硬校验不过，退出码 1。
@@ -16,10 +16,13 @@ import json
 import sys
 from pathlib import Path
 
-from mla.domain.missing import load_missing_terms
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-SPECS_PATH = Path("data/clauses/missing_terms.yaml")
-STATUTES_PATH = Path("data/statutes/statutes.jsonl")
+from mla.config import data_path  # noqa: E402
+from mla.domain.missing import load_missing_terms  # noqa: E402
+
+SPECS_PATH = Path(data_path("clauses/missing_terms.yaml"))
+STATUTES_PATH = Path(data_path("statutes/statutes.jsonl"))
 ANCHOR_ID = "LCL-17"
 EXPECTED_IDS = [f"MT-{i}" for i in range(1, 10)]
 

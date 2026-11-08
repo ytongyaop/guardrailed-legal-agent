@@ -6,8 +6,9 @@ import json
 from pathlib import Path
 
 from mla.adapters.rag import Bm25Retriever, rrf_fuse
+from mla.config import data_path
 
-STATUTES = "data/statutes/statutes.jsonl"
+STATUTES = data_path("statutes/statutes.jsonl")
 
 
 def _retriever() -> Bm25Retriever:

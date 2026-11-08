@@ -30,7 +30,7 @@ _REQUIRED = ("trigger_id", "name", "patterns", "candidate_statute_ids")
 
 @dataclass(frozen=True)
 class Trigger:
-    """一条触发器定义（数据来自 `data/clauses/triggers.yaml`）。"""
+    """一条触发器定义（数据来自 `src/mla/data/clauses/triggers.yaml`）。"""
 
     trigger_id: str
     name: str

@@ -719,11 +719,11 @@ def test_demote_rule_deduped_when_finding_exists(monkeypatch) -> None:
 
 def test_clause_findings_persist_roundtrip(tmp_path) -> None:
     from mla.adapters.persist import SqliteRepository
-    from mla.config import Paths
+    from mla.config import Paths, data_path
     from mla.domain.models import CheckTask, TaskMode
 
     repo = SqliteRepository(
-        paths=Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml"),
+        paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
         db_path=str(tmp_path / "clause.sqlite3"),
     )
     finding = ClauseFinding(

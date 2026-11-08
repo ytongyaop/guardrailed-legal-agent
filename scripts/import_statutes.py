@@ -1,4 +1,4 @@
-"""法源入库：把外部采集的原始 jsonl 规范化后写入 data/statutes/statutes.jsonl。
+"""法源入库：把外部采集的原始 jsonl 规范化后写入 src/mla/data/statutes/statutes.jsonl。
 
 规范化规则：
 - `expiry_date` / `superseded_by` / `effective_date` 的空字符串 -> null（代码里是 date|None / str|None）
@@ -6,7 +6,7 @@
 - 不修改原文（text 原样写入）
 
 用法：
-    python scripts/import_statutes.py <源 jsonl> [--dest data/statutes/statutes.jsonl]
+    python scripts/import_statutes.py <源 jsonl> [--dest src/mla/data/statutes/statutes.jsonl]
 """
 
 from __future__ import annotations
@@ -15,6 +15,10 @@ import argparse
 import json
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from mla.config import data_path  # noqa: E402
 
 NORM_NULL = ("expiry_date", "superseded_by")
 
@@ -40,7 +44,7 @@ def sort_key(row: dict) -> tuple[str, int]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("source")
-    ap.add_argument("--dest", default="data/statutes/statutes.jsonl")
+    ap.add_argument("--dest", default=data_path("statutes/statutes.jsonl"))
     args = ap.parse_args(argv)
 
     src = Path(args.source)

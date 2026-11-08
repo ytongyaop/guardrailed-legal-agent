@@ -11,6 +11,10 @@
 消融开关：`verify=False` 时跳过第 3 步的四道校验，等级与法条 ID 原样保留（含库外条号），
 供评测的 `model_raw` 臂度量"没有核验层会输出什么"；本条路径只用于度量，不用于生产展示。
 
+隐私约束：发给模型的 `contract_paragraphs` **只包含候选条款及其邻近 ±2 行**，不发送合同全文
+（姓名、住址、工资数等与审查无关的段落不出本机）。这是隐私优先的取舍：模型看不到全文，
+它自己「额外发现」的问题会变少，不做补偿。
+
 降级：没有 generator、调用失败、JSON 非法 → 空结果 + `errors`（不阻塞主流程，调用方据此标注未启用）。
 
 prompt 与解析同住本模块（与 `services/drafting.py` 同口径）；内核结构 `ClauseFinding` 不带任何文案。
@@ -35,13 +39,12 @@ STATUTE_EXCERPT = 200  # 每条法条原文摘录上限（字符）
 MAX_REASON = 200
 MAX_FACTS = 5
 MAX_FACT_CHARS = 80
-MAX_CONTEXT_CHARS = 6000  # 合同段落总长上限，超出只保留候选邻近段落
-MAX_LINE_CHARS = 160
+MAX_LINE_CHARS = 160  # 单行送入 prompt 的字符上限（超长行截断，避免整段公文淹没候选）
 OVERLAP_MIN = 0.5  # 模型证据与候选 span 的重叠下限（低于此值只记诊断，不丢弃）
 
 REVIEW_SYSTEM = """你是劳动合同条款风险审查助手。只输出 JSON 对象，不要解释，不要 Markdown。
 
-输入两部分：contract_paragraphs（合同全文，按段落编号）与 candidates（本批待判定的可疑条款）。
+输入两部分：contract_paragraphs（候选条款及其邻近段落，按段落编号）与 candidates（本批待判定的可疑条款）。
 对每条候选判断：该约定与它给出的候选法条是否存在冲突，并按风险强度定级。
 
 定级口径：
@@ -179,10 +182,14 @@ def _statutes_payload(
 
 
 def _outline(contract_text: str, focus: set[int]) -> list[str]:
-    """合同段落编号大纲；过长时只保留候选邻近段落（±2），控制 prompt 规模。"""
+    """只输出候选条款及其邻近段落（±2 行），不发送合同全文。
+
+    隐私约束（P0-3）：`focus` 是候选所在段落号集合，函数**始终**过滤，不按长度分支——
+    短合同以前会整份外发（含姓名、住址、工资数等与审查无关的段落），那是缺陷不是优化。
+    `focus` 为空（没有候选）时过滤结果自然为空列表：此时也不会发起审查。
+    """
     lines = [(i, line.strip()) for i, line in enumerate(_non_empty_lines(contract_text), start=1)]
-    if sum(len(line) for _, line in lines) > MAX_CONTEXT_CHARS:
-        lines = [(p, line) for p, line in lines if any(abs(p - f) <= 2 for f in focus)]
+    lines = [(p, line) for p, line in lines if any(abs(p - f) <= 2 for f in focus)]
     return [f"{p}. {line[:MAX_LINE_CHARS]}" for p, line in lines]
 
 

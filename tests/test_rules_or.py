@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from mla.config import data_path
 from mla.domain.rules import RuleEntry, _guard_ok, evaluate, load_rules, rule_applies
 
-RULES_PATH = Path("data/rules/rules.yaml")
+RULES_PATH = Path(data_path("rules/rules.yaml"))
 
 
 def _or_rule() -> RuleEntry:

@@ -2,11 +2,11 @@
 
     python scripts/eval_clauses.py                  # 三臂 × 3 次（默认合同 contract_traps_01.txt）
     python scripts/eval_clauses.py --runs 1         # 只跑 1 次（省时）
-    python scripts/eval_clauses.py --contracts data/evalsets/contract_traps_01.txt
+    python scripts/eval_clauses.py --contracts src/mla/data/evalsets/contract_traps_01.txt
     # 多合同：逐合同各出一张表，末尾给汇总表
     python scripts/eval_clauses.py --runs 1 --contracts \
-        data/evalsets/contract_traps_01.txt data/evalsets/contract_traps_02.txt \
-        data/evalsets/contract_traps_03.txt data/evalsets/contract_compliant_01.txt
+        src/mla/data/evalsets/contract_traps_01.txt data/evalsets/contract_traps_02.txt \
+        src/mla/data/evalsets/contract_traps_03.txt data/evalsets/contract_compliant_01.txt
 
 三条臂：
     rule_only  只有现有 20 条数值规则出结论（不跑触发器、不调模型）；规则命中的 rule_id
@@ -32,7 +32,7 @@
 各跑一次 `full` 臂，只统计候选数、findings 数、A/B/C 分布、耗时、token，并给出前 10 条
 结论的等级与片段前 40 字，供人工判断有无明显离谱结论。
 
-输出：`data/evalsets/last_clause_eval.json`（覆盖写）+ `data/evalsets/clause_eval_history.jsonl`（追加）。
+输出：`src/mla/data/evalsets/last_clause_eval.json`（覆盖写）+ `clause_eval_history.jsonl`（同目录追加）。
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from mla.adapters.extract import RegexExtractor, _norm  # noqa: E402
 from mla.adapters.llm import DeepSeekLLM  # noqa: E402
 from mla.adapters.rag import load_statutes  # noqa: E402
-from mla.config import load_config  # noqa: E402
+from mla.config import data_path, load_config  # noqa: E402
 from mla.domain.clauses import Trigger, detect_clauses, load_triggers  # noqa: E402
 from mla.domain.models import RuleEntry, Severity  # noqa: E402
 from mla.domain.rules import evaluate, load_rules  # noqa: E402
@@ -63,11 +63,11 @@ from mla.services.clause_review import review_clauses  # noqa: E402
 GRADE_ORDER = ("A", "B", "C")
 NEGATIVE_GRADE = "合规"
 COVER_MIN = 0.5  # 覆盖判定门槛：gold 片段被结论片段覆盖 ≥50%
-DEFAULT_CONTRACT = "data/evalsets/contract_traps_01.txt"
-DEFAULT_GOLD = "data/evalsets/clause_gold.jsonl"
-DEFAULT_OUT = "data/evalsets/last_clause_eval.json"
-DEFAULT_HISTORY = "data/evalsets/clause_eval_history.jsonl"
-GENERALIZATION = "data/evalsets/eval_generalization.jsonl"
+DEFAULT_CONTRACT = data_path("evalsets/contract_traps_01.txt")
+DEFAULT_GOLD = data_path("evalsets/clause_gold.jsonl")
+DEFAULT_OUT = data_path("evalsets/last_clause_eval.json")
+DEFAULT_HISTORY = data_path("evalsets/clause_eval_history.jsonl")
+GENERALIZATION = data_path("evalsets/eval_generalization.jsonl")
 PREVIEW_CHARS = 40
 PREVIEW_ROWS = 10
 

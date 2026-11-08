@@ -36,6 +36,13 @@ mla = "mla.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+mla = ["data/**/*.jsonl", "data/**/*.yaml", "data/**/*.txt", "data/**/*.json", "data/**/*.md"]
+
+[tool.setuptools.exclude-package-data]
+# 评测/向量缓存是可再生的运行期产物，不进 wheel
+mla = ["data/index/*", "data/evalsets/last_*.json", "data/evalsets/*_history.jsonl"]
+
 [tool.setuptools.dynamic]
 version = {attr = "mla.__version__"}
 

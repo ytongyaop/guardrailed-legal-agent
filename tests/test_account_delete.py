@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from mla.adapters.persist import SqliteRepository
-from mla.config import Paths
+from mla.config import Paths, data_path
 from mla.domain.models import (
     CheckTask,
     ContractRecord,
@@ -17,7 +17,7 @@ from mla.services.auth import delete_account, hash_password
 
 
 def _repo(tmp_path) -> SqliteRepository:
-    paths = Paths(statutes="data/statutes/statutes.jsonl", rules="data/rules/rules.yaml")
+    paths = Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml"))
     return SqliteRepository(paths=paths, db_path=str(tmp_path / "t.sqlite3"))
 
 
