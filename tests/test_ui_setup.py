@@ -20,6 +20,7 @@ from mla.config import Paths, data_path  # noqa: E402
 from mla.domain.models import Role, User  # noqa: E402
 from mla.services.auth import authenticate, has_admin, hash_password  # noqa: E402
 from mla.ui.app import (  # noqa: E402
+    INIT_PASSWORD_REMINDER,
     LLM_KEY_SETTING,
     _onboarding_content,
     _should_onboard,
@@ -60,6 +61,7 @@ def _all_text(at: AppTest) -> str:
         e.value
         for e in list(at.markdown)
         + list(at.caption)
+        + list(at.code)
         + list(at.error)
         + list(at.warning)
         + list(at.info)
@@ -124,6 +126,32 @@ def test_init_flow_reports_mismatch_without_writing(tmp_path, monkeypatch) -> No
     assert "user" not in at.session_state
     repo = SqliteRepository(paths=_paths(), db_path=str(tmp_path / "setup.sqlite3"))
     assert has_admin(repo) is False
+
+
+# ---------------- 忘记密码（本地找回） ----------------
+def test_login_page_forgot_password_shows_local_commands(tmp_path, monkeypatch) -> None:
+    """登录页有「忘记密码」入口；点开给出可复制的本地重置命令与兜底步骤。"""
+    repo = _repo(tmp_path)
+    _make_user(repo, "admin", "secret123", Role.ADMIN, onboarded=True)
+
+    at = _app(tmp_path, monkeypatch).run()
+    assert not at.exception
+    assert "本地应用无法通过邮箱找回" not in _all_text(at)
+
+    at = next(b for b in at.button if b.label == "忘记密码").click().run()
+    assert not at.exception
+    texts = _all_text(at)
+    assert "本地应用无法通过邮箱找回" in texts
+    assert "python -m mla admin reset --username 你的账号" in texts
+    assert "python -m mla admin list" in texts
+    assert "python -m mla admin promote --username 你的账号" in texts
+
+
+def test_init_page_reminds_local_password_reset(tmp_path, monkeypatch) -> None:
+    """初始化页提示记住口令，并给出本机终端重置命令。"""
+    at = _app(tmp_path, monkeypatch).run()
+    assert not at.exception
+    assert INIT_PASSWORD_REMINDER in _all_text(at)
 
 
 # ---------------- 首次登录引导 ----------------

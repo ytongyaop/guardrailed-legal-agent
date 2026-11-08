@@ -112,6 +112,23 @@ python -m mla check --contract src/mla/data/evalsets/sample_contract.txt
 
 数据库与向量缓存是运行期可写文件，默认落在**当前工作目录**，不写进包目录（`site-packages` 可能只读）。数据文件本身（法源、规则、条款、案例、评测集）随包只读分发；需要指向别处时用上表中的 `MLA_*` 变量覆盖。
 
+### 忘记密码
+
+本地应用没有邮箱与短信，口令只能在本机终端重置：
+
+```bash
+python -m mla admin reset --username 你的账号
+```
+
+不传 `--password` 时生成 16 位随机口令并只显示一次；自己指定时至少 8 位。若所有管理员账号都忘记了，先列账号再把某个账号提为管理员：
+
+```bash
+python -m mla admin list
+python -m mla admin promote --username 你的账号
+```
+
+登录页的「忘记密码」只展示这三条命令，不做网页找回。
+
 ## 数据与评测
 
 数据资产全部以文件形式存放在 `src/mla/data/` 目录，随包分发（`pip install` 后位于 `site-packages/mla/data/`），代码通过 `mla.config.data_path()` 解析，不依赖运行时工作目录：

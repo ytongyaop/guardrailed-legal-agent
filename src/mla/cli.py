@@ -184,6 +184,57 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_admin(args: argparse.Namespace) -> int:
+    """本地找回：列账号 / 重置口令 / 提升管理员。
+
+    本地单机应用没有邮箱与短信，信任模型是"能读写这台机器上的库就能重置"，
+    所以找回只走命令行，不做网页找回。输出里不出现哈希、盐或明文以外的口令。
+    """
+    from .adapters.persist import SqliteRepository
+    from .domain.models import Role
+    from .services.auth import MIN_PASSWORD_LEN, hash_password
+
+    repo = SqliteRepository()
+
+    if args.admin_cmd == "list":
+        users = repo.list_users()
+        if not users:
+            print("尚无账号。")
+            return 0
+        print("用户名｜角色｜企业绑定")
+        for user in users:
+            bound = "已绑定企业" if user.enterprise_id else "未绑定企业"
+            print(f"{user.username}｜{user.role}｜{bound}")
+        return 0
+
+    username = args.username.strip()
+    user = repo.get_user_by_name(username)
+    if user is None:
+        print(f"账号不存在：{username}", file=sys.stderr)
+        return 1
+
+    if args.admin_cmd == "reset":
+        generated = not args.password
+        password = args.password or _random_password()
+        if not generated and len(password) < MIN_PASSWORD_LEN:
+            print(f"口令至少 {MIN_PASSWORD_LEN} 位。", file=sys.stderr)
+            return 1
+        digest, salt = hash_password(password)
+        repo.set_user_password(user.user_id, digest, salt)
+        print(f"已重置口令：{username}")
+        if generated:
+            print(f"新口令：{password}")
+            print("请立即记录，之后不再显示。")
+        return 0
+
+    if user.role is Role.ADMIN:
+        print(f"{username} 已是管理员。")
+        return 0
+    repo.set_user_role(user.user_id, str(Role.ADMIN))
+    print(f"已提升为管理员：{username}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="mla", description="小微企业用工风险辅助系统")
     parser.add_argument("--version", action="version", version=f"mla {__version__}")
@@ -213,6 +264,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_check.add_argument("--trace", action="store_true", help="打印实际经过的节点顺序")
     p_check.set_defaults(func=cmd_check)
+
+    p_admin = sub.add_parser("admin", help="本地找回：列账号、重置口令、提升管理员")
+    admin_sub = p_admin.add_subparsers(dest="admin_cmd", required=True)
+    p_admin_list = admin_sub.add_parser("list", help="列出所有账号（不含口令信息）")
+    p_admin_list.set_defaults(func=cmd_admin)
+    p_admin_reset = admin_sub.add_parser("reset", help="重置指定账号的口令")
+    p_admin_reset.add_argument("--username", required=True)
+    p_admin_reset.add_argument(
+        "--password",
+        default=None,
+        help="新口令；不传则随机生成 16 位并只打印一次，指定时至少 8 位",
+    )
+    p_admin_reset.set_defaults(func=cmd_admin)
+    p_admin_promote = admin_sub.add_parser("promote", help="把指定账号提升为管理员")
+    p_admin_promote.add_argument("--username", required=True)
+    p_admin_promote.set_defaults(func=cmd_admin)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

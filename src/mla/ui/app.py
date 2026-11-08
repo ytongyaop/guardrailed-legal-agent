@@ -377,6 +377,22 @@ def _build_nav(repo: SqliteRepository, user: User) -> st.Page:
 
 # ---------------- 登录 ----------------
 # 登录页只留图标 + 标题 + 登录/注册：用途、边界、数据去向都在首次登录的引导弹窗里说一次。
+FORGOT_PASSWORD_HEAD = "本地应用无法通过邮箱找回。请在装有本程序的机器上打开终端执行："
+FORGOT_PASSWORD_TAIL = "会生成一个新口令并显示一次。若所有管理员账号都忘记了，执行："
+FORGOT_PASSWORD_RESET_CMD = "python -m mla admin reset --username 你的账号"
+FORGOT_PASSWORD_LIST_CMD = "python -m mla admin list"
+FORGOT_PASSWORD_PROMOTE_CMD = "python -m mla admin promote --username 你的账号"
+INIT_PASSWORD_REMINDER = "请记住管理员账号与口令。忘记后只能在本机终端重置：python -m mla admin reset"
+
+
+def _forgot_password_help() -> None:
+    """忘记密码说明：只给可复制的命令，不解释实现原理。"""
+    st.caption(FORGOT_PASSWORD_HEAD)
+    st.code(FORGOT_PASSWORD_RESET_CMD, language="bash")
+    st.caption(FORGOT_PASSWORD_TAIL)
+    st.code(f"{FORGOT_PASSWORD_LIST_CMD}\n{FORGOT_PASSWORD_PROMOTE_CMD}", language="bash")
+
+
 def _login_screen(repo: SqliteRepository) -> None:
     st.space("large")
     left, right = st.columns([1.15, 1], gap="large", vertical_alignment="center")
@@ -399,6 +415,10 @@ def _login_screen(repo: SqliteRepository) -> None:
                     else:
                         st.session_state["user"] = user
                         st.rerun()
+                if st.button("忘记密码", type="tertiary", key="forgot_pwd"):
+                    st.session_state["forgot_pwd_open"] = not st.session_state.get("forgot_pwd_open", False)
+                if st.session_state.get("forgot_pwd_open"):
+                    _forgot_password_help()
             with tab_reg:
                 with st.form("register"):
                     name2 = st.text_input("用户名（≥3 字符）")
@@ -452,6 +472,7 @@ def _init_screen(repo: SqliteRepository) -> None:
                 pwd2 = st.text_input("确认密码", type="password", placeholder="再输入一次")
                 ent_name = st.text_input("企业名称", placeholder="可留空，稍后在企业档案里补")
                 created = st.form_submit_button("创建并进入", type="primary", width="stretch")
+            st.caption(INIT_PASSWORD_REMINDER)
             if created:
                 error = init_form_error(repo, username, pwd, pwd2)
                 if error:
