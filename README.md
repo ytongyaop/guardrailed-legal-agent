@@ -4,6 +4,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
+A guardrailed agent for labor-contract risk review: deterministic rules, model-assisted clause analysis, and source-traceable output for small businesses without in-house legal counsel.
+
 面向小微企业（有雇工、缺专职法务）的劳动合同风险辅助核对系统。受限智能体（guardrailed agent）架构：流程由确定性代码固定，模型只负责自然语言环节，所有输出必须通过规则与证据核验才会呈现给用户。
 
 技术栈：Python 3.11+（开发环境 3.14）· LangGraph 编排（13 个固定节点）· Streamlit 1.66 界面 · SQLite 3.50 存储 · DeepSeek `deepseek-chat`（OpenAI 兼容接口）· 阿里云 `qwen3.7-text-embedding-flash` 语义向量（1024 维，无 Key 自动回退 BM25）· python-docx 导出 Word 报告。
@@ -242,6 +244,18 @@ python scripts/eval_clauses.py --runs 1
 ## 版本
 
 当前版本见 [Releases](https://github.com/ytongyaop/guardrailed-legal-agent/releases) 与 [CHANGELOG.md](CHANGELOG.md)，版本号遵循语义化版本。
+
+## English
+
+A labor-contract risk review tool for small and micro businesses that have employees but no in-house legal staff. It checks a contract along three independent channels: 20 deterministic rules for numeric limits (probation length, overtime rates, non-compete terms), 33 clause triggers that recall suspicious wording for model review with six programmatic checks, and a coverage check against the nine mandatory clauses required by Article 17 of the Labor Contract Law.
+
+Every finding is bound to a statute identifier and must resolve to a real article in the bundled 143-entry statute set; suggestions without a citation are not generated. Rule verdicts use four states (violated, compliant, not applicable, undetermined) so that a missing fact is never silently reported as compliant.
+
+Evaluation data is split into a regression set (used to detect regressions, built alongside the rules) and a held-out set (never used for tuning, used to report capability), with Wilson 95% confidence intervals. Results should be read as development-set numbers, not as generalization claims.
+
+Requirements: Python 3.11+. Install with `pip install -e ".[ui,files]"`, then run `streamlit run src/mla/ui/app.py`; the first launch asks you to create an administrator account. Tests run fully offline (`pytest`).
+
+Not legal advice. The tool reports conflicts with specific statutory provisions and points to the text; it does not determine whether a clause is invalid.
 
 ## License
 
