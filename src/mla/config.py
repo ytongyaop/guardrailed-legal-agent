@@ -121,6 +121,14 @@ def _truthy(value: str) -> bool:
     return value.strip().lower() in ("on", "true", "1", "yes")
 
 
+def env_flag(name: str, default: str = "") -> bool:
+    """读一个开关型环境变量，口径与 `_truthy` 相同（默认读当前进程环境）。
+
+    调用期读而不是加载期读：测试用 monkeypatch 改环境变量后立即生效。
+    """
+    return _truthy(os.environ.get(name, default))
+
+
 def _secrets_section(name: str) -> dict:
     path = Path(".streamlit/secrets.toml")
     if not path.exists():

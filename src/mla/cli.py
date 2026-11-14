@@ -4,6 +4,7 @@
     python -m mla check --facts src/mla/data/evalsets/sample_facts.json
 
 `--trace` 打印实际经过的节点顺序（证明"行为可复现"）；校验不通过退出码为 1。
+无模型时核对被门禁拒绝（退出码 2，提示指向设置页）；`MLA_ALLOW_NO_LLM=1` 时放行进离线诊断。
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from .graph.build import build_graph
 from .graph.nodes import Deps
 from .graph.state import CheckState
 from .services.retrieval import build_retriever
+from .services.tasks import NO_MODEL_MESSAGE, allow_no_model
 
 # 与界面设置页写入的键名保持一致（见 src/mla/ui/app.py 的 LLM_KEY_SETTING）。
 # 这里不 import app.py：那会连带把 streamlit 拖进命令行入口。
@@ -112,6 +114,20 @@ def _run(init: CheckState, deps: Deps, trace: bool) -> tuple[dict[str, Any], lis
 
 def cmd_check(args: argparse.Namespace) -> int:
     cfg = load_config()
+    # 门禁（规格 003 第 8 章「无模型时可看不可新算」）：模型是核对的大脑。
+    # 放在读规则 / 建检索器之前，保证被拒时不建库、不落任务、不产生任何记录。
+    # 环境变量 / secrets.toml 为空时，回落到界面设置页写进 settings 表的 Key。
+    api_key = cfg.llm.api_key or _sqlite_api_key()
+    offline = allow_no_model()
+    if not api_key and not offline:
+        print(NO_MODEL_MESSAGE, file=sys.stderr)
+        print("（离线诊断可用：设置 MLA_ALLOW_NO_LLM=1 后照常输出规则与缺项结果）", file=sys.stderr)
+        # 退出码 2：1 已表示"跑完但校验未过"，这里表示"命令根本没跑起来"，
+        # 与 argparse 用法错误同属一类（都没产出可用结论）。
+        return 2
+    if not api_key:
+        print("离线诊断模式：无模型（MLA_ALLOW_NO_LLM=1），结论只来自规则与缺项检测。", file=sys.stderr)
+
     rules = load_rules(args.rules or cfg.paths.rules)
     facts = _load_facts(args.facts)
     contract_text = _load_contract(args.contract)
@@ -124,8 +140,6 @@ def cmd_check(args: argparse.Namespace) -> int:
         "question": args.question or "",
         "variant": args.variant,
     }
-    # 环境变量 / secrets.toml 为空时，回落到界面设置页写进 settings 表的 Key
-    api_key = cfg.llm.api_key or _sqlite_api_key()
     deps = Deps(
         rules=rules,
         retriever=build_retriever(cfg),

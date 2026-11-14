@@ -13,7 +13,8 @@ from datetime import datetime
 from ..adapters.extract import RegexExtractor
 from ..adapters.extract_llm import LLMExtractor
 from ..adapters.llm import DeepSeekLLM
-from ..config import LLMConfig, load_config
+from ..config import LLMConfig, env_flag, load_config
+from ..domain.boundary import classify_by_terms
 from ..domain.clauses import detect_clauses, load_triggers
 from ..domain.models import CheckItem, CheckTask, ClauseFinding, OperationLog, TaskMode, User
 from ..domain.rules import load_rules
@@ -31,6 +32,42 @@ from .retrieval import build_retriever
 # 模型失败 / 未启用 / 未命中触发器时规则照常报，避免这条最清晰的风险静默消失。
 PROBATION_WAGE_RULE_ID = "R-PROBATION-WAGE-80"
 PROBATION_WAGE_TRIGGER_ID = "TR-PROBATION-WAGE-BASE"
+
+# 无模型门禁的提示语（唯一一处定义：CLI 打印、异常信息、测试断言都引用它）
+NO_MODEL_MESSAGE = "未配置模型，无法发起核对；请在设置页配置 API Key"
+NO_MODEL_QA_MESSAGE = "未配置模型，无法发起问答；请在设置页配置 API Key"
+
+
+class NoModelError(RuntimeError):
+    """服务层硬门禁：没有可用模型时拒绝执行核心能力（规格 003 第 8 章）。
+
+    UI 的门禁提示只是友好层，这里才是唯一真门禁：UI / CLI / 其他调用方都走服务入口，
+    所以断言放在 `run_check` / `run_qa` 的第一行，绕不过去。
+    离线测试与离线诊断用 `MLA_ALLOW_NO_LLM=1` 显式放行，放行后行为与旧路径完全一致。
+    """
+
+
+def allow_no_model() -> bool:
+    """离线开关：`MLA_ALLOW_NO_LLM` 取 1 / true / on / yes 时允许无模型执行旧路径。"""
+    return env_flag("MLA_ALLOW_NO_LLM")
+
+
+def has_model(llm: LLMConfig | None = None) -> bool:
+    """是否有可用模型：与 `_deps` 同一判定口径（配置里的 api_key 非空才构造生成器）。"""
+    return bool((llm or load_config().llm).api_key)
+
+
+def _qa_requires_model(question: str) -> bool:
+    """问答是否需要模型：越界问题由纯规则拒答（不需要模型），范围内问题要模型作答。
+
+    口径与 `graph/nodes.py:boundary` 一致，只对"有自由文本"的情形做术语判定；
+    没有文本时节点按"范围内"放行，但那种情况下检索拿不到条文、走的是
+    "未检索到相关条文"的纯规则出口，照样不需要模型，所以这里直接返回 False。
+    """
+    text = (question or "").strip()
+    if not text:
+        return False
+    return classify_by_terms(text).in_scope
 
 
 def _deps(
@@ -89,7 +126,12 @@ def run_check(
     这样内核不会在同一轮里反复自问；`save=False` 时只算不落库（首轮试探性追问用）。
     `clause_review` 是界面开关的显式覆盖：None 走配置（`MLA_CLAUSE_REVIEW`），
     True / False 由调用方（界面勾选框）决定，默认不改变既有行为。
+
+    门禁：模型是核对的大脑，没有可用模型就拒绝执行（抛 `NoModelError`），
+    不跑图、不落库、不写日志；`MLA_ALLOW_NO_LLM=1` 时放行，走与改造前一致的旧路径。
     """
+    if not allow_no_model() and not has_model(llm):
+        raise NoModelError(NO_MODEL_MESSAGE)
     init: CheckState = {
         "task_id": "T-" + uuid.uuid4().hex[:10],
         "mode": TaskMode.CHECK.value,
@@ -126,7 +168,13 @@ def run_qa(
 
     `context` 是调用方给的结构化核对摘要（事实 / 规则命中 / 条款结论），
     只用于拼提示词，不进检索查询；不传时行为与改造前一致。
+
+    门禁（与 `run_check` 同理，但保留既有的"拒答结果"语义）：越界问题由纯规则拒答，
+    根本不需要模型，照旧走完流程并返回拒答任务；**范围内的问题要模型作答**，
+    这时拿不到模型就抛 `NoModelError`，不再产出"未配置模型"的残缺任务。
     """
+    if not allow_no_model() and not has_model(llm) and _qa_requires_model(question):
+        raise NoModelError(NO_MODEL_QA_MESSAGE)
     init: CheckState = {
         "task_id": "T-" + uuid.uuid4().hex[:10],
         "mode": TaskMode.QA.value,
