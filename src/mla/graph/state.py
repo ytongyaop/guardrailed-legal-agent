@@ -13,6 +13,7 @@ from ..domain.models import (
     UndeterminedRule,
     UnmetTerm,
 )
+from ..domain.rules import RuleCheck
 
 
 class CheckState(TypedDict, total=False):
@@ -40,6 +41,7 @@ class CheckState(TypedDict, total=False):
     unmet: list[UnmetTerm]  # 合同未约定的必备约定（缺 required 字段）
     statutory_na: int  # 因未约定而按法定标准适用、规则不判的条数
     rule_coverage: RuleCoverage | None  # 规则层四态分布
+    rule_checks: list[RuleCheck]  # 数值校验信号（全状态，与 items 双写并存）
     missing_terms: list[MissingTerm]  # 必备条款缺项（旁路，不进 items）
     # 产出
     items: list[CheckItem]

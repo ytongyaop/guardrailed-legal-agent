@@ -38,7 +38,7 @@ from ..domain.models import (
     User,
     UserDeletion,
 )
-from ..domain.rules import load_rules
+from ..domain.rules import RuleCheck, RuleCheckStatus, load_rules
 from .rag import load_statutes
 
 SCHEMA = """
@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   deleted INTEGER DEFAULT 0, case_refs TEXT, agent_trace TEXT, clause_findings TEXT,
   undetermined TEXT, rule_coverage TEXT, missing_terms TEXT, ask_items TEXT,
   unmet TEXT, statutory_na INTEGER DEFAULT 0,
+  rule_checks TEXT,
   clause_review INTEGER DEFAULT 0, model TEXT
 );
 CREATE TABLE IF NOT EXISTS logs (
@@ -99,6 +100,7 @@ TASK_MIGRATIONS: dict[str, str] = {
     "ask_items": "TEXT",
     "clause_review": "INTEGER DEFAULT 0",
     "model": "TEXT",
+    "rule_checks": "TEXT",
 }
 
 # 旧库迁移（users 表）：早期版本的 users 表没有 onboarded 列，启动时按需补。
@@ -239,6 +241,38 @@ def _missing_terms_from_row(row: sqlite3.Row) -> list[MissingTerm]:
                 status=status,
                 certainty=str(entry.get("certainty", "")),
                 note=str(entry.get("note", "")),
+            )
+        )
+    return out
+
+
+def _rule_checks_from_row(row: sqlite3.Row) -> list[RuleCheck]:
+    """还原数值校验信号；缺列（旧库未迁移）/ 空值 / 坏 JSON / 坏条目一律跳过。
+
+    旧记录读成空列表，不补算：规则表会随 P1-4 瘦身，拿今天的规则表回填历史任务
+    等于篡改历史。`status` 不认识就丢这一条，不抛异常（旧库必须能打开）。
+    """
+    data = _json_column(row, "rule_checks")
+    if not isinstance(data, list):
+        return []
+    out: list[RuleCheck] = []
+    for entry in data:
+        if not isinstance(entry, dict) or "rule_id" not in entry:
+            continue
+        try:
+            status = RuleCheckStatus(str(entry.get("status", "")))
+        except ValueError:
+            continue
+        out.append(
+            RuleCheck(
+                rule_id=str(entry["rule_id"]),
+                status=status,
+                field=str(entry.get("field", "")),
+                expected=str(entry.get("expected", "")),
+                actual=str(entry.get("actual", "")),
+                statute_id=str(entry.get("statute_id", "")),
+                evidence_span=str(entry.get("evidence_span", "")),
+                severity=str(entry.get("severity", "")),
             )
         )
     return out
@@ -535,8 +569,9 @@ class SqliteRepository:
             "verify_ok,degraded,latency_s,token_in,token_out,created_at,"
             "questions,ask_rounds,refused,boundary_layer,boundary_reason,ask_history,errors,"
             "contract_id,contract_name,contract_chars,deleted,case_refs,agent_trace,clause_findings,"
-            "undetermined,rule_coverage,missing_terms,ask_items,unmet,statutory_na,clause_review,model)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "undetermined,rule_coverage,missing_terms,ask_items,unmet,statutory_na,clause_review,model,"
+            "rule_checks)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task.task_id,
                 task.enterprise_id,
@@ -584,6 +619,7 @@ class SqliteRepository:
                 int(task.statutory_na),
                 int(task.clause_review),
                 task.model,
+                json.dumps([self._rule_check_to_dict(c) for c in task.rule_checks], ensure_ascii=False),
             ),
         )
         self._conn.commit()
@@ -726,6 +762,19 @@ class SqliteRepository:
         }
 
     @staticmethod
+    def _rule_check_to_dict(c: RuleCheck) -> dict:
+        return {
+            "rule_id": c.rule_id,
+            "status": str(c.status),
+            "field": c.field,
+            "expected": c.expected,
+            "actual": c.actual,
+            "statute_id": c.statute_id,
+            "evidence_span": c.evidence_span,
+            "severity": c.severity,
+        }
+
+    @staticmethod
     def _missing_to_dict(t: MissingTerm) -> dict:
         return {
             "term_id": t.term_id,
@@ -807,6 +856,7 @@ class SqliteRepository:
             unmet=_unmet_from_row(row),
             statutory_na=int(row["statutory_na"] or 0),
             rule_coverage=_coverage_from_row(row),
+            rule_checks=_rule_checks_from_row(row),
             missing_terms=_missing_terms_from_row(row),
             created_at=_parse_dt(row["created_at"]),
         )

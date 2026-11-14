@@ -23,7 +23,7 @@ from ..domain.models import (
     UndeterminedRule,
     UnmetTerm,
 )
-from ..domain.rules import RuleEntry, RuleOutcome, RuleStatus, evaluate, judge_all
+from ..domain.rules import RuleEntry, RuleOutcome, RuleStatus, evaluate, judge_all, to_rule_check
 from ..domain.slots import missing_slots
 from ..domain.verify import verify as run_verify
 from ..ports.extraction import ExtractionResult, Extractor
@@ -210,6 +210,8 @@ def rule_check(state: CheckState, deps: Deps) -> CheckState:
 
     `items` 仍由 `evaluate` 的违规集合生成，条目顺序、字段、文案与旧口径逐字节一致；
     `unmet` / `undetermined` / `rule_coverage` 是旁路留痕，不参与 `items` 构造、不进 `items`。
+    `rule_checks` 是规格 003 P1-1 的双写字段：全部规则的四态都转成三态校验信号（供共识层），
+    同样不进 `items`；P1-3 关闭双写前，两套字段同时存在。
     缺字段的规则按 `FIELD_ABSENCE` 分三路：required 进 `unmet`（合同未约定）、
     statutory/optional 计入不适用（按法定标准或无此项）、其余留在 `undetermined`（需补事实）。
     `unknown` 仍按判定原状态计数（含转列到 `unmet` 的那几条），四态之和恒等于 total。
@@ -223,6 +225,7 @@ def rule_check(state: CheckState, deps: Deps) -> CheckState:
             "undetermined": [],
             "statutory_na": 0,
             "rule_coverage": RuleCoverage(total=0, violated=0, compliant=0, not_applicable=0, unknown=0),
+            "rule_checks": [],
         }
     facts = dict(state.get("facts") or {})
     hits = evaluate(deps.rules, facts)
@@ -283,6 +286,10 @@ def rule_check(state: CheckState, deps: Deps) -> CheckState:
         "undetermined": undetermined,
         "statutory_na": statutory_na,
         "rule_coverage": coverage,
+        # 双写（规格 003 第 13 章 P1-1）：全部 20 条规则的四态一律转三态留痕，
+        # 含 ok / mismatch / needs_fact —— 共识层需要看到全貌，而不是只看违规那几条。
+        # `items` 的产出逻辑不动；P1-3 关闭双写前两者并存。
+        "rule_checks": [to_rule_check(o) for o in outcomes],
     }
 
 

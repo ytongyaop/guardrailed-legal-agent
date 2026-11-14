@@ -12,6 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # 仅类型检查期导入：`rules.py` 反向依赖本模块，运行期导入会成环
+    from .rules import RuleCheck
 
 
 class ItemKind(StrEnum):
@@ -300,6 +304,7 @@ class CheckTask:
     unmet: list[UnmetTerm] = field(default_factory=list)  # 合同未约定的必备约定（旁路，不进 items）
     statutory_na: int = 0  # 因合同未约定、按法定标准适用而不判的规则条数
     rule_coverage: RuleCoverage | None = None  # 规则层四态分布；未跑规则层时为空
+    rule_checks: list[RuleCheck] = field(default_factory=list)  # 数值校验信号（不产出用户可见结论）
     missing_terms: list[MissingTerm] = field(default_factory=list)  # 必备条款缺项（旁路，不进 items）
     latency_s: float | None = None
     token_in: int = 0

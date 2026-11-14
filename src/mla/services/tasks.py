@@ -294,6 +294,7 @@ def _run(
         unmet=list(final.get("unmet") or []),
         statutory_na=int(final.get("statutory_na") or 0),
         rule_coverage=final.get("rule_coverage"),
+        rule_checks=list(final.get("rule_checks") or []),
         missing_terms=list(final.get("missing_terms") or []),
         token_in=int(getattr(deps.generator, "usage_in", 0) or 0),
         token_out=int(getattr(deps.generator, "usage_out", 0) or 0),
