@@ -157,6 +157,27 @@ def test_report_omits_case_section_without_refs(tmp_path) -> None:
     assert "四、类案参照" not in merged
 
 
+def test_report_top_shows_verdict_not_bare_count(tmp_path) -> None:
+    """报告顶部与界面同口径：给结论 + 覆盖明细，不再只有“风险条目 N”。"""
+    repo = _repo(tmp_path)
+    task = CheckTask(
+        task_id="T-VERDICT-R",
+        mode=TaskMode.CHECK,
+        enterprise_id="E1",
+        contract_chars=1200,
+        items=[_rule_item("R-PROBATION-6M", finding="试用期约定超过法定上限")],
+        rule_coverage=RuleCoverage(total=20, violated=1, compliant=8, not_applicable=8, unknown=3),
+    )
+    doc = Document(io.BytesIO(build_report_docx(task, repo)))
+    table_text = "\n".join(c.text for t in doc.tables for r in t.rows for c in r.cells)
+
+    assert "核对结论" in table_text
+    assert "发现 1 条与法条存在冲突的事项" in table_text
+    assert "覆盖情况" in table_text
+    assert "规则 17/20 可判定" in table_text
+    assert "风险条目" not in table_text
+
+
 def test_merge_findings_orders_rules_then_grades() -> None:
     """纯排序函数：规则 → A → B → C；同档规则按 rule_id、条款按（段落, trigger_id）。"""
     items = [

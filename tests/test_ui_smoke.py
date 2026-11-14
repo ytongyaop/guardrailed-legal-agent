@@ -114,6 +114,14 @@ def test_required_copy_is_present() -> None:
         assert required in text, f"界面缺少必留文案：{required}"
 
 
+def test_verify_badge_copy_is_traceability_not_pass() -> None:
+    """绿标只说“引用可溯源”：它校验的是引用能不能回链，不是“合同没问题”。"""
+    text = Path(APP).read_text(encoding="utf-8")
+    assert "引用可溯源" in text
+    assert "引用不可溯源" in text
+    assert "依据校验通过" not in text
+
+
 def _string_constants() -> list[str]:
     """界面里的中文字面量（不含注释），用于断言对外文案本身。"""
     tree = ast.parse(Path(APP).read_text(encoding="utf-8"))
@@ -339,6 +347,16 @@ def test_clause_review_note_when_not_reviewed(tmp_path) -> None:
     assert "未发现问题" not in texts
 
 
+def test_result_top_shows_verdict_not_bare_count(tmp_path) -> None:
+    """顶部结论：规则条目与 A 级条款结论相加（1+1=2），不再把条目数当裸指标。"""
+    at = _merged_app(tmp_path, clause_on=True, with_finding=True)
+    assert not at.exception
+
+    markdowns = [m.value for m in at.markdown]
+    assert any("发现 2 条与法条存在冲突的事项" in m for m in markdowns)
+    assert not any(m.label == "风险条目" for m in at.metric), "条目数不再单独显示为裸数字"
+
+
 def test_clause_review_note_when_nothing_found(tmp_path) -> None:
     """启用且模型未命中：说未发现可疑条款，而不是未发现问题。"""
     at = _merged_app(tmp_path, clause_on=True, with_finding=False)
@@ -420,15 +438,17 @@ def test_check_result_shows_missing_terms(tmp_path, monkeypatch) -> None:
     assert "合同无效" not in texts
 
     metrics = {m.label: m.value for m in at.metric}
-    assert metrics["必备条款"] == "6/8"
+    assert "必备条款" not in metrics, "必备条款不再是裸指标，改由顶部覆盖明细说"
+    assert "必备条款 6/8 已写" in texts
 
 
 CHECK_PAGE_SCRIPT = """
 from pathlib import Path
+from unittest.mock import patch
 
 import streamlit as st
 from mla.adapters.persist import SqliteRepository
-from mla.config import Paths, data_path
+from mla.config import LLMConfig, Paths, data_path
 from mla.domain.models import Role, User
 from mla.services.tasks import run_check
 import mla.ui.app as ui_app
@@ -438,28 +458,43 @@ repo = SqliteRepository(
     db_path=DB_PATH,
 )
 user = User(
-    user_id="U1", username="ui", password_hash="x", salt="y", role=Role.USER, enterprise_id="E1"
+    user_id="U1", username="ui", password_hash="x", salt="y", role=Role(ROLE_NAME), enterprise_id="E1"
 )
 st.session_state["user"] = user
+# 直接调用页面函数时 _build_nav 没跑，NAV 为空；门禁里的设置页链接需要它存在。
+ui_app.NAV["设置"] = st.Page(lambda: None, title="设置", url_path="settings")
 if WITH_TASK:
     text = Path(data_path("evalsets/contract_traps_03.txt")).read_text(encoding="utf-8")
     st.session_state["last_task"] = run_check(
         user=user, contract_text=text, repo=repo, enterprise_id="E1", save=False
     )
     st.session_state["ask_clause_review"] = False
-ui_app._page_check(repo, user)
+# 注入假 LLMConfig 只证明“有模型”，不联网：run_check 不传 llm，抽取走正则。
+def fake_llm(cfg, repo=None):
+    return LLMConfig(api_key="test") if LLM_ON else None
+
+
+with patch.object(ui_app, "_resolve_llm", fake_llm):
+    ui_app._page_check(repo, user)
 """
 
 
-def _check_page(tmp_path, *, with_task: bool) -> AppTest:
-    script = CHECK_PAGE_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3"))).replace(
-        "WITH_TASK", "True" if with_task else "False"
+def _check_page(tmp_path, *, with_task: bool = False, llm: bool = True, role: Role = Role.USER) -> AppTest:
+    script = (
+        CHECK_PAGE_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
+        .replace("WITH_TASK", "True" if with_task else "False")
+        .replace("LLM_ON", "True" if llm else "False")
+        .replace("ROLE_NAME", repr(role.value))
     )
     return AppTest.from_string(script, default_timeout=60).run()
 
 
+GATE_COPY = "未配置模型，合同核对不可用；配置后才能给出结论。"
+SETTINGS_LINK_LABEL = "去设置页配置 API Key"
+
+
 def test_check_page_empty_state_shows_guide(tmp_path) -> None:
-    """无结果时左栏出输入表单，右栏给引导文案，不把整页撑长。"""
+    """有模型且无结果时左栏出输入表单，右栏给引导文案，不把整页撑长。"""
     at = _check_page(tmp_path, with_task=False)
     assert not at.exception
 
@@ -472,7 +507,7 @@ def test_check_page_empty_state_shows_guide(tmp_path) -> None:
 
 
 def test_check_page_right_column_shows_latest_result(tmp_path) -> None:
-    """有结果时右栏渲染核对结论，可补充事实只在左栏出现一次。"""
+    """有模型且有结果时右栏渲染核对结论，可补充事实只在左栏出现一次。"""
     at = _check_page(tmp_path, with_task=True)
     assert not at.exception
 
@@ -481,6 +516,43 @@ def test_check_page_right_column_shows_latest_result(tmp_path) -> None:
     assert sum(1 for m in markdowns if "可选补充" in m) == 1
     assert "左侧粘贴或选择一份合同，点击开始核对，结果显示在这里。" not in _all_text(at)
     assert not any(h.value == "核对结果" for h in at.subheader)
+
+
+def test_check_page_blocked_without_model(tmp_path) -> None:
+    """无模型时门禁：给提示，不渲染输入方式 / 合同文本框 / 开始核对 / 追问面板。"""
+    at = _check_page(tmp_path, llm=False)
+    assert not at.exception
+
+    texts = _all_text(at)
+    assert GATE_COPY in texts
+    assert "未配置模型" in "\n".join(w.value for w in at.warning)
+    assert not any(b.label == "开始核对" for b in at.button)
+    assert not any(t.label == "合同正文" for t in at.text_area)
+    assert "合同输入" not in "\n".join(m.value for m in at.markdown)
+    assert not at.form, "追问面板不应出现"
+    assert any("合同核对" in h.value for h in at.header), "门禁仍保留页面标题"
+    assert "请联系管理员在设置页配置模型。" in "\n".join(c.value for c in at.caption)
+    assert not any(p.value == SETTINGS_LINK_LABEL for p in at.page_link), "普通用户不该看到点不动的设置入口"
+
+
+def test_check_page_blocked_without_model_admin_sees_settings_link(tmp_path) -> None:
+    """无模型 + 管理员：给出去设置页配置 API Key 的链接。"""
+    at = _check_page(tmp_path, llm=False, role=Role.ADMIN)
+    assert not at.exception
+
+    assert GATE_COPY in _all_text(at)
+    assert any(p.value == SETTINGS_LINK_LABEL for p in at.page_link)
+    assert not any("请联系管理员" in c.value for c in at.caption)
+
+
+def test_check_page_allows_with_model(tmp_path) -> None:
+    """有模型时行为不变：出现开始核对，不出现门禁提示。"""
+    at = _check_page(tmp_path, llm=True)
+    assert not at.exception
+
+    assert any(b.label == "开始核对" for b in at.button)
+    assert GATE_COPY not in _all_text(at)
+    assert not any(p.value == SETTINGS_LINK_LABEL for p in at.page_link)
 
 
 def test_result_render_alone_has_no_optional_facts(tmp_path) -> None:
@@ -619,6 +691,262 @@ def test_result_splits_unmet_statutory_and_missing_facts(tmp_path) -> None:
     # 互斥：未约定项不进「需补充事实」，合同外事实不进「合同未约定」
     assert texts.count("每月发薪次数") == 1
     assert texts.count("社保登记超期天数") == 1
+
+
+def test_result_top_admits_incomplete_coverage(tmp_path) -> None:
+    """没有条目但审查没跑：顶部必须写“覆盖不完整”，不能读成没问题。"""
+    script = SPLIT_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
+    at = AppTest.from_string(script, default_timeout=60).run()
+    assert not at.exception
+
+    texts = _all_text(at)
+    assert "未发现硬性风险，但覆盖不完整" in texts
+    assert "条款审查未运行" in texts
+    assert "1 条规则因缺少事实无法判定" in texts
+    # 结论句只在顶部说一次：结论区不再复述“未发现硬性风险项”这类判断。
+    assert "未发现可判定的硬性风险项" not in texts
+    assert "本次未发现硬性风险项" not in texts
+
+
+HISTORY_LIST_SCRIPT = """
+from pathlib import Path
+
+import streamlit as st
+from mla.adapters.persist import SqliteRepository
+from mla.config import Paths, data_path
+from mla.domain.models import Role, User
+from mla.services.tasks import run_check
+import mla.ui.app as ui_app
+
+repo = SqliteRepository(
+    paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
+    db_path=DB_PATH,
+)
+user = User(
+    user_id="U1", username="ui", password_hash="x", salt="y", role=Role.USER, enterprise_id="E1"
+)
+st.session_state["user"] = user
+text = Path(data_path("evalsets/contract_traps_01.txt")).read_text(encoding="utf-8")
+run_check(
+    user=user,
+    contract_text=text,
+    repo=repo,
+    enterprise_id="E1",
+    contract_name="contract_traps_01.txt",
+)
+ui_app._page_history(repo, user)
+"""
+
+
+def test_history_row_marks_incomplete_coverage(tmp_path) -> None:
+    """历史列表用结论条数 + 覆盖状态，不再只写“N 条风险”。"""
+    script = HISTORY_LIST_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
+    at = AppTest.from_string(script, default_timeout=60).run()
+    assert not at.exception
+
+    texts = _all_text(at)
+    assert "0 条风险 · 覆盖不完整" in texts, "没条目但覆盖不全，历史行必须标注"
+    assert "0 条风险 · 0 条建议" not in texts, "历史行不再省略覆盖状态"
+
+
+def test_history_row_hides_eval_dataset_name(tmp_path) -> None:
+    """旧数据里存着评测集文件名：历史列表要显示“示例合同”，不能露 contract_traps。"""
+    script = HISTORY_LIST_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
+    at = AppTest.from_string(script, default_timeout=60).run()
+    assert not at.exception
+
+    texts = _all_text(at)
+    assert "示例合同" in texts
+    assert "contract_traps" not in texts
+
+
+def test_history_row_badge_uses_traceability_copy(tmp_path) -> None:
+    """历史行徽标与结果页同一套说法：只说引用能不能回链，不写“依据通过”。"""
+    script = HISTORY_LIST_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
+    at = AppTest.from_string(script, default_timeout=60).run()
+    assert not at.exception
+
+    texts = _all_text(at)
+    assert "引用可溯源" in texts
+    assert "依据通过" not in texts
+    assert "依据校验通过" not in texts
+
+
+CONTRACTS_SCRIPT = """
+import streamlit as st
+from mla.adapters.persist import SqliteRepository
+from mla.config import Paths, data_path
+from mla.domain.models import ContractRecord, Role, User
+import mla.ui.app as ui_app
+
+repo = SqliteRepository(
+    paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
+    db_path=DB_PATH,
+)
+user = User(
+    user_id="U1", username="ui", password_hash="x", salt="y", role=Role.USER, enterprise_id="E1"
+)
+st.session_state["user"] = user
+repo.save_contract(
+    ContractRecord(
+        contract_id="C1",
+        enterprise_id="E1",
+        filename="contract_traps_01.txt",
+        text="甲方聘用乙方，月工资 5000 元。" * 30,
+    )
+)
+ui_app._page_contracts(repo, user)
+"""
+
+
+def test_contracts_page_hides_eval_dataset_name(tmp_path) -> None:
+    """合同管理列表同样只显示清洗后的名字（存储值不动，只改展示）。"""
+    script = CONTRACTS_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
+    at = AppTest.from_string(script, default_timeout=60).run()
+    assert not at.exception
+
+    texts = _all_text(at)
+    assert "示例合同" in texts
+    assert "contract_traps" not in texts
+
+
+DELETE_CONTRACT_SCRIPT = """
+import streamlit as st
+from mla.adapters.persist import SqliteRepository
+from mla.config import Paths, data_path
+from mla.domain.models import ContractRecord, Role, User
+import mla.ui.app as ui_app
+
+repo = SqliteRepository(
+    paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
+    db_path=DB_PATH,
+)
+user = User(
+    user_id="U1", username="ui", password_hash="x", salt="y", role=Role.USER, enterprise_id="E1"
+)
+st.session_state["user"] = user
+repo.save_contract(
+    ContractRecord(
+        contract_id="C-ABC12345",
+        enterprise_id="E1",
+        filename="contract_traps_01.txt",
+        text="甲方聘用乙方，月工资 5000 元。" * 30,
+    )
+)
+st.session_state["pending_contract_delete"] = PENDING_ID
+ui_app._page_contracts(repo, user)
+"""
+
+
+@pytest.mark.parametrize(
+    ("pending", "expected"),
+    [("C-ABC12345", "示例合同"), ("C-MISSING", "该合同")],
+)
+def test_delete_confirm_prompt_hides_contract_id(tmp_path, pending: str, expected: str) -> None:
+    """删除确认框只说合同名：查得到用清洗名，查不到用“该合同”，都不回显内部 ID。"""
+    script = DELETE_CONTRACT_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3"))).replace(
+        "PENDING_ID", repr(pending)
+    )
+    at = AppTest.from_string(script, default_timeout=60).run()
+    assert not at.exception
+
+    prompts = [w.value for w in at.warning if "确认删除" in w.value]
+    assert len(prompts) == 1, prompts
+    assert expected in prompts[0], prompts[0]
+    assert pending not in prompts[0], f"确认框回显了内部 ID：{prompts[0]}"
+    assert "contract_traps" not in prompts[0], prompts[0]
+
+
+DELETE_TASK_SCRIPT = """
+from pathlib import Path
+
+import streamlit as st
+from mla.adapters.persist import SqliteRepository
+from mla.config import Paths, data_path
+from mla.domain.models import Role, User
+from mla.services.tasks import run_check
+import mla.ui.app as ui_app
+
+repo = SqliteRepository(
+    paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
+    db_path=DB_PATH,
+)
+user = User(
+    user_id="U1", username="ui", password_hash="x", salt="y", role=Role.USER, enterprise_id="E1"
+)
+st.session_state["user"] = user
+text = Path(data_path("evalsets/contract_traps_01.txt")).read_text(encoding="utf-8")
+task = run_check(
+    user=user,
+    contract_text=text,
+    repo=repo,
+    enterprise_id="E1",
+    contract_name="contract_traps_01.txt",
+)
+st.session_state["pending_delete"] = PENDING_ID
+ui_app._page_history(repo, user)
+"""
+
+
+@pytest.mark.parametrize(
+    ("pending_expr", "expected"),
+    [("task.task_id", "示例合同"), ('"T-MISSING"', "该核对记录")],
+)
+def test_delete_record_prompt_hides_task_id(tmp_path, pending_expr: str, expected: str) -> None:
+    """删除记录的确认框只说“合同名 + 时间”：查得到用清洗名，查不到用“该核对记录”。"""
+    script = DELETE_TASK_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3"))).replace(
+        "PENDING_ID", pending_expr
+    )
+    at = AppTest.from_string(script, default_timeout=60).run()
+    assert not at.exception
+
+    prompts = [w.value for w in at.warning if "确认删除" in w.value]
+    assert len(prompts) == 1, prompts
+    assert expected in prompts[0], prompts[0]
+    assert "T-" not in prompts[0], f"确认框回显了内部 ID：{prompts[0]}"
+    assert "contract_traps" not in prompts[0], prompts[0]
+    if expected == "示例合同":
+        assert re.search(r"\d{4}-\d{2}-\d{2}", prompts[0]), f"提示缺少时间：{prompts[0]}"
+
+
+COLLECT_INPUT_SCRIPT = """
+import streamlit as st
+from mla.adapters.persist import SqliteRepository
+from mla.config import Paths, data_path
+from mla.domain.models import ContractRecord, Role, User
+import mla.ui.app as ui_app
+
+repo = SqliteRepository(
+    paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
+    db_path=DB_PATH,
+)
+user = User(
+    user_id="U1", username="ui", password_hash="x", salt="y", role=Role.USER, enterprise_id="E1"
+)
+st.session_state["user"] = user
+repo.save_contract(
+    ContractRecord(
+        contract_id="C1",
+        enterprise_id="E1",
+        filename="contract_traps_01.txt",
+        text="甲方聘用乙方，月工资 5000 元。" * 30,
+    )
+)
+ui_app._collect_input(repo, user)
+"""
+
+
+def test_history_select_label_hides_eval_dataset_name(tmp_path) -> None:
+    """“从历史合同选择”的选项标签同样显示清洗后的名字（选项仍是合同对象）。"""
+    script = COLLECT_INPUT_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
+    at = AppTest.from_string(script, default_timeout=60).run()
+    assert not at.exception
+    at.segmented_control[0].set_value("从历史合同选择").run()
+    assert not at.exception
+
+    options = [opt for box in at.selectbox for opt in box.options]
+    assert any("示例合同" in opt for opt in options), options
+    assert not any("contract_traps" in opt for opt in options), options
 
 
 def test_check_page_offers_contract_qa(tmp_path) -> None:

@@ -430,10 +430,10 @@ def test_check_page_enables_clause_review_with_db_key(tmp_path, monkeypatch) -> 
     assert box.value is True
 
 
-def test_check_page_disables_clause_review_without_key(tmp_path, monkeypatch) -> None:
-    """三处来源都没有 Key 时仍然置灰，说明上一例不是恒为可用。"""
+def test_check_page_gated_without_key(tmp_path, monkeypatch) -> None:
+    """三处来源都没有 Key 时核对页被门禁挡住：连条款审查开关都不渲染。"""
     at = _logged_in_app(tmp_path, monkeypatch)
     assert not at.exception
-    box = next(c for c in at.checkbox if c.label == "启用条款审查（模型辅助）")
-    assert box.proto.disabled is True
-    assert box.value is False
+    assert "未配置模型，合同核对不可用；配置后才能给出结论。" in _all_text(at)
+    assert not any(c.label == "启用条款审查（模型辅助）" for c in at.checkbox)
+    assert not any(b.label == "开始核对" for b in at.button)

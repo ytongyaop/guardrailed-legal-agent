@@ -23,14 +23,13 @@ from pathlib import Path
 import altair as alt
 import streamlit as st
 
-from mla.adapters.files import parse_contract_bytes
+from mla.adapters.files import normalize_contract_name, parse_contract_bytes
 from mla.adapters.llm import DeepSeekLLM
 from mla.adapters.persist import SqliteRepository
 from mla.config import LLMConfig, data_path, load_config
 from mla.domain.asking import candidate_fields
 from mla.domain.field_catalog import field_hint, field_name, field_question
 from mla.domain.models import (
-    MISSING_TERM_BASE,
     MISSING_TERM_UNJUDGED_ID,
     ContractRecord,
     Enterprise,
@@ -41,6 +40,7 @@ from mla.domain.models import (
 )
 from mla.domain.policy import ACCEPTANCE, MAX_ASK_CANDIDATES
 from mla.domain.slots import DEFAULT_SLOTS, derive_slots
+from mla.domain.verdict import NOT_REVIEWED_MARKERS, Verdict, summarize_verdict
 from mla.services.asking import suggest_optional
 from mla.services.auth import (
     MIN_PASSWORD_LEN,
@@ -85,8 +85,8 @@ FINDING_SOURCE_BADGES: tuple[str, ...] = (
 FINDING_SOURCE_COLORS: tuple[str, ...] = ("blue", "red", "orange", "gray")
 CLAUSE_NOT_REVIEWED_NOTE = "本次未做条款级审查，条款级风险未覆盖。"
 CLAUSE_CLEAR_NOTE = "本次条款级审查未发现可疑条款。"
-# 出现这些诊断说明审查没跑起来或整批输出不可用，只能说“未做”，不能说“未发现”（见 _clause_review_note）。
-_NOT_REVIEWED_MARKERS: tuple[str, ...] = ("未启用", "失败", "已忽略")
+# 出现这些诊断说明审查没跑起来或整批输出不可用，只能说“未做”，不能说“未发现”
+# （见 _clause_review_note）；关键字表与顶部结论共用 `domain/verdict.py` 同一张，避免两套口径。
 # 结果页底部常驻免责：核对与问答共用一句，不依赖本次是否启用条款审查，也不判“违法/无效”。
 RESULT_DISCLAIMER = "以上为风险提示与依据定位，不构成法律意见；条款效力以仲裁机构或法院裁判为准。"
 # 必备条款汇总句末尾的分母说明：KPI 用 6/8，汇总句合计 9 类，不点明容易被读成矛盾。
@@ -586,12 +586,22 @@ def _page_contracts(repo: SqliteRepository, user: User) -> None:
         return
 
     keyword = st.text_input("搜索（文件名或正文）", placeholder="例如：试用期 / 竞业")
-    rows = [c for c in contracts if not keyword or keyword in c.filename or keyword in c.text]
+    rows = [
+        c
+        for c in contracts
+        if not keyword
+        or keyword in c.filename
+        or keyword in normalize_contract_name(c.filename)
+        or keyword in c.text
+    ]
     st.caption(f"共 {len(contracts)} 份 · 筛出 {len(rows)} 份")
 
     pending = st.session_state.get("pending_contract_delete")
     if pending:
-        st.warning(f"确认删除合同 {pending}？删除后不可在“从历史合同选择”里找到。", icon=":material/delete:")
+        # 确认框只显示合同名（清洗过），不回显内部 contract_id；找不到对象时用“该合同”。
+        target = next((c for c in contracts if c.contract_id == pending), None)
+        label = normalize_contract_name(target.filename) if target else "该合同"
+        st.warning(f"确认删除“{label}”？删除后不可在“从历史合同选择”里找到。", icon=":material/delete:")
         c1, c2, _ = st.columns([1, 1, 4])
         if c1.button("确认删除", type="primary", key="confirm_contract_del"):
             repo.delete_contract(pending, ent_id)
@@ -606,7 +616,7 @@ def _page_contracts(repo: SqliteRepository, user: User) -> None:
         with st.container(border=True):
             left, right = st.columns([4, 1.4], vertical_alignment="center")
             with left:
-                st.markdown(f"**{contract.filename}**")
+                st.markdown(f"**{normalize_contract_name(contract.filename)}**")
                 st.caption(f"{len(contract.text)} 字 · {contract.uploaded_at}")
             with right:
                 with st.container(horizontal=True):
@@ -620,7 +630,7 @@ def _page_contracts(repo: SqliteRepository, user: User) -> None:
     view_id = st.session_state.get("view_contract")
     contract = next((c for c in contracts if c.contract_id == view_id), None)
     if contract is not None:
-        st.subheader(contract.filename, divider="gray", anchor=False)
+        st.subheader(normalize_contract_name(contract.filename), divider="gray", anchor=False)
         st.text_area("合同原文", value=contract.text, height=280, disabled=True, key="contract_view")
         if st.button("收起原文", icon=":material/keyboard_arrow_up:"):
             st.session_state.pop("view_contract", None)
@@ -642,7 +652,7 @@ def _collect_input(repo: SqliteRepository, user: User) -> tuple[str, str, str]:
         if up is None:
             return "", "", ""
         try:
-            return parse_contract_bytes(up.name, up.read()), Path(up.name).stem, ""
+            return parse_contract_bytes(up.name, up.read()), normalize_contract_name(up.name), ""
         except ImportError:
             st.warning(
                 "解析 PDF 需要 pypdf，当前环境未安装；可先改用 .docx 或粘贴文本。",
@@ -656,11 +666,18 @@ def _collect_input(repo: SqliteRepository, user: User) -> tuple[str, str, str]:
         if not contracts:
             st.info("还没有保存过合同。", icon=":material/info:")
             return "", "", ""
-        labels = {f"{c.filename}（{len(c.text)} 字）": c for c in contracts}
-        pick = st.selectbox("选择合同", ["（不选）", *labels.keys()])
-        if pick == "（不选）":
+        # 选项用合同对象本身（`format_func` 只负责显示），取值仍按对象引用，不按字符串反查：
+        # 清洗后多个评测集合同会同名，字符串键会互相覆盖。
+        pick = st.selectbox(
+            "选择合同",
+            contracts,
+            index=None,
+            placeholder="（不选）",
+            format_func=lambda c: f"{normalize_contract_name(c.filename)}（{len(c.text)} 字）",
+        )
+        if pick is None:
             return "", "", ""
-        chosen = labels[pick]
+        chosen = pick
         with st.expander("查看原文 / 删除这份合同", icon=":material/description:"):
             st.text_area(
                 "合同原文", value=chosen.text, height=200, disabled=True, key=f"view_{chosen.contract_id}"
@@ -668,7 +685,7 @@ def _collect_input(repo: SqliteRepository, user: User) -> tuple[str, str, str]:
             if st.button("删除这份合同", icon=":material/delete:", key=f"del_{chosen.contract_id}"):
                 repo.delete_contract(chosen.contract_id, chosen.enterprise_id)
                 st.rerun()
-        return chosen.text, chosen.filename, chosen.contract_id
+        return chosen.text, normalize_contract_name(chosen.filename), chosen.contract_id
     return (
         st.text_area(
             "合同正文",
@@ -683,6 +700,18 @@ def _collect_input(repo: SqliteRepository, user: User) -> tuple[str, str, str]:
 
 def _page_check(repo: SqliteRepository, user: User) -> None:
     page_header("fact_check", "合同核对")
+    # 门禁：模型是核对的大脑，没有模型不做核心活——不渲染输入方式、合同文本框、开始核对与追问，
+    # 也不给残缺结论；导航与其他页面（登录、企业档案、合同管理、历史、设置）照常可用。
+    if _resolve_llm(get_config(), repo) is None:
+        st.warning(
+            "未配置模型，合同核对不可用；配置后才能给出结论。",
+            icon=":material/smart_toy:",
+        )
+        if is_admin(user):
+            st.page_link(NAV["设置"], label="去设置页配置 API Key", icon=":material/arrow_forward:")
+        else:
+            st.caption("当前账号不是管理员，请联系管理员在设置页配置模型。")
+        return
     if not user.enterprise_id:
         with st.container(border=True):
             st.warning(
@@ -965,7 +994,7 @@ def _clause_review_note(task, clause_review: bool | None = None) -> str:
         str(e) for e in (getattr(task, "errors", None) or []) if "条款审查" in str(e) or "条款判定" in str(e)
     ]
     # 只有“没跑起来 / 整批输出不可用”才算没做；“未命中候选”“逐条丢弃”都算跑过、没发现可疑条款。
-    if any(marker in note for note in notes for marker in _NOT_REVIEWED_MARKERS):
+    if any(marker in note for note in notes for marker in NOT_REVIEWED_MARKERS):
         return CLAUSE_NOT_REVIEWED_NOTE
     if clause_review is None:
         enabled = bool(getattr(task, "clause_review", False))
@@ -1108,6 +1137,22 @@ def _render_result_disclaimer() -> None:
     st.caption(RESULT_DISCLAIMER)
 
 
+# 结论形态只给 risk / clean 上色，partial 保持普通文字（覆盖不全不是结论，别用颜色当结论读）。
+VERDICT_COLORS: dict[str, str] = {"risk": "red", "clean": "green"}
+# 结论句不再带“不代表合规”的后缀（各区块各自复述一遍会打架），改成顶部常驻一行说明。
+VERDICT_CAVEAT = "结论不代表合规，请结合事实复核。"
+
+
+def _render_verdict(verdict: Verdict) -> None:
+    """顶部标题行 = 有语义的结论 + 覆盖明细（不再把条目数当裸指标）。"""
+    color = VERDICT_COLORS.get(str(verdict.status), "")
+    headline = f":{color}[{verdict.headline}]" if color else verdict.headline
+    st.markdown(f"### {headline}")
+    if verdict.details:
+        st.caption(" · ".join(verdict.details))
+    st.caption(VERDICT_CAVEAT)
+
+
 def _render_task(
     task, repo: SqliteRepository, user: User | None = None, clause_review: bool | None = None
 ) -> None:
@@ -1131,18 +1176,13 @@ def _render_task(
         return
 
     cited = {i.source_id for i in task.items}
-    coverage = task.rule_coverage
-    judged = coverage.violated + coverage.compliant + coverage.not_applicable if coverage else 0
+    # 顶部先说结论形态、再说次要指标：0 条不等于没问题，“没查出来”与“没问题”必须能分开读。
+    verdict = summarize_verdict(task)
+    _render_verdict(verdict)
     with st.container(horizontal=True):
-        st.metric("风险条目", len(task.items), border=True)
         st.metric("处理建议", len(task.suggestions), border=True)
         st.metric("引用条文", len(cited), border=True)
         st.metric("耗时", f"{task.latency_s or 0:.2f} 秒", border=True)
-        if coverage is not None and coverage.total:
-            st.metric("规则可判定", f"{judged}/{coverage.total}", border=True)
-        if task.missing_terms and task.missing_coverage is not None:
-            written_count = sum(1 for t in task.missing_terms if t.status is MissingStatus.WRITTEN)
-            st.metric("必备条款", f"{written_count}/{MISSING_TERM_BASE}", border=True)
 
     with st.container(horizontal=True, vertical_alignment="center"):
         st.download_button(
@@ -1155,7 +1195,7 @@ def _render_task(
 
     with st.container(horizontal=True):
         st.badge(
-            "依据校验通过" if task.verify_ok else "依据校验未通过",
+            "引用可溯源" if task.verify_ok else "引用不可溯源",
             icon=":material/verified:" if task.verify_ok else ":material/error:",
             color="green" if task.verify_ok else "red",
         )
@@ -1193,7 +1233,6 @@ def _render_task(
 
     field_groups = _group_undetermined(task.undetermined, "field_missing")
     premise_groups = _group_undetermined(task.undetermined, "premise_missing")
-    field_count = sum(len(rows) for _, rows in field_groups)
 
     with st.container(border=True):
         st.markdown(
@@ -1215,16 +1254,8 @@ def _render_task(
         note = _clause_review_note(task, clause_review)
         if note:
             st.caption(note)
-        if not task.items:
-            if field_count:
-                st.warning(
-                    f"本次未发现硬性风险项，但仍有 {field_count} 条规则因缺少事实无法判定，不代表合规。",
-                    icon=":material/help:",
-                )
-            else:
-                st.info("未发现可判定的硬性风险项（不代表合规，请结合事实复核）。", icon=":material/info:")
-        if not task.items and 0 < task.contract_chars < 200:
-            st.caption(f"合同正文仅 {task.contract_chars} 字，条款覆盖有限；0 风险不等于合同合规。")
+        # 结论句只在页面顶部（Verdict）说一次：结论区不再复述“未发现硬性风险项”这类判断，
+        # 正文长度也由顶部明细承载；这里只保留下面“具体哪些条判不了”的明细。
 
         _render_missing_terms(task, repo)
         _render_unmet_terms(task, repo)
@@ -1309,12 +1340,26 @@ def _fmt_dt(value) -> str:
 def _status_badges(task) -> str:
     if task.refused:
         return ":red-badge[越界拒答]"
-    parts = [":green-badge[依据通过]" if task.verify_ok else ":red-badge[依据未通过]"]
+    parts = [":green-badge[引用可溯源]" if task.verify_ok else ":red-badge[引用不可溯源]"]
     if _show_degraded_badge(task):
         parts.append(":orange-badge[已降级]")
     if task.ask_rounds:
         parts.append(f":blue-badge[补问 {task.ask_rounds} 轮]")
     return " ".join(parts)
+
+
+def _filter_checks(checks: list, choice: str | None) -> list:
+    """历史页筛选：口径与顶部结论一致，不另起一套判定。
+
+    “有风险”用 `summarize_verdict().status`——规则条目与条款审查 A/B 级都算，
+    否则“顶部说发现 N 条冲突、筛选里却看不到”会再次出现；
+    “已降级”沿用 `_show_degraded_badge`，与列表上的徽标保持一致。
+    """
+    if choice == "有风险":
+        return [t for t in checks if summarize_verdict(t).status == "risk"]
+    if choice == "已降级":
+        return [t for t in checks if _show_degraded_badge(t)]
+    return list(checks)
 
 
 def _page_history(repo: SqliteRepository, user: User) -> None:
@@ -1339,8 +1384,15 @@ def _page_history(repo: SqliteRepository, user: User) -> None:
 
     pending = st.session_state.get("pending_delete")
     if pending:
+        # 确认框只显示合同名 + 时间，不回显内部 task_id；找不到对象时用“该核对记录”。
+        target = next((t for t in checks if t.task_id == pending), None)
+        label = (
+            f"{normalize_contract_name(target.contract_name)} · {_fmt_dt(target.created_at)}"
+            if target
+            else "该核对记录"
+        )
         st.warning(
-            f"确认删除记录 {pending}？删除后历史页不再显示，操作日志仍保留。",
+            f"确认删除“{label}”这条记录？删除后历史页不再显示，操作日志仍保留。",
             icon=":material/delete:",
         )
         c1, c2, _ = st.columns([1, 1, 4])
@@ -1360,11 +1412,7 @@ def _page_history(repo: SqliteRepository, user: User) -> None:
         default="全部",
         label_visibility="collapsed",
     )
-    shown = checks
-    if choice == "有风险":
-        shown = [t for t in checks if t.items]
-    elif choice == "已降级":
-        shown = [t for t in checks if t.degraded]
+    shown = _filter_checks(checks, choice)
 
     st.caption(f"共 {len(shown)} 次有效核对 · 已排除 {deleted} 条已删除记录 · 本页仅显示核对记录")
 
@@ -1372,9 +1420,11 @@ def _page_history(repo: SqliteRepository, user: User) -> None:
         with st.container(border=True):
             left, mid, right = st.columns([2.6, 1.6, 1.2], vertical_alignment="center")
             with left:
-                st.markdown(f"**{task.contract_name or '未命名合同'}**")
+                st.markdown(f"**{normalize_contract_name(task.contract_name)}**")
+                verdict = summarize_verdict(task)
+                coverage_note = " · 覆盖不完整" if verdict.status == "partial" else ""
                 st.caption(
-                    f"{_fmt_dt(task.created_at)} · {len(task.items)} 条风险 · "
+                    f"{_fmt_dt(task.created_at)} · {verdict.risk_count} 条风险{coverage_note} · "
                     f"{len(task.suggestions)} 条建议 · {task.latency_s or 0:.2f} 秒"
                 )
             with mid:
@@ -1408,6 +1458,7 @@ def _page_history(repo: SqliteRepository, user: User) -> None:
             st.altair_chart(_trend_chart(frame), width="stretch")
             st.caption(
                 f"统计窗口：最近 {len(frame)} 次有效核对；平均值含真实 0 风险记录，分母为 {len(frame)}。"
+                "图内“风险条目”只统计规则条目，不含条款审查结论与覆盖状态。"
             )
 
 

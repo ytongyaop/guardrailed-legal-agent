@@ -17,8 +17,10 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 from docx.styles.style import ParagraphStyle
 
+from ..adapters.files import normalize_contract_name
 from ..domain.field_catalog import field_name
 from ..domain.models import MISSING_TERM_UNJUDGED_ID, CheckTask, MissingStatus
+from ..domain.verdict import summarize_verdict
 from ..ports.repository import Repository
 
 FONT = "Noto Sans SC"  # OFL-1.1，可商用；微软雅黑商业发布需授权
@@ -113,13 +115,17 @@ def build_report_docx(task: CheckTask, repo: Repository) -> bytes:
     _setup(doc)
     _title(doc, "小微企业用工风险核对报告")
 
+    # 顶部结论与界面共用同一份判定（`domain/verdict.py`）：口径不随导出方式漂移。
+    verdict = summarize_verdict(task)
     _kv_table(
         doc,
         [
             ("任务编号", task.task_id),
+            ("合同名称", normalize_contract_name(task.contract_name)),
             ("核对模式", str(task.mode)),
             ("生成日期", date.today().isoformat()),
-            ("风险条目", str(len(task.items))),
+            ("核对结论", verdict.headline),
+            ("覆盖情况", " · ".join(verdict.details)),
             ("处理建议", str(len(task.suggestions))),
         ],
     )
@@ -148,8 +154,8 @@ def build_report_docx(task: CheckTask, repo: Repository) -> bytes:
                 _meta_paragraph(doc, "待补事实：" + "、".join(entry.need_facts))
             if str(getattr(entry, "source", "trigger")) == "model_extra":
                 _meta_paragraph(doc, "来源：模型自提，未经触发器命中，等级封顶 C，建议人工抽检确认。")
-    if not task.items:
-        doc.add_paragraph("未发现可判定的硬性风险项（不代表合规，请结合事实复核）。")
+    if not merged:
+        doc.add_paragraph(f"{verdict.headline}（不代表合规，请结合事实复核）。")
     if findings:
         note = doc.add_paragraph(CLAUSE_DISCLAIMER)
         for run in note.runs:
