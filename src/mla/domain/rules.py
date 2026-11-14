@@ -254,3 +254,105 @@ def judge(rule: RuleEntry, facts: dict[str, str]) -> RuleOutcome:
 def judge_all(rules: tuple[RuleEntry, ...], facts: dict[str, str]) -> tuple[RuleOutcome, ...]:
     """逐条判定并保留全部结果：长度恒等于规则数，顺序与入参一致。"""
     return tuple(judge(rule, facts) for rule in rules)
+
+
+class RuleCheckStatus(StrEnum):
+    """数值校验三态（规格 003 第 5 章）：规则从"判官"降为"校验信号"。
+
+    与上面的 `RuleStatus` **四态并存**，两者不可互相替代：
+    - `RuleStatus` 保留既有判定语义与既有输出（violated / compliant /
+      not_applicable / unknown），现有调用方无需改动；
+    - `RuleCheckStatus` 只表达"法条要求的数值区间 vs 合同实际"，不写"这是风险"。
+    统一命名留给后续阶段（P1），本阶段只是新增，不覆盖、不改名。
+    """
+
+    OK = "ok"
+    MISMATCH = "mismatch"
+    NEEDS_FACT = "needs_fact"
+
+
+@dataclass(frozen=True)
+class RuleCheck:
+    """单条数值校验信号（规格 003 第 5.1 节）。
+
+    `expected` / `actual` 是给人看的文本（如 "<= 6 个月" / "3 个月"），不塞原始数字对象；
+    `actual` 在缺少可比较数值时为空串（`needs_fact`，以及 `not_applicable` 这种本就没测值的
+    情形）。`severity` 本阶段全部为 "hard"，保留字段以便兼容后续档位。
+    """
+
+    rule_id: str
+    status: RuleCheckStatus
+    field: str
+    expected: str
+    actual: str
+    statute_id: str
+    evidence_span: str
+    severity: str
+
+
+# 四态 → 三态的映射（规格 003 第 5.1 节 / 任务表）：
+# - violated → mismatch：数值越出法条合法区间；
+# - compliant → ok：落在合法区间；
+# - not_applicable → ok：**前提不满足，本条规则不构成问题**。这是一处刻意的映射决定——
+#   三态里没有"不适用"的位置，而对用户而言"这条校验没发现问题"与"不适用本条"的处置
+#   完全相同（都不产生提示），所以归 ok，不用 needs_fact（那会把它错报成"缺事实"）；
+#   代价是丢失"不适用"这一信息，若后续需要区分，应扩三态而不是在映射里猜。
+# - unknown → needs_fact：事实缺失或不可解析，判不了（同名不同词：规格表写作
+#   undetermined，现有代码枚举值是 `RuleStatus.UNKNOWN`）。
+_RULE_STATUS_TO_CHECK = {
+    RuleStatus.VIOLATED: RuleCheckStatus.MISMATCH,
+    RuleStatus.COMPLIANT: RuleCheckStatus.OK,
+    RuleStatus.NOT_APPLICABLE: RuleCheckStatus.OK,
+    RuleStatus.UNKNOWN: RuleCheckStatus.NEEDS_FACT,
+}
+
+
+def _plain_number(value: object) -> str:
+    """把阈值 / 判定值转成不带多余小数位的文本（6.0 → "6"，0.25 → "0.25"）。"""
+    num = _to_number(value)
+    if num is None:
+        return str(value).strip()
+    return f"{num:g}"
+
+
+# 规则表里的单位是"记账单位"，直接拼接会读出歧义：`月` → "12 月"（中文会读成十二月），
+# 规格 003 第 5.1 节的示例写的是"3 个月"。只做显示层换算，不改 `rules.yaml` 的 unit 字段。
+_DISPLAY_UNITS = {"月": "个月"}
+
+
+def _with_unit(text: str, unit: str) -> str:
+    """拼上单位；单位为空时原样返回（`expected` / `actual` 共用一套写法）。
+
+    百分号不空格（"80%"），其余单位与数字之间空一格（"6 个月" / "5 天"）。
+    """
+    unit = unit.strip()
+    if not unit:
+        return text
+    shown = _DISPLAY_UNITS.get(unit, unit)
+    return f"{text}{shown}" if shown == "%" else f"{text} {shown}"
+
+
+def _severity_tag(severity: Severity) -> str:
+    """规则档位 → `RuleCheck.severity`：硬性 → "hard"，其余归 "prompt"（本阶段无 prompt 规则）。"""
+    return "hard" if severity is Severity.HARD else "prompt"
+
+
+def to_rule_check(outcome: RuleOutcome) -> RuleCheck:
+    """把一次四态判定转成三态校验信号；纯函数，不改变 `outcome` 与任何既有行为。
+
+    `statute_id` / `evidence_span` 从规则条目原样带出（缺省为空串）；
+    `expected` 用"比较符 + 阈值 + 单位"，`actual` 用"判定值 + 单位"，均为人类可读文本。
+    """
+    rule = outcome.rule
+    expected = _with_unit(f"{rule.op} {_plain_number(rule.threshold)}", rule.unit)
+    actual = "" if outcome.value is None else _with_unit(_plain_number(outcome.value), rule.unit)
+    return RuleCheck(
+        rule_id=rule.rule_id,
+        status=_RULE_STATUS_TO_CHECK[outcome.status],
+        field=rule.field,
+        expected=expected,
+        actual=actual,
+        statute_id=rule.statute_id or "",
+        evidence_span=rule.evidence_span or "",
+        severity=_severity_tag(rule.severity),
+    )
