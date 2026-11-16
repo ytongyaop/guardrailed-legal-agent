@@ -140,30 +140,45 @@ def test_quote_without_statute_ids_cleared() -> None:
 # ---------- 第 1 道：A 级三件套 ----------
 
 
-def test_grade_a_without_quote_downgraded_to_b() -> None:
-    """A 级缺 quote_statute → 降 B（不是丢弃，也不是降 C）。"""
+def test_grade_a_without_quote_dropped_by_l3_2() -> None:
+    """P2-6（003 第 7.2 节第 6 项）起 A 级缺 quote_statute 属 L3.2 形态失败 → 丢弃。
+
+    L3.1 第 1 道的"降为 B"口径未变（`_verify` 未改），但它现在只对已过 L3.2 的条目生效：
+    直接调用 `_verify` 仍是降 B，故这里两种口径都断言。"抄错原文"（quote 非空但不是原文）
+    不受影响，仍走第 3 道清空 + 降 B（见上一个用例）。
+    """
     llm = StubLLM({"findings": [_finding()]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
-    assert len(got) == 1, "缺 quote 的 A 级结论必须保留"
-    assert got[0].grade == "B"
-    assert got[0].quote_statute == ""
-    assert got[0].statute_ids == ("LCL-35",)
-    assert any("第 1 道核验" in e and "缺 quote_statute" in e and "已降为 B" in e for e in errors)
+    assert got == ()
+    assert any("L3.2 形态校验未过" in e and "quote_statute" in e for e in errors)
+
+    direct: list[str] = []
+    finding = _verify(_finding(), _candidate(), CONTRACT, LIBRARY, errors=direct)
+    assert isinstance(finding, ClauseFinding)
+    assert finding.grade == "B", "L3.1 口径不变：A 级缺 quote 仍降 B（不是丢弃、也不是降 C）"
+    assert any("缺 quote_statute" in e and "已降为 B" in e for e in direct)
 
 
-def test_grade_b_without_quote_keeps_b() -> None:
-    """B 级缺 quote_statute：按现规则（B 只要求有法条依据）→ 保持 B，不降级、仍保留条号。"""
+def test_grade_b_without_quote_dropped_by_l3_2() -> None:
+    """P2-6 起 B 级也要求 quote_statute（7.2 第 6 项：A/B 必填）→ 缺失即丢。
+
+    L3.1 第 1 道不要求 B 级三件套，该口径未变：直接调用 `_verify` 时 B 级缺 quote 仍保持 B。
+    """
     llm = StubLLM({"findings": [_finding(grade="B", need_facts=["工资基数"])]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
-    assert len(got) == 1
-    assert got[0].grade == "B"
-    assert got[0].statute_ids == ("LCL-35",)
-    assert got[0].quote_statute == ""
-    assert not any("第 1 道核验" in e for e in errors), "B 级不在第 1 道三件套要求内"
+    assert got == ()
+    assert any("L3.2 形态校验未过" in e and "quote_statute" in e for e in errors)
+
+    direct: list[str] = []
+    row = _finding(grade="B", need_facts=["工资基数"])
+    finding = _verify(row, _candidate(), CONTRACT, LIBRARY, errors=direct)
+    assert isinstance(finding, ClauseFinding)
+    assert finding.grade == "B", "L3.1 口径不变：B 级不在第 1 道三件套要求内"
+    assert not any("第 1 道核验" in e for e in direct)
 
 
 def test_grade_a_three_pieces_all_present_stays_a() -> None:

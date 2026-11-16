@@ -4,12 +4,15 @@
 
 1. 候选由触发器层产出（`domain.clauses.detect_clauses`），本层**不做召回**；
 2. 每 `batch_size`（默认 5）条候选一次模型调用，批量判定，避免 20 条串行把耗时拖到 100 秒以上；
-3. `_verify` 逐条做程序核验：等级合法 → 证据长度 / 未跨段 / 落在候选所在段落（加严：不再退回首次出现）→
+3. `_behavior_check` 先做 L3.2 行为校验（规格 003 第 7.2 节）：idx / grade / reason / statute_ids /
+   evidence / quote_statute 的字段形态，任一不过即丢弃该条（不进入下一步），并记 `L3.2 形态校验未过` 诊断；
+4. `_verify` 逐条做程序核验（L3.1）：等级合法 → 证据长度 / 未跨段 / 落在候选所在段落
+   （加严：不再退回首次出现）→
    法条在库（含 quote_statute 回声核验）→ 触发器条目引用在候选闭集内；A 级缺 quote_statute 降 B，
    A/B 级缺法条的降为 C（不丢弃），证据与候选片段重叠不足降一级（只降不升），其余硬性不过即丢弃并记诊断；
-4. 模型可在候选之外自提发现（`extra`），**一律降为 C**、标 `source="model_extra"`、条数封顶。
+5. 模型可在候选之外自提发现（`extra`），**一律降为 C**、标 `source="model_extra"`、条数封顶。
 
-消融开关：`verify=False` 时跳过第 3 步的四道校验，等级与法条 ID 原样保留（含库外条号），
+消融开关：`verify=False` 时跳过第 4 步（L3.1）的四道校验，等级与法条 ID 原样保留（含库外条号），
 供评测的 `model_raw` 臂度量"没有核验层会输出什么"；本条路径只用于度量，不用于生产展示。
 
 隐私约束：发给模型的 `contract_paragraphs` **只包含候选条款及其邻近 ±2 行**，不发送合同全文
@@ -66,6 +69,31 @@ OVERLAP_MIN = 0.5  # 模型证据与候选 span 的重叠下限（低于此值�
 MAX_RULE_CHECKS = 20
 RULE_CHECK_STATUSES = ("mismatch", "needs_fact")
 
+# 规格 003 第 7.2 节（P2-6）：L3.2 行为校验的诊断前缀。固定写法，且**只**用于 L3.2，
+# 便于与 L3.1 的 `{trigger_id}：第 N 道核验：...` / `{trigger_id}：引用越出候选闭集 ...`
+# 句式在 `errors` 里区分（V17 的 Select-String 断言依赖这一点）。
+L3_2_PREFIX = "L3.2 形态校验未过："
+# 未知字段不是失败（不丢弃、不返工），但要看得出模型在自造字段，故用另一条"提示"前缀，
+# 避免 Select-String 统计失败项时把提示也算进去。
+L3_2_NOTE_PREFIX = "L3.2 形态校验提示："
+# 6.2 输出契约里模型允许出现的字段（L3.2 第 7 项据此判"未知字段"）。
+# `span` 不在契约里：模型有时会自己给定位，程序一律不采信（span 取候选片段），
+# 因此按未知字段记提示，不改结论。
+KNOWN_FIELDS = frozenset(
+    {
+        "idx",
+        "grade",
+        "reason",
+        "statute_ids",
+        "quote_statute",
+        "evidence",
+        "need_facts",
+        "numeric",
+        "self_check",
+        "impact_suggest",
+    }
+)
+
 REVIEW_SYSTEM = """你是劳动合同条款风险审查助手。只输出 JSON 对象，不要解释，不要 Markdown。
 
 输入五部分：contract_paragraphs（候选条款及其邻近段落，按段落编号）、candidates（本批待判定的可疑条款）、
@@ -97,6 +125,8 @@ rule_checks 只列 mismatch（合同数值与法条不一致）与 needs_fact（
 6. need_facts 填"还要补什么事实才能定论"，A 级可留空。
 7. 候选之外若另有发现，放进 extra，最多 __MAX_EXTRA__ 条，grade 一律写 C。
 8. 没有把握就写 C，不要猜。
+9. 字段形态：idx 是本条候选在本批 candidates 里的下标（整数）；grade 只写大写 A、B、C 之一；
+   reason 必填且不超过 200 字；statute_ids 只写条号字符串，不要写空字符串；不要自造上面没有的字段名。
 
 输出格式：
 {"findings":[{"idx":0,"grade":"A","reason":"...","statute_ids":["LCL-35"],"quote_statute":"...","evidence":"...","need_facts":[]}],"extra":[{"grade":"C","reason":"...","evidence":"...","statute_ids":[],"quote_statute":"","need_facts":[]}]}
@@ -508,6 +538,103 @@ def _unverified(
     )
 
 
+def _behavior_check(
+    row: dict[str, Any],
+    batch: Sequence[ClauseCandidate],
+    *,
+    diagnostics: list[str] | None = None,
+) -> list[str]:
+    """L3.2 行为校验（规格 003 第 7.2 节）：判模型有没有按 L1 的约定把字段交出来。
+
+    只判**形态与值域**（字段在不在、类型对不对、在不在长度上限内），**不判内容对错**：
+    "条号在库但越出闭集"归 L3.1 第 4 道，"抄的法条原文不是原文"归 L3.1 第 3 道。两者分工按对象切，
+    因此这里既不查库、也不碰合同原文。
+
+    返回失败项列表（空列表 = 通过）。失败项不带前缀，调用方统一加 `L3_2_PREFIX` 并丢弃该条
+    （**不返工**：返工队列是 P2-7）。
+
+    检查项（与 7.2 一一对应）：
+
+    1. `idx` 存在、是整数（`bool` 不算 int）、落在 `[0, len(batch))`；
+    2. `grade` 存在且 ∈ `{A, B, C}`（大小写敏感，不接受空值）；
+    3. `reason` 是字符串、非空、长度 ≤ `MAX_REASON`；
+    4. `statute_ids` 是字符串列表、元素非空、去重后仍非空（A/B 级强制，C 级可空——口径同
+       第 4.2 节 L1 第 1 条与 6.4 表：C 级的定义就是"现有事实不足以下定性"，允许没有法条依据）；
+    5. `evidence` 是字符串、非空（10–100 字与可定位仍归 L3.1 第 2 道，这里只判空）；
+    6. `quote_statute` 是字符串；A/B 级必填非空，C 级可空（抄错原文仍归 L3.1 第 3 道）；
+    7. 未知字段：不算失败，只在 `diagnostics` 里记一条 `L3.2 形态校验提示`，用于观察模型是否在自造字段。
+
+    第 8 项（"任一检查失败 → 该条不进入 L3.1，直接丢弃并记诊断"）由调用方 `_collect` 执行：
+    本函数只负责把失败项列出来，不碰 `errors`，也不做丢弃——这样判定与副作用分开，便于单测与 P2-7 复用。
+
+    注意 `verify=False`（消融的 `model_raw` 臂）不得调用本函数：该臂要求原样保留模型输出，
+    连非法等级都要留着供评测度量。
+    """
+    problems: list[str] = []
+    upper = len(batch) - 1
+
+    # 1. idx：bool 是 int 的子类，JSON 的 true 会通过 isinstance(idx, int)，必须显式排除。
+    if "idx" not in row:
+        problems.append("缺 idx（每条结论必须指向本批候选下标）")
+    else:
+        idx = row.get("idx")
+        if isinstance(idx, bool) or not isinstance(idx, int):
+            problems.append(f"idx 越界（{idx!r} 不是整数，本批 0–{upper}）")
+        elif not 0 <= idx < len(batch):
+            problems.append(f"idx 越界（{idx} 不在本批 0–{upper} 内）")
+
+    # 2. grade：大小写敏感（`a` / `A ` 都算越域），空值算缺失。
+    grade = row.get("grade")
+    if not isinstance(grade, str) or not grade.strip():
+        problems.append("缺 grade（等级不合法：只接受 A/B/C，大小写敏感）")
+    elif grade not in GRADES:
+        problems.append(f"grade={grade!r} 等级不合法（只接受 A/B/C，大小写敏感）")
+
+    # 3. reason：非空 + 长度上限（只判形态；"理由写得够不够好"不进 L3）。
+    reason = row.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        problems.append("缺 reason（空值）")
+    elif len(reason.strip()) > MAX_REASON:
+        problems.append(f"reason 超长（{len(reason.strip())} 字 > {MAX_REASON}）")
+
+    # 4. statute_ids：类型 → 元素 → 去重后是否非空（A/B 才要求非空）。
+    raw_ids = row.get("statute_ids")
+    if not isinstance(raw_ids, list):
+        problems.append("statute_ids 不是字符串列表")
+    else:
+        blank = [item for item in raw_ids if not isinstance(item, str) or not item.strip()]
+        if blank:
+            problems.append(f"statute_ids 含 {len(blank)} 个非字符串或空元素")
+        else:
+            deduped = list(dict.fromkeys(item.strip() for item in raw_ids))
+            if not deduped and grade in ("A", "B"):
+                problems.append("缺 statute_ids（A/B 级必须有法条依据）")
+
+    # 5. evidence：只判"是非字符串、是否空"；长度与可定位归 L3.1 第 2 道。
+    evidence = row.get("evidence")
+    if not isinstance(evidence, str):
+        problems.append("evidence 不是字符串")
+    elif not evidence.strip():
+        problems.append("缺 evidence（空值）")
+
+    # 6. quote_statute：A/B 必填非空，C 可空；抄错真伪归 L3.1 第 3 道。
+    quote = row.get("quote_statute", "")
+    if not isinstance(quote, str):
+        problems.append("quote_statute 不是字符串")
+    elif not quote.strip() and grade in ("A", "B"):
+        problems.append("缺 quote_statute（A/B 级必填）")
+
+    # 7. 未知字段：只记提示，不算失败（不丢弃该条）。
+    if diagnostics is not None:
+        unknown = sorted(key for key in row if key not in KNOWN_FIELDS)
+        if unknown:
+            message = f"{L3_2_NOTE_PREFIX}出现未知字段 {' / '.join(unknown)}（已忽略，不计失败）"
+            if message not in diagnostics:
+                diagnostics.append(message)
+
+    return problems
+
+
 def _verify(
     finding_raw: dict[str, Any],
     candidate: ClauseCandidate | None,
@@ -678,7 +805,13 @@ def _collect(
     *,
     verify: bool = True,
 ) -> tuple[list[ClauseFinding], list[dict[str, Any]]]:
-    """收一批模型输出：候选结论当场核验，自提结论只收集原始行（全局封顶在调用方做）。"""
+    """收一批模型输出：先过 L3.2 形态校验，候选结论再逐条走 L3.1 核验；自提结论只收集原始行。
+
+    自提条目的条数封顶在调用方做（整份合同 `max_extra`）。
+
+    L3.2 只在 `verify=True`（生产臂）执行：`verify=False` 是消融的 `model_raw` 臂，
+    要求原样保留模型输出（含非法等级、库外条号）供评测度量，不能事先按形态丢掉。
+    """
     found: list[ClauseFinding] = []
     rows = raw.get("findings")
     if isinstance(rows, list):
@@ -686,12 +819,22 @@ def _collect(
             if not isinstance(row, dict):
                 diagnostics.append(f"第 {batch_no} 批：有 1 条结论不是对象，已丢弃")
                 continue
-            idx = row.get("idx")
-            # bool 是 int 的子类：JSON 里的 true 会通过 isinstance(idx, int)，被当成 idx=1 命中候选，
-            # 必须显式排除，否则模型给错类型时会静默落到别的候选上。
-            if isinstance(idx, bool) or not isinstance(idx, int) or not 0 <= idx < len(batch):
-                diagnostics.append(f"第 {batch_no} 批：idx 越界（{idx}），已丢弃")
-                continue
+            if verify:
+                # L3.2 行为校验（规格 003 第 7.2 节）：形态不过即丢弃，**不进入 L3.1**——
+                # 先形态后值域，缺 statute_ids 时查闭集没有意义。失败不返工（返工是 P2-7）。
+                problems = _behavior_check(row, batch, diagnostics=diagnostics)
+                if problems:
+                    for problem in problems:
+                        diagnostics.append(f"{L3_2_PREFIX}第 {batch_no} 批 {problem}")
+                    continue
+                idx = row["idx"]
+            else:
+                idx = row.get("idx")
+                # bool 是 int 的子类：JSON 里的 true 会通过 isinstance(idx, int)，被当成 idx=1 命中候选，
+                # 必须显式排除，否则模型给错类型时会静默落到别的候选上。
+                if isinstance(idx, bool) or not isinstance(idx, int) or not 0 <= idx < len(batch):
+                    diagnostics.append(f"第 {batch_no} 批：idx 越界（{idx}），已丢弃")
+                    continue
             finding = _verify(row, batch[idx], contract_text, library, errors=diagnostics, verify=verify)
             if finding is None:
                 continue

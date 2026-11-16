@@ -16,6 +16,7 @@ from mla.domain.clauses import ClauseCandidate
 from mla.domain.models import ClauseFinding, Role, StatuteEntry, User
 from mla.domain.rules import RuleCheck, RuleCheckStatus
 from mla.services.clause_review import (
+    L3_2_PREFIX,
     MAX_EVIDENCE_CHARS,
     MAX_FACT_CHARS,
     MAX_FACTS,
@@ -278,14 +279,24 @@ def test_evidence_spanning_paragraph_boundary_dropped_as_cross_paragraph() -> No
 # ---------- 等级与依据 ----------
 
 
-def test_grade_a_without_statute_downgraded_to_c() -> None:
+def test_grade_a_without_statute_dropped_by_l3_2() -> None:
+    """P2-6（003 第 7.2 节）起 A/B 级缺 statute_ids 属 L3.2 形态失败 → 不进 L3.1，直接丢弃。
+
+    L3.1 第 1 道的"缺法条依据降 C"口径未变（`_verify` 未改），但它现在只对**已过 L3.2** 的条目生效：
+    自提条目（`extra`）不走 L3.2，直接调用 `_verify` 也仍走老口径，故这里两种口径都断言。
+    """
     llm = StubLLM({"findings": [_finding(statute_ids=[])]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
-    assert len(got) == 1
-    assert got[0].grade == "C"
-    assert any("降为 C" in e for e in errors)
+    assert got == ()
+    assert any(L3_2_PREFIX in e and "statute_ids" in e for e in errors)
+
+    direct: list[str] = []
+    finding = _verify(_finding(statute_ids=[]), _candidate(), CONTRACT, LIBRARY, errors=direct)
+    assert isinstance(finding, ClauseFinding)
+    assert finding.grade == "C", "L3.1 口径不变：A 级没有法条依据仍降为 C"
+    assert any("降为 C" in e for e in direct)
 
 
 def test_invalid_grade_dropped() -> None:
@@ -1030,12 +1041,30 @@ def test_verify_directly_rejects_without_candidate_set() -> None:
     assert finding.span in CONTRACT
 
 
-@pytest.mark.parametrize("reason", ["", "该约定与第三十五条不符"])
-def test_reason_filled_when_missing(reason: str) -> None:
-    llm = StubLLM({"findings": [_finding(reason=reason)]})
+def test_reason_missing_dropped_by_l3_2() -> None:
+    """P2-6 起 reason 空属 L3.2 形态失败（7.2 第 3 项）→ 丢弃，不再由 L3.1 补通用描述。"""
+    llm = StubLLM({"findings": [_finding(reason="")]})
+    errors: list[str] = []
+    got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
+
+    assert got == ()
+    assert any(L3_2_PREFIX in e and "reason" in e for e in errors)
+
+
+def test_reason_kept_when_present() -> None:
+    llm = StubLLM({"findings": [_finding(reason="该约定与第三十五条不符")]})
     got = review_clauses(llm, [_candidate()], CONTRACT, statutes=LIBRARY)
+
     assert len(got) == 1
-    assert got[0].reason
+    assert got[0].reason == "该约定与第三十五条不符"
+
+
+def test_verify_fills_generic_reason_when_missing() -> None:
+    """L3.1 自身口径不变：直接调用 `_verify` 时缺理由仍补通用描述（自提条目走这条路径）。"""
+    finding = _verify(_finding(reason=""), _candidate(), CONTRACT, LIBRARY, errors=[])
+
+    assert isinstance(finding, ClauseFinding)
+    assert finding.reason
 
 
 # ---------- 接线：开关打开才跑，且试用期工资规则让位 ----------
@@ -1088,6 +1117,8 @@ class _ProbationWageLLM:
                         "grade": "A",
                         "reason": "该约定与第二十条关于试用期工资不得低于约定工资 80% 的规定不符",
                         "statute_ids": [candidate["candidate_statute_ids"][0]],
+                        # P2-6：A 级要过 L3.2 就必须带 quote_statute（此处抄的是 LCL-20 的真实子串）
+                        "quote_statute": "劳动者在试用期的工资不得低于本单位相同岗位最低档工资",
                         "evidence": candidate["span"],
                         "need_facts": [],
                     }
