@@ -5,10 +5,12 @@
 完的任务，输出 status / headline / details，不改规则判定、条款审查与必备条款的任何结论。
 
 三态口径：
-- `risk`：规则条目或条款审查的 A/B 级结论，都是“与法条存在冲突的事项”，条数相加照实报；
-- `clean`：没有上述冲突**且**三个通道都真跑过、都判得动（条款审查已运行且没有待确认的
-  C 级、无缺事实判不了、无“需人工确认”的必备条款类），这时才敢说“未发现风险”；
-- `partial`：其余情况一律承认“覆盖不完整”，把没查到与没问题分开。
+- `risk`：存在“与法条存在冲突的事项”（规则命中、或条款/模型结论的 A/B 级），条数照实报；
+  模型主导路径（规格 003 P1-3）下 `items` 已含模型结论，只取其中 A/B 条目，不再叠加条款 A/B；
+- `partial`：没有明确冲突，但还有“需人工复核”的 C 级条目，或覆盖不完整（条款审查没跑完、
+  有缺事实判不了的规则、有“需人工确认”的必备条款类）；C 级条目只进 `review_count`，
+  **绝不说成“冲突”**（把“待确认”当“确定冲突”是 A1 阶段修掉的那类误导）；
+- `clean`：没有冲突、没有待复核，**且**三个通道都真跑过、都判得动，这时才敢说“未发现风险”。
 """
 
 from __future__ import annotations
@@ -27,12 +29,18 @@ _REVIEW_ERROR_HINTS: tuple[str, ...] = ("条款审查", "条款判定")
 
 @dataclass(frozen=True)
 class Verdict:
-    """一次核对的结论形态；`details` 是逐条覆盖明细，界面与 Word 报告共用。"""
+    """一次核对的结论形态；`details` 是逐条覆盖明细，界面与 Word 报告共用。
+
+    `risk_count` 只数“与法条存在冲突的事项”（A/B 级与规则命中）；`review_count` 只数
+    “需人工复核 / 待确认”（C 级）。两者不混用：C 级不能进 headline 里的“冲突”条数。
+    新增字段带默认值，旧调用方（只读 risk_count / status / headline / details）不受影响。
+    """
 
     status: Literal["risk", "partial", "clean"]
     risk_count: int
     headline: str
     details: list[str]
+    review_count: int = 0
 
 
 def _review_errors(task: CheckTask) -> list[str]:
@@ -67,8 +75,32 @@ def _clause_pending_count(task: CheckTask) -> int:
     return sum(1 for f in (task.clause_findings or []) if str(f.grade) == "C")
 
 
+# 算“冲突”的等级：A 明文冲突 / B 显著失衡；C 只是待确认。
+_CONFLICT_GRADES = ("A", "B")
+
+
+def _item_grade(item) -> str:
+    return str(getattr(item, "grade", "") or "").strip().upper()
+
+
+def _conflict_review_counts(task: CheckTask) -> tuple[int, int]:
+    """(冲突条数, 需人工复核条数)：两条路径算法不同，靠任务标志区分（不读环境变量）。
+
+    - 模型主导路径（`task.model_first=True`）：`items` 已由共识层合并模型结论与程序复核条目，
+      A/B 计冲突、其余（C 级与无法定级）计“需人工复核”，两级不混用、也不叠加条款 A/B；
+    - 旧路径：`items` 只有规则条目（一律算冲突），条款审查的 A/B 照旧叠加；
+      条款 C 级仍由 `_details` 的“N 条条款待人工确认”那一行体现，`review_count` 保持 0，
+      旧路径的 headline / status / details 一个字都不变。
+    """
+    items = list(task.items or [])
+    if bool(task.model_first):
+        conflict = sum(1 for item in items if _item_grade(item) in _CONFLICT_GRADES)
+        return conflict, len(items) - conflict
+    return len(items) + _clause_risk_count(task), 0
+
+
 def _details(task: CheckTask) -> list[str]:
-    """覆盖明细：有数据才输出该行，顺序固定（规则 → 条款审查 → 缺事实 → 必备条款 → 正文长度）。"""
+    """覆盖明细：有数据才输出该行，顺序固定（规则 → 条款审查 → 需人工复核 → 缺事实 → 必备条款 → 长度）。"""
     rows: list[str] = []
     coverage = task.rule_coverage
     if coverage is not None and coverage.total:
@@ -84,8 +116,12 @@ def _details(task: CheckTask) -> list[str]:
     if clause_risk:
         rows.append(f"条款审查发现 {clause_risk} 条明确冲突或显著失衡")
     clause_pending = _clause_pending_count(task)
-    if clause_pending:
+    # 新路径的 C 级已随 items 计入下面“N 条需人工复核”，这里不再重复报一次同一个数。
+    if clause_pending and not bool(task.model_first):
         rows.append(f"{clause_pending} 条条款待人工确认")
+    review_count = _conflict_review_counts(task)[1]
+    if review_count:
+        rows.append(f"{review_count} 条需人工复核")
     undetermined = list(task.undetermined or [])
     if undetermined:
         rows.append(f"{len(undetermined)} 条规则因缺少事实无法判定")
@@ -122,15 +158,28 @@ def _fully_covered(task: CheckTask) -> bool:
 
 
 def summarize_verdict(task: CheckTask) -> Verdict:
-    """把任务变成三态结论；同一个任务必然得到同一份输出（纯函数，不改入参）。"""
-    risk_count = len(task.items or []) + _clause_risk_count(task)
+    """把任务变成三态结论；同一个任务必然得到同一份输出（纯函数，不改入参）。
+
+    headline 只承诺它数得清的东西：冲突条数只含 A/B 与规则命中；C 级（含程序追加的
+    数值复核条目）单独报“需人工复核”，宁可说“要人看”，也不把待确认说成确定冲突。
+    """
+    conflict, review = _conflict_review_counts(task)
     details = _details(task)
-    if risk_count:
+    if conflict:
         return Verdict(
             status="risk",
-            risk_count=risk_count,
-            headline=f"发现 {risk_count} 条与法条存在冲突的事项",
+            risk_count=conflict,
+            headline=f"发现 {conflict} 条与法条存在冲突的事项",
             details=details,
+            review_count=review,
+        )
+    if review:
+        return Verdict(
+            status="partial",
+            risk_count=0,
+            headline=f"未发现明确冲突，但有 {review} 条需人工复核",
+            details=details,
+            review_count=review,
         )
     if _fully_covered(task):
         return Verdict(status="clean", risk_count=0, headline="未发现风险", details=details)

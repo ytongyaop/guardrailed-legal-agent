@@ -19,7 +19,7 @@ from ..domain.clauses import detect_clauses, load_triggers
 from ..domain.models import CheckItem, CheckTask, ClauseFinding, OperationLog, TaskMode, User
 from ..domain.rules import load_rules
 from ..graph.build import build_graph
-from ..graph.nodes import Deps
+from ..graph.nodes import Deps, consensus
 from ..graph.state import CheckState
 from ..ports.extraction import Extractor
 from ..ports.repository import Repository
@@ -55,6 +55,17 @@ def allow_no_model() -> bool:
 def has_model(llm: LLMConfig | None = None) -> bool:
     """是否有可用模型：与 `_deps` 同一判定口径（配置里的 api_key 非空才构造生成器）。"""
     return bool((llm or load_config().llm).api_key)
+
+
+def model_first_enabled() -> bool:
+    """是否走**模型主导路径**（规格 003 第 13 章 P1-3：`items` 只由共识层产出）。
+
+    默认开：只有有模型时才谈得上模型主导（共识层的两条输入才齐）；
+    `MLA_ALLOW_NO_LLM=1`（离线测试 / 离线诊断）**强制关**——那种场景没有模型结论，
+    条目只能来自规则通道，否则规则结论会被共识层静默丢掉；
+    显式 `MLA_MODEL_FIRST=off` 也回旧路径（双写时代的 items + verdict 旧算法），供回滚用。
+    """
+    return env_flag("MLA_MODEL_FIRST", "on") and not allow_no_model()
 
 
 def _qa_requires_model(question: str) -> bool:
@@ -257,8 +268,22 @@ def _run(
     started = time.perf_counter()
     final = build_graph(deps).invoke(init)
     clause_findings, clause_errors, review_ran = _review_clauses(init, deps, clause_review)
-    # 让位改成事后去重：写库前完成，统计 / 报告口径与界面一致。
-    items = _dedupe_demoted_rule(list(final.get("items") or []), clause_findings)
+    # 路径判定只看"本次是不是核对 + 开关"：问答任务 items 恒为空，不走共识层，也不写这个标志。
+    model_first = model_first_enabled() and str(init.get("mode") or "") == TaskMode.CHECK.value
+    if model_first:
+        # 共识层节点（P1-3）：条款审查之后、写库之前，由它决定最终 items。
+        # 规则通道的违规条目到此为止不再进 items（仍在 rule_checks / rule_coverage 留痕）。
+        consensus_state = consensus(
+            {
+                "clause_findings": list(clause_findings),
+                "rule_checks": list(final.get("rule_checks") or []),
+            },
+            deps,
+        )
+        items = _dedupe_demoted_rule(list(consensus_state.get("items") or []), clause_findings)
+    else:
+        # 旧路径不变：items = 规则条目，让位改成事后去重，写库前完成。
+        items = _dedupe_demoted_rule(list(final.get("items") or []), clause_findings)
     latency = time.perf_counter() - started
 
     # 记录本次实际使用的模型名（历史记录要能回答"这次用的哪个模型"）：
@@ -289,6 +314,7 @@ def _run(
         errors=[str(e) for e in (final.get("errors") or [])] + clause_errors,
         agent_trace=[str(x) for x in (final.get("agent_trace") or [])],
         clause_review=review_ran,
+        model_first=model_first,
         clause_findings=clause_findings,
         undetermined=list(final.get("undetermined") or []),
         unmet=list(final.get("unmet") or []),

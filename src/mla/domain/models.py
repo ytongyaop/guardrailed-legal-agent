@@ -157,7 +157,14 @@ class SlotSpec:
 
 @dataclass
 class CheckItem:
-    """核对清单条目：风险 / 缺项 / 待确认。"""
+    """核对清单条目：风险 / 缺项 / 待确认。
+
+    `grade` / `source` / `note` / `statute_ids` 只在模型主导路径（规格 003 P1-3）由共识层填写：
+    `grade` 是模型结论的 A/B/C 等级（降级行给的是降过级的副本），`source` 区分模型结论
+    （`trigger` / `model_extra`）与程序追加的数值复核条目（`rule_check`），`note` 是共识层
+    给用户看的一句说明，`statute_ids` 保留全部引用条号（`source_id` 只放第一条）。
+    旧路径（items 来自规则通道）这四项保持默认值，字段语义不变。
+    """
 
     item_id: str
     kind: ItemKind
@@ -167,6 +174,10 @@ class CheckItem:
     evidence_text: str = ""
     severity: Severity = Severity.SOFT
     rule_id: str = ""
+    grade: str = ""
+    source: str = ""
+    note: str = ""
+    statute_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -299,6 +310,7 @@ class CheckTask:
     errors: list[str] = field(default_factory=list)
     agent_trace: list[str] = field(default_factory=list)  # 问答时的工具调用轨迹（可解释证据）
     clause_review: bool = False  # 本次是否真的跑了条款审查（历史详情据此区分「未做」与「未发现」）
+    model_first: bool = False  # 本次是否走模型主导路径（items 由共识层产出，verdict 不叠加条款 A/B）
     clause_findings: list[ClauseFinding] = field(default_factory=list)  # 条款审查结论（存在性域）
     undetermined: list[UndeterminedRule] = field(default_factory=list)  # 判不了的规则（缺字段，不混进 items）
     unmet: list[UnmetTerm] = field(default_factory=list)  # 合同未约定的必备约定（旁路，不进 items）

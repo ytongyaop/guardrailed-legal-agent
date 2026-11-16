@@ -17,7 +17,7 @@ from mla.domain.models import (
     TaskMode,
     UndeterminedRule,
 )
-from mla.domain.verdict import summarize_verdict
+from mla.domain.verdict import Verdict, summarize_verdict
 
 COVERAGE = RuleCoverage(total=20, violated=1, compliant=8, not_applicable=8, unknown=3)
 
@@ -234,3 +234,98 @@ def test_no_findings_with_full_coverage_still_clean() -> None:
 
     assert verdict.status == "clean"
     assert verdict.headline == "未发现风险"
+
+
+# ---------- 模型主导路径（P1-3）：冲突与待复核分开计数 ----------
+
+
+def _consensus_item(item_id: str, grade: str, *, source: str = "trigger") -> CheckItem:
+    """共识层产出的条目：`grade` 是模型结论等级，`source=rule_check` 为程序追加的复核条目。"""
+    return CheckItem(
+        item_id=item_id,
+        kind=ItemKind.RISK if grade in ("A", "B") else ItemKind.UNKNOWN,
+        clause_ref="4",
+        finding=f"{item_id} 的结论",
+        source_id="LCL-19",
+        grade=grade,
+        source=source,
+        statute_ids=("LCL-19",),
+    )
+
+
+def test_verdict_review_count_defaults_to_zero() -> None:
+    """新增字段默认 0：旧调用方只读 risk_count / status / headline / details，行为不变。"""
+    verdict = Verdict(status="partial", risk_count=0, headline="未发现硬性风险，但覆盖不完整", details=[])
+    assert verdict.review_count == 0
+
+
+def test_new_path_a_b_count_as_conflict_c_stays_review() -> None:
+    """新路径 2 条 A（模型结论）+ 3 条 C（程序复核）：headline 只说 2 条冲突，另报 3 条需人工复核。"""
+    task = _task(
+        model_first=True,
+        clause_review=True,
+        items=[
+            _consensus_item("CF-1", "A"),
+            _consensus_item("CF-2", "A"),
+            _consensus_item("RC-1", "C", source="rule_check"),
+            _consensus_item("RC-2", "C", source="rule_check"),
+            _consensus_item("RC-3", "C", source="rule_check"),
+        ],
+        rule_coverage=COVERAGE,
+    )
+    verdict = summarize_verdict(task)
+
+    assert verdict.status == "risk"
+    assert verdict.risk_count == 2
+    assert verdict.review_count == 3
+    assert verdict.headline == "发现 2 条与法条存在冲突的事项"
+    assert "5 条" not in verdict.headline
+    assert "3 条需人工复核" in verdict.details
+
+
+def test_new_path_only_c_entries_is_partial_never_clean() -> None:
+    """只有 C 级条目（哪怕三个通道都跑齐）：不能说“未发现风险”，也不能说成冲突。"""
+    task = _task(
+        model_first=True,
+        clause_review=True,
+        items=[
+            _consensus_item("RC-1", "C", source="rule_check"),
+            _consensus_item("RC-2", "C", source="rule_check"),
+            _consensus_item("RC-3", "C", source="rule_check"),
+        ],
+        rule_coverage=RuleCoverage(total=20, violated=0, compliant=12, not_applicable=8, unknown=0),
+        missing_terms=_all_written(),
+    )
+    verdict = summarize_verdict(task)
+
+    assert verdict.status == "partial"
+    assert verdict.risk_count == 0
+    assert verdict.review_count == 3
+    assert verdict.headline == "未发现明确冲突，但有 3 条需人工复核"
+    assert "3 条需人工复核" in verdict.details
+
+
+def test_new_path_c_clause_finding_not_reported_twice() -> None:
+    """新路径的 C 级条款结论已随 items 计一次：不再额外输出“条条款待人工确认”那一行。"""
+    task = _task(
+        model_first=True,
+        clause_review=True,
+        items=[_consensus_item("CF-1", "C")],
+        clause_findings=[_finding("C")],
+    )
+    verdict = summarize_verdict(task)
+
+    assert verdict.review_count == 1
+    assert verdict.details == ["条款审查已运行", "1 条需人工复核"]
+    assert [row for row in verdict.details if "条款待人工确认" in row] == []
+
+
+def test_old_path_rule_items_stay_conflicts_without_review() -> None:
+    """旧路径守卫：规则条目仍全部计冲突，review_count 恒为 0（行为一个字不变）。"""
+    task = _task(items=[_item() for _ in range(5)], rule_coverage=COVERAGE)
+    verdict = summarize_verdict(task)
+
+    assert verdict.status == "risk"
+    assert verdict.risk_count == 5
+    assert verdict.review_count == 0
+    assert verdict.headline == "发现 5 条与法条存在冲突的事项"

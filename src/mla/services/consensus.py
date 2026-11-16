@@ -80,6 +80,10 @@ _DEMOTABLE = ("A", "B")
 # ——`span` 的既有不变量是"合同原文子串"，这里绝不塞法条原文去冒充。
 NO_PARAGRAPH = 0
 
+# 程序追加条目的来源标记：`source="rule_check"` 表示"这条是数值校验追加的复核项，不是模型结论"。
+# 展示层与验收（V2 的例外）都靠它区分，因此只在这里定义一次。
+SOURCE_RULE_CHECK = "rule_check"
+
 
 @dataclass(frozen=True)
 class ConsensusRow:
@@ -155,7 +159,7 @@ def _review_entry(check: RuleCheck) -> ClauseFinding:
         reason=_review_text(statute_id),
         statute_ids=(statute_id,) if statute_id else (),
         trigger_id="",
-        source="rule_check",
+        source=SOURCE_RULE_CHECK,
     )
 
 

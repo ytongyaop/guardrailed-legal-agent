@@ -20,6 +20,7 @@ from ..domain.models import (
     ItemKind,
     MissingTerm,
     RuleCoverage,
+    Severity,
     UndeterminedRule,
     UnmetTerm,
 )
@@ -31,6 +32,15 @@ from ..ports.generation import Generator
 from ..ports.repository import Repository
 from ..ports.retrieval import Retriever
 from ..services.asking import polish_questions
+from ..services.consensus import (
+    SOURCE_RULE_CHECK,
+    VERDICT_ANNOTATE,
+    VERDICT_DEMOTE,
+    VERDICT_KEEP,
+    VERDICT_REVIEW_REQUIRED,
+    ConsensusRow,
+    reconcile,
+)
 from ..services.drafting import draft_answer, draft_suggestions
 from ..services.qa_agent import run_qa_agent
 from .state import CheckState
@@ -208,7 +218,9 @@ def _absence_bucket(outcome: RuleOutcome) -> str:
 def rule_check(state: CheckState, deps: Deps) -> CheckState:
     """确定性规则判定：命中违规即产出风险条目（带法条 ID）。llm_only 档关闭规则。
 
-    `items` 仍由 `evaluate` 的违规集合生成，条目顺序、字段、文案与旧口径逐字节一致；
+    `items` 由 `evaluate` 的违规集合生成，条目顺序、字段、文案与旧口径逐字节一致；
+    P1-3 起它只是图内的中间产物（供处理建议与校验器使用）：任务最终落库的 `items` 由
+    `consensus` 节点按共识层结果覆盖，规则条目不再直接出现在用户可见结论里。
     `unmet` / `undetermined` / `rule_coverage` 是旁路留痕，不参与 `items` 构造、不进 `items`。
     `rule_checks` 是规格 003 P1-1 的双写字段：全部规则的四态都转成三态校验信号（供共识层），
     同样不进 `items`；P1-3 关闭双写前，两套字段同时存在。
@@ -288,9 +300,114 @@ def rule_check(state: CheckState, deps: Deps) -> CheckState:
         "rule_coverage": coverage,
         # 双写（规格 003 第 13 章 P1-1）：全部 20 条规则的四态一律转三态留痕，
         # 含 ok / mismatch / needs_fact —— 共识层需要看到全貌，而不是只看违规那几条。
-        # `items` 的产出逻辑不动；P1-3 关闭双写前两者并存。
+        # P1-3 起它是 `items` 的唯一来源（`items` 只保留图内中间产物），本节点照旧全量留痕。
         "rule_checks": [to_rule_check(o) for o in outcomes],
     }
+
+
+# ---------------- 共识层（规格 003 第 13 章 P1-3） ----------------
+
+# 同一条 finding 被多条 check 命中时的聚合顺序：降级最严 → 程序复核 → 保留；
+# 同一处置再按等级取低（只降不升）。聚合的目的只有一个：同一问题只出一个条目。
+_VERDICT_PRIORITY = {VERDICT_DEMOTE: 0, VERDICT_REVIEW_REQUIRED: 1, VERDICT_KEEP: 2}
+_GRADE_ORDER = {"A": 0, "B": 1, "C": 2}
+# 对外只有这两级算"与法条存在冲突"；C 级是待确认（与 `domain/verdict.py` 口径一致）。
+_RISK_GRADES = ("A", "B")
+
+
+def _consensus_key(row: ConsensusRow) -> tuple:
+    """聚合键：同一条 finding 的**除等级以外**的字段（降级行是副本，等级会变）。"""
+    finding = row.finding
+    if finding is None:
+        return ()
+    return (
+        int(finding.paragraph or 0),
+        str(finding.span),
+        str(finding.reason),
+        tuple(finding.statute_ids),
+        str(finding.trigger_id),
+        str(finding.source),
+        tuple(finding.need_facts),
+    )
+
+
+def _row_priority(row: ConsensusRow) -> tuple[int, int]:
+    """取严顺序：处置优先，其次等级；未登记的值排最后（宁可保留也不误升级）。"""
+    grade = str(row.finding.grade or "").upper() if row.finding is not None else ""
+    return (
+        _VERDICT_PRIORITY.get(row.verdict, len(_VERDICT_PRIORITY)),
+        _GRADE_ORDER.get(grade, len(_GRADE_ORDER)),
+    )
+
+
+def _unique_item_id(base: str, used: set[str]) -> str:
+    """条目 ID 去重：模型自提可以同段落多条（trigger_id 为空），加序号保唯一。"""
+    item_id = base
+    suffix = 2
+    while item_id in used:
+        item_id = f"{base}-{suffix}"
+        suffix += 1
+    used.add(item_id)
+    return item_id
+
+
+def _consensus_item(row: ConsensusRow, used: set[str]) -> CheckItem:
+    """一行对账结果 → 一个 `CheckItem`（等级、来源、说明、全部条号都留在条目上供展示）。"""
+    finding = row.finding
+    assert finding is not None  # 调用方已过滤 finding=None 的附注行
+    grade = str(finding.grade or "").upper()
+    is_review = str(finding.source or "") == SOURCE_RULE_CHECK
+    paragraph = int(finding.paragraph or 0)
+    rule_id = str(row.check.rule_id) if (is_review and row.check is not None) else ""
+    base_id = f"RC-{rule_id}" if rule_id else f"CF-{paragraph}-{str(finding.trigger_id or 'extra')}"
+    statute_ids = tuple(str(sid) for sid in finding.statute_ids)
+    return CheckItem(
+        item_id=_unique_item_id(base_id, used),
+        kind=ItemKind.RISK if grade in _RISK_GRADES else ItemKind.UNKNOWN,
+        clause_ref=str(paragraph) if paragraph else "",
+        finding=str(finding.reason),
+        source_id=statute_ids[0] if statute_ids else "",
+        evidence_text=str(finding.span),
+        severity=Severity.HARD if grade in _RISK_GRADES else Severity.SOFT,
+        rule_id=rule_id,
+        grade=grade,
+        source=str(finding.source or ""),
+        note=row.note,
+        statute_ids=statute_ids,
+    )
+
+
+def consensus(state: CheckState, deps: Deps) -> CheckState:
+    """共识层节点：模型结论 × 数值校验 → 最终 `items`（P1-3 起 `items` 的唯一来源）。
+
+    位置说明：它必须排在条款审查之后，而条款审查是服务层步骤（要等越界 / 拒答 / 问答分流
+    跑完才调用——拒答与问答任务绝不能为此多发一次模型请求），所以本节点由
+    `services.tasks._run` 在 `_review_clauses` 之后显式调用，不挂进状态图的条件边。
+
+    产出规则（与 `services/consensus.reconcile` 的处置一一对应）：
+    - `keep` / `demote`：模型结论，降级行给的是降过级的副本；
+    - `review_required`：程序追加的 C 级数值复核条目（`source="rule_check"`）；
+    - `annotate`：只作附注，**不进 `items`**；
+    - `needs_fact` / `ok`：不出行（共识层口径）。
+    规则通道的违规条目不再直接进 `items`；`rule_checks` / `clause_findings` 仍原样留在任务上。
+    """
+    del deps  # 节点签名与 `_bind` 一致；共识层是纯函数，不读依赖
+    rows = reconcile(list(state.get("clause_findings") or []), list(state.get("rule_checks") or []))
+    best: dict[tuple, ConsensusRow] = {}
+    for row in rows:
+        if row.verdict == VERDICT_ANNOTATE or row.finding is None:
+            continue
+        key = _consensus_key(row)
+        current = best.get(key)
+        if current is None or _row_priority(row) < _row_priority(current):
+            best[key] = row
+    used: set[str] = set()
+    items = [_consensus_item(row, used) for row in best.values()]
+    # 展示顺序固定：A → B → C，同等级按段落号升序、条目 ID 兜底（同一输入必然同一顺序）。
+    items.sort(
+        key=lambda item: (_GRADE_ORDER.get(item.grade, len(_GRADE_ORDER)), item.clause_ref, item.item_id)
+    )
+    return {"items": items}
 
 
 def _source_statutes(state: CheckState, deps: Deps) -> list:

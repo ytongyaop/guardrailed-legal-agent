@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   undetermined TEXT, rule_coverage TEXT, missing_terms TEXT, ask_items TEXT,
   unmet TEXT, statutory_na INTEGER DEFAULT 0,
   rule_checks TEXT,
-  clause_review INTEGER DEFAULT 0, model TEXT
+  clause_review INTEGER DEFAULT 0, model TEXT, model_first INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS logs (
   log_id TEXT PRIMARY KEY, task_id TEXT, user_id TEXT, action TEXT, detail TEXT, created_at TEXT
@@ -100,6 +100,7 @@ TASK_MIGRATIONS: dict[str, str] = {
     "ask_items": "TEXT",
     "clause_review": "INTEGER DEFAULT 0",
     "model": "TEXT",
+    "model_first": "INTEGER DEFAULT 0",
     "rule_checks": "TEXT",
 }
 
@@ -570,8 +571,8 @@ class SqliteRepository:
             "questions,ask_rounds,refused,boundary_layer,boundary_reason,ask_history,errors,"
             "contract_id,contract_name,contract_chars,deleted,case_refs,agent_trace,clause_findings,"
             "undetermined,rule_coverage,missing_terms,ask_items,unmet,statutory_na,clause_review,model,"
-            "rule_checks)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "model_first,rule_checks)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task.task_id,
                 task.enterprise_id,
@@ -619,6 +620,7 @@ class SqliteRepository:
                 int(task.statutory_na),
                 int(task.clause_review),
                 task.model,
+                int(task.model_first),
                 json.dumps([self._rule_check_to_dict(c) for c in task.rule_checks], ensure_ascii=False),
             ),
         )
@@ -713,6 +715,10 @@ class SqliteRepository:
             "evidence_text": item.evidence_text,
             "severity": str(item.severity),
             "rule_id": item.rule_id,
+            "grade": item.grade,
+            "source": item.source,
+            "note": item.note,
+            "statute_ids": list(item.statute_ids),
         }
 
     @staticmethod
@@ -798,6 +804,10 @@ class SqliteRepository:
                 evidence_text=d.get("evidence_text", ""),
                 severity=Severity(d.get("severity", "参考")),
                 rule_id=d.get("rule_id", ""),
+                grade=d.get("grade", ""),
+                source=d.get("source", ""),
+                note=d.get("note", ""),
+                statute_ids=tuple(d.get("statute_ids", [])),
             )
             for d in json.loads(row["items"] or "[]")
         ]
@@ -822,6 +832,7 @@ class SqliteRepository:
             ],
             agent_trace=[str(x) for x in json.loads(row["agent_trace"] or "[]")],
             clause_review=bool(row["clause_review"] or 0),
+            model_first=bool(row["model_first"] or 0),
             clause_findings=[
                 ClauseFinding(
                     paragraph=int(d["paragraph"]),

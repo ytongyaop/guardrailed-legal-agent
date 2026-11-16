@@ -22,6 +22,7 @@ from ..domain.field_catalog import field_name
 from ..domain.models import MISSING_TERM_UNJUDGED_ID, CheckTask, MissingStatus
 from ..domain.verdict import summarize_verdict
 from ..ports.repository import Repository
+from .consensus import SOURCE_RULE_CHECK
 
 FONT = "Noto Sans SC"  # OFL-1.1，可商用；微软雅黑商业发布需授权
 DISCLAIMER = "本报告由系统自动生成，仅列出可回链法条的风险与缺项，不构成法律意见；重大争议请咨询执业律师。"
@@ -37,6 +38,10 @@ CASE_NOTE = "同类情形通常如何认定，不构成本次结论；以裁判�
 # 合并列表的来源标注：档位 0 = 规则确定性判定，1/2/3 = 模型审查的 A/B/C 级。
 FINDING_SOURCES = ("规则判定", "模型审查 A 级", "模型审查 B 级", "模型审查 C 级")
 CLAUSE_GRADE_RANK = {"A": 1, "B": 2, "C": 3}
+# 模型主导路径（规格 003 P1-3）：条目由共识层产出，程序追加的数值复核条目要单独标注来源。
+CONSENSUS_INTRO = "以下按等级排序：A 与法条明文冲突，B 显著失衡，C 待确认。"
+CONSENSUS_RULE_SOURCE = "数值复核（需人工确认）"
+CONSENSUS_MODEL_SOURCE = "模型审查 {grade} 级"
 
 
 def merge_findings(items, findings) -> list[tuple[int, Any]]:
@@ -53,6 +58,71 @@ def merge_findings(items, findings) -> list[tuple[int, Any]]:
         rows.append((rank, (int(finding.paragraph or 0), str(finding.trigger_id or "")), finding))
     rows.sort(key=lambda row: (row[0], row[1]))
     return [(rank, entry) for rank, _, entry in rows]
+
+
+def _merged_paragraphs(doc: DocxDocument, task: CheckTask, repo: Repository, findings: list) -> bool:
+    """旧路径的结论区：规则条目 + 条款审查结论按严重度合并（页面与报告同一口径）。
+
+    返回是否真的写了内容（调用方据此决定是否要印“未发现风险”这句）。
+    """
+    merged = merge_findings(task.items, findings)
+    if not merged:
+        return False
+    doc.add_paragraph("以下按严重度排序：先列确定性规则命中的风险，再列模型审查的 A / B / C 级条款结论。")
+    for idx, (rank, entry) in enumerate(merged, start=1):
+        if rank == 0:
+            _finding_paragraph(doc, f"{idx}. {FINDING_SOURCES[0]}：{entry.finding}")
+            _meta_paragraph(doc, f"依据：{_statute_label(repo, entry.source_id)} · 规则 {entry.rule_id}")
+            _statute_source_paragraph(doc, repo, entry.source_id)
+            continue
+        _finding_paragraph(
+            doc, f"{idx}. {FINDING_SOURCES[rank]}：第 {entry.paragraph} 段：{_clip(entry.span)}"
+        )
+        _meta_paragraph(doc, f"理由：{entry.reason}")
+        cites = "、".join(f"{_statute_label(repo, sid)}（{sid}）" for sid in entry.statute_ids)
+        _meta_paragraph(doc, f"依据：{cites or '未给出法条依据'}")
+        for sid in entry.statute_ids:
+            _statute_source_paragraph(doc, repo, sid)
+        if entry.need_facts:
+            _meta_paragraph(doc, "待补事实：" + "、".join(entry.need_facts))
+        if str(getattr(entry, "source", "trigger")) == "model_extra":
+            _meta_paragraph(doc, "来源：模型自提，未经触发器命中，等级封顶 C，建议人工抽检确认。")
+    return True
+
+
+def _consensus_paragraphs(doc: DocxDocument, task: CheckTask, repo: Repository) -> bool:
+    """模型主导路径的结论区：逐条排版 `items`（不再调用 `merge_findings`，否则会重复）。"""
+    if not task.items:
+        return False
+    doc.add_paragraph(CONSENSUS_INTRO)
+    for idx, item in enumerate(task.items, start=1):
+        source = str(getattr(item, "source", "") or "")
+        if source == SOURCE_RULE_CHECK:
+            _finding_paragraph(doc, f"{idx}. {CONSENSUS_RULE_SOURCE}：{item.finding}")
+        else:
+            grade = str(getattr(item, "grade", "") or "")
+            head = f"{idx}. {CONSENSUS_MODEL_SOURCE.format(grade=grade)}："
+            span = str(getattr(item, "evidence_text", "") or "")
+            paragraph = str(getattr(item, "clause_ref", "") or "")
+            if paragraph and span:
+                head += f"第 {paragraph} 段：{_clip(span)}"
+            else:
+                head += str(item.finding)
+            _finding_paragraph(doc, head)
+            if item.finding and span:
+                _meta_paragraph(doc, f"理由：{item.finding}")
+            if source == "model_extra":
+                _meta_paragraph(doc, "来源：模型自提，未经触发器命中，等级封顶 C，建议人工抽检确认。")
+        ids = list(getattr(item, "statute_ids", ()) or ())
+        if not ids and item.source_id:
+            ids = [item.source_id]
+        cites = "、".join(f"{_statute_label(repo, sid)}（{sid}）" for sid in ids)
+        _meta_paragraph(doc, f"依据：{cites or '未给出法条依据'}")
+        for sid in ids:
+            _statute_source_paragraph(doc, repo, sid)
+        if item.note and item.note != item.finding:
+            _meta_paragraph(doc, item.note)
+    return True
 
 
 def _apply_ea(run) -> None:
@@ -133,28 +203,12 @@ def build_report_docx(task: CheckTask, repo: Repository) -> bytes:
     doc.add_paragraph()
     _heading(doc, "一、核对结论")
     findings = list(task.clause_findings or [])
-    merged = merge_findings(task.items, findings)
-    if merged:
-        doc.add_paragraph("以下按严重度排序：先列确定性规则命中的风险，再列模型审查的 A / B / C 级条款结论。")
-        for idx, (rank, entry) in enumerate(merged, start=1):
-            if rank == 0:
-                _finding_paragraph(doc, f"{idx}. {FINDING_SOURCES[0]}：{entry.finding}")
-                _meta_paragraph(doc, f"依据：{_statute_label(repo, entry.source_id)} · 规则 {entry.rule_id}")
-                _statute_source_paragraph(doc, repo, entry.source_id)
-                continue
-            _finding_paragraph(
-                doc, f"{idx}. {FINDING_SOURCES[rank]}：第 {entry.paragraph} 段：{_clip(entry.span)}"
-            )
-            _meta_paragraph(doc, f"理由：{entry.reason}")
-            cites = "、".join(f"{_statute_label(repo, sid)}（{sid}）" for sid in entry.statute_ids)
-            _meta_paragraph(doc, f"依据：{cites or '未给出法条依据'}")
-            for sid in entry.statute_ids:
-                _statute_source_paragraph(doc, repo, sid)
-            if entry.need_facts:
-                _meta_paragraph(doc, "待补事实：" + "、".join(entry.need_facts))
-            if str(getattr(entry, "source", "trigger")) == "model_extra":
-                _meta_paragraph(doc, "来源：模型自提，未经触发器命中，等级封顶 C，建议人工抽检确认。")
-    if not merged:
+    if bool(getattr(task, "model_first", False)):
+        # 新路径：items 已是共识层结果（模型结论 + 数值复核条目），不再二次 merge_findings。
+        listed = _consensus_paragraphs(doc, task, repo)
+    else:
+        listed = _merged_paragraphs(doc, task, repo, findings)
+    if not listed:
         doc.add_paragraph(f"{verdict.headline}（不代表合规，请结合事实复核）。")
     if findings:
         note = doc.add_paragraph(CLAUSE_DISCLAIMER)
@@ -213,7 +267,8 @@ def build_report_docx(task: CheckTask, repo: Repository) -> bytes:
     _statute_bodies(
         doc,
         repo,
-        [item.source_id for item in task.items]
+        [item.source_id for item in task.items if item.source_id]
+        + [sid for item in task.items for sid in (getattr(item, "statute_ids", ()) or ())]
         + [sid for finding in findings for sid in finding.statute_ids],
     )
 

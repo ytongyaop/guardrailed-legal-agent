@@ -53,6 +53,7 @@ from mla.services.auth import (
     register,
     require_admin,
 )
+from mla.services.consensus import SOURCE_RULE_CHECK
 from mla.services.report import build_report_docx, merge_findings
 from mla.services.tasks import persist, run_check, run_qa
 from mla.ui.trend import trend_frame
@@ -83,6 +84,8 @@ FINDING_SOURCE_BADGES: tuple[str, ...] = (
     "模型审查·C",
 )
 FINDING_SOURCE_COLORS: tuple[str, ...] = ("blue", "red", "orange", "gray")
+# 模型主导路径（规格 003 P1-3）里程序追加的数值复核条目：它不是模型结论，徽标必须能区分出来。
+CONSENSUS_RULE_BADGE = "数值复核·需人工"
 CLAUSE_NOT_REVIEWED_NOTE = "本次未做条款级审查，条款级风险未覆盖。"
 CLAUSE_CLEAR_NOTE = "本次条款级审查未发现可疑条款。"
 # 出现这些诊断说明审查没跑起来或整批输出不可用，只能说“未做”，不能说“未发现”
@@ -981,6 +984,54 @@ def _render_clause_finding(finding, repo: SqliteRepository, *, badge: str = "") 
             st.caption("需补充事实：" + "、".join(finding.need_facts))
 
 
+def _render_consensus_item(item, repo: SqliteRepository) -> None:
+    """模型主导路径（P1-3）的单条目：等级徽标 → 片段 → 理由 → 依据。
+
+    条目已由共识层产出（`items` 里就是最终结论），这里只排版，不再拿 `clause_findings`
+    做二次合并——否则同一条模型结论会被渲染两遍。程序追加的数值复核条目（`source="rule_check"`）
+    没有合同段落，只给复核文案与依据。
+    """
+    source = str(getattr(item, "source", "") or "")
+    grade = str(getattr(item, "grade", "") or "")
+    with st.container(border=True):
+        head = _grade_badge(grade) if grade else ""
+        if source == SOURCE_RULE_CHECK:
+            head = f":gray-badge[{CONSENSUS_RULE_BADGE}] {head}".strip()
+        if source == "model_extra":
+            head += "（模型自提，待人工确认）"
+        if head:
+            st.markdown(head)
+        paragraph = str(getattr(item, "clause_ref", "") or "")
+        span = str(getattr(item, "evidence_text", "") or "")
+        if span and paragraph:
+            clipped = span if len(span) <= CLAUSE_SPAN_LIMIT else span[:CLAUSE_SPAN_LIMIT] + "……"
+            st.markdown(f"**条款片段**（正文第 {paragraph} 段）：{clipped}")
+            if len(span) > CLAUSE_SPAN_LIMIT:
+                with st.expander("查看条款原文"):
+                    st.text(span)
+        if item.finding:
+            st.markdown(f"**理由**：{item.finding}")
+        ids = list(getattr(item, "statute_ids", ()) or ())
+        if not ids and item.source_id:
+            ids = [item.source_id]
+        if ids:
+            labels = [
+                source_label(repo, sid) if repo.get_statute(sid) is not None else "法源库未找到该条文"
+                for sid in ids
+            ]
+            st.markdown("**依据**：" + "、".join(labels))
+            for sid in ids:
+                statute = repo.get_statute(sid)
+                if statute is None:
+                    continue
+                short = statute.law_name.replace("中华人民共和国", "")
+                with st.expander(f"《{short}》{statute.article_no} 原文"):
+                    st.markdown(statute.text)
+                    st.caption(_statute_meta(statute))
+        if item.note and item.note != item.finding:
+            st.caption(item.note)
+
+
 def _clause_review_note(task, clause_review: bool | None = None) -> str:
     """合并列表末尾的一句覆盖说明：条款审查做没做、有没有命中。
 
@@ -1175,7 +1226,8 @@ def _render_task(
             )
         return
 
-    cited = {i.source_id for i in task.items}
+    cited = {i.source_id for i in task.items if i.source_id}
+    cited.update(sid for i in task.items for sid in (getattr(i, "statute_ids", ()) or ()))
     # 顶部先说结论形态、再说次要指标：0 条不等于没问题，“没查出来”与“没问题”必须能分开读。
     verdict = summarize_verdict(task)
     _render_verdict(verdict)
@@ -1240,17 +1292,22 @@ def _render_task(
             help="等级含义：A 与法条明文冲突，B 显著失衡，C 待确认；只表示与法条存在冲突的风险。",
         )
         findings = list(task.clause_findings or [])
-        for rank, entry in merge_findings(task.items, findings):
-            if rank == 0:
-                st.markdown(f":blue-badge[{FINDING_SOURCE_BADGES[0]}] **{entry.finding}**")
-                cite = f"依据 {source_label(repo, entry.source_id)}"
-                statute = repo.get_statute(entry.source_id)
-                if statute is not None and statute.source_url:
-                    cite += f" · 来源：{statute.source_url}"
-                st.caption(cite)
-                continue
-            color = FINDING_SOURCE_COLORS[rank]
-            _render_clause_finding(entry, repo, badge=f":{color}-badge[{FINDING_SOURCE_BADGES[rank]}]")
+        if bool(getattr(task, "model_first", False)):
+            # 新路径：items 已是共识层结果（含模型结论与数值复核条目），不再二次合并。
+            for item in task.items:
+                _render_consensus_item(item, repo)
+        else:
+            for rank, entry in merge_findings(task.items, findings):
+                if rank == 0:
+                    st.markdown(f":blue-badge[{FINDING_SOURCE_BADGES[0]}] **{entry.finding}**")
+                    cite = f"依据 {source_label(repo, entry.source_id)}"
+                    statute = repo.get_statute(entry.source_id)
+                    if statute is not None and statute.source_url:
+                        cite += f" · 来源：{statute.source_url}"
+                    st.caption(cite)
+                    continue
+                color = FINDING_SOURCE_COLORS[rank]
+                _render_clause_finding(entry, repo, badge=f":{color}-badge[{FINDING_SOURCE_BADGES[rank]}]")
         note = _clause_review_note(task, clause_review)
         if note:
             st.caption(note)

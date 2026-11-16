@@ -7,6 +7,7 @@ from typing import TypedDict
 from ..domain.models import (
     CaseRef,
     CheckItem,
+    ClauseFinding,
     MissingTerm,
     RuleCoverage,
     Suggestion,
@@ -41,7 +42,10 @@ class CheckState(TypedDict, total=False):
     unmet: list[UnmetTerm]  # 合同未约定的必备约定（缺 required 字段）
     statutory_na: int  # 因未约定而按法定标准适用、规则不判的条数
     rule_coverage: RuleCoverage | None  # 规则层四态分布
-    rule_checks: list[RuleCheck]  # 数值校验信号（全状态，与 items 双写并存）
+    rule_checks: list[RuleCheck]  # 数值校验信号（全状态，共识层的规则侧输入）
+    # 条款审查结论：图跑完之后才由服务层产出，仅为了让 `consensus` 节点能按节点语义读入，
+    # 不入图（拒答 / 问答任务不该为它多发一次模型请求）
+    clause_findings: list[ClauseFinding]
     missing_terms: list[MissingTerm]  # 必备条款缺项（旁路，不进 items）
     # 产出
     items: list[CheckItem]
