@@ -14,7 +14,14 @@ from mla.adapters.llm import LLMError
 from mla.config import LLMConfig, load_config
 from mla.domain.clauses import ClauseCandidate
 from mla.domain.models import ClauseFinding, Role, StatuteEntry, User
-from mla.services.clause_review import _locate, _verify, review_clauses
+from mla.services.clause_review import (
+    MAX_EVIDENCE_CHARS,
+    MIN_EVIDENCE_CHARS,
+    _locate,
+    _overlap_ratio,
+    _verify,
+    review_clauses,
+)
 from mla.services.tasks import run_check
 
 CONTRACT = (
@@ -143,6 +150,123 @@ def test_evidence_with_space_difference_still_located() -> None:
 
     assert len(got) == 1
     assert got[0].span == TRANSFER_SPAN
+
+
+# ---------- 第 2 道加严：证据长度 / 段落 / 跨段（P2-2） ----------
+
+# 9 字：这是合同原文的子串，单看定位没问题，只有长度让它不过。
+NINE_CHARS = "甲方有权单方调整乙"
+# 101 字：合法但超上限的整句（合同原文连续抄写，只是太长了）。
+LONG_EVIDENCE = (
+    "乙方确认甲方已在签订本合同前就全部条款逐条说明并充分协商，乙方对合同内容完全理解并自愿接受，"
+    "且承诺不再就合同条款提出任何异议或另行主张任何补充权利，包括但不限于工资构成、考勤管理、奖惩办法与合同解除条件"
+)
+LONG_CONTRACT = CONTRACT + LONG_EVIDENCE + "。\n"
+# 84 字：真实对抗合同（`contract_traps_01` 段 20）被触发器命中的整行，verbatim 照抄的长度。
+# 这是上限从 80 放宽到 100 的直接理由：80 会把这类整行照抄判成"长度越界"。
+EVIDENCE_84 = (
+    "甲方有权根据经营需要、项目调整，单方无条件调整乙方工作岗位、工作地点、工作内容，乙方不得拒绝；"
+    "拒绝调岗视为严重违反规章制度，甲方可无偿解除劳动合同，无需支付经济补偿金。"
+)
+# 100 字：正好等于上限的边界证据（合法、连续、能在原文定位）。
+EVIDENCE_100 = (
+    "乙方确认甲方已在签订本合同前就全部条款逐条说明并充分协商，"
+    "乙方对合同内容完全理解并自愿接受本合同，"
+    "且承诺不再就合同条款提出任何异议或另行主张任何补充权利，"
+    "包括工资构成、考勤管理、奖惩办法与合同解除条件"
+)
+
+
+def test_evidence_shorter_than_min_dropped_with_length_diagnostic() -> None:
+    """证据归一化后 9 字 < 下限 → 丢弃，诊断里能看出是"长度"原因。"""
+    assert len(NINE_CHARS) < MIN_EVIDENCE_CHARS
+    llm = StubLLM({"findings": [_finding(evidence=NINE_CHARS)]})
+    errors: list[str] = []
+    got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
+
+    assert got == ()
+    assert any("长度" in e and "9 字" in e for e in errors)
+
+
+def test_evidence_longer_than_max_dropped_with_length_diagnostic() -> None:
+    """证据归一化后 101 字 > 上限 → 丢弃，诊断里能看出是"长度"原因。"""
+    assert len(LONG_EVIDENCE) > MAX_EVIDENCE_CHARS
+    llm = StubLLM({"findings": [_finding(evidence=LONG_EVIDENCE)]})
+    errors: list[str] = []
+    got = review_clauses(llm, [_candidate()], LONG_CONTRACT, errors=errors, statutes=LIBRARY)
+
+    assert got == (), "超长证据即使能在原文定位，也必须按长度丢弃"
+    assert any("长度" in e and "101 字" in e for e in errors)
+
+
+def test_evidence_84_chars_passes_after_upper_bound_widened() -> None:
+    """84 字整行照抄（真实对抗合同段 20）→ 通过；改前上限 80 会把它判成超限。"""
+    assert len(EVIDENCE_84) == 84
+    span = "甲方有权根据经营需要、项目调整，单方无条件调整乙方工作岗位"
+    llm = StubLLM({"findings": [_finding(evidence=EVIDENCE_84)]})
+    errors: list[str] = []
+    got = review_clauses(llm, [_candidate(span=span)], EVIDENCE_84 + "\n", errors=errors, statutes=LIBRARY)
+
+    assert len(got) == 1
+    assert got[0].grade == "A", "84 字在 10–100 区间内，不该降级"
+    assert not any("长度" in e for e in errors)
+
+
+def test_evidence_exactly_100_chars_passes_at_boundary() -> None:
+    """正好 100 字（上限本身）→ 通过：区间是闭区间。"""
+    assert len(EVIDENCE_100) == 100
+    span = "乙方确认甲方已在签订本合同前就全部条款逐条说明并充分协商"
+    llm = StubLLM({"findings": [_finding(evidence=EVIDENCE_100)]})
+    errors: list[str] = []
+    got = review_clauses(llm, [_candidate(span=span)], EVIDENCE_100 + "\n", errors=errors, statutes=LIBRARY)
+
+    assert len(got) == 1
+    assert not any("长度" in e for e in errors)
+
+
+def test_evidence_inside_candidate_paragraph_passes() -> None:
+    """证据落在候选所在段落内 → 通过（加严后唯一被接受的定位形态）。"""
+    llm = StubLLM({"findings": [_finding()]})
+    errors: list[str] = []
+    got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
+
+    assert len(got) == 1
+    assert got[0].paragraph == 1
+    assert got[0].span == TRANSFER_SPAN
+    assert not any("第 2 道核验" in e for e in errors)
+
+
+def test_evidence_only_in_another_paragraph_dropped() -> None:
+    """证据只在第 2 段出现、候选在第 1 段 → 丢弃，不再退回首次出现。"""
+    llm = StubLLM({"findings": [_finding(evidence="乙方月综合薪资 8000 元")]})
+    errors: list[str] = []
+    got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
+
+    assert got == ()
+    assert any("段落" in e and "第 1 段" in e for e in errors)
+
+
+def test_evidence_with_newline_dropped_as_cross_paragraph() -> None:
+    """证据把两段拼起来（含换行）→ 丢弃，诊断含"跨段"。"""
+    evidence = TRANSFER_SPAN + "\n乙方月综合薪资 8000 元"
+    llm = StubLLM({"findings": [_finding(evidence=evidence)]})
+    errors: list[str] = []
+    got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
+
+    assert got == ()
+    assert any("跨段" in e for e in errors)
+
+
+def test_evidence_spanning_paragraph_boundary_dropped_as_cross_paragraph() -> None:
+    """没有换行，但归一化后把段尾与段首拼成了一个匹配 → 同样按跨段丢弃。"""
+    boundary_contract = "甲方有权单方调整乙方工作岗位，乙方不得拒绝\n乙方月综合薪资 8000 元\n"
+    evidence = "乙方不得拒绝乙方月综合薪资"
+    llm = StubLLM({"findings": [_finding(evidence=evidence)]})
+    errors: list[str] = []
+    got = review_clauses(llm, [_candidate()], boundary_contract, errors=errors, statutes=LIBRARY)
+
+    assert got == ()
+    assert any("跨段" in e for e in errors)
 
 
 # ---------- 等级与依据 ----------
@@ -381,7 +505,11 @@ def test_extra_dropped_when_same_span_and_same_subject() -> None:
 
 
 def test_locate_prefers_matching_paragraph() -> None:
-    """证据文本在合同里重复出现时，给了段落就取该段的那次，不给仍取首次出现。"""
+    """`_locate` 本身仍是「同段优先、否则退首次出现」；退回首次出现只留给消融臂。
+
+    P2-2 起生产核验路径（`_verify`）另加"必须落在候选所在段落"的硬校验，
+    因此这里的回退行为不再出现在用户可见结论里（见 `test_evidence_only_in_another_paragraph_dropped`）。
+    """
     repeated = "乙方自愿放弃缴纳社会保险"
     contract = f"{repeated}。\n乙方月综合薪资 8000 元。\n{repeated}。\n"
     third = contract.rindex(repeated)
@@ -504,6 +632,10 @@ def test_no_generator_returns_empty_with_errors() -> None:
 
 # ---------- span 与排序 ----------
 
+# 第 6 道的两个反例证据：都落在候选段内，只差与候选 span 的重叠比例。
+LOW_OVERLAP_EVIDENCE = "甲方有权单方解除劳动合同，无需支付任何经济补偿"  # 重叠 ≈0.3
+HIGH_OVERLAP_EVIDENCE = "甲方有权单方调整乙方工作岗位，乙方可以拒绝"  # 重叠 ≈0.8
+
 
 def test_span_comes_from_candidate_not_model_rewrite() -> None:
     """模型自己给出 span 字段也不采信：span 一律取候选片段。"""
@@ -518,16 +650,69 @@ def test_span_comes_from_candidate_not_model_rewrite() -> None:
     assert got[0].source == "trigger"
 
 
-def test_low_overlap_evidence_kept_but_recorded() -> None:
-    """证据与候选片段不重叠：仍以证据为准（已核验在原文），span 仍取候选并记诊断。"""
-    row = _finding(evidence="乙方月综合薪资 8000 元，其中基本工资 2200 元")
+def test_low_overlap_evidence_demotes_one_grade() -> None:
+    """证据落在候选段内但与候选片段重叠不足 → 降一级（A→B），span 仍取候选并记诊断。"""
+    contract = (
+        "甲方有权单方调整乙方工作岗位，乙方不得拒绝。甲方有权单方解除劳动合同，无需支付任何经济补偿。\n"
+    )
+    llm = StubLLM({"findings": [_finding(evidence=LOW_OVERLAP_EVIDENCE)]})
+    errors: list[str] = []
+    got = review_clauses(llm, [_candidate()], contract, errors=errors, statutes=LIBRARY)
+
+    ratio = _overlap_ratio(LOW_OVERLAP_EVIDENCE, TRANSFER_SPAN)
+    assert 0.25 <= ratio < 0.35, "本用例的重叠比例应在 0.3 上下，否则断言失去意义"
+    assert len(got) == 1
+    assert got[0].grade == "B", "重叠不足要降一级，不是只记诊断"
+    assert got[0].span == TRANSFER_SPAN, "span 仍取候选片段"
+    assert any("重叠不足" in e and "降为 B" in e for e in errors)
+
+
+def test_low_overlap_from_b_demotes_to_c() -> None:
+    """降级逐级走：B 级重叠不足 → C，仍保留结论与候选 span。"""
+    contract = (
+        "甲方有权单方调整乙方工作岗位，乙方不得拒绝。甲方有权单方解除劳动合同，无需支付任何经济补偿。\n"
+    )
+    row = _finding(
+        grade="B", statute_ids=["LCL-35"], evidence=LOW_OVERLAP_EVIDENCE, need_facts=["是否经协商一致"]
+    )
     llm = StubLLM({"findings": [row]})
     errors: list[str] = []
-    got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
+    got = review_clauses(llm, [_candidate()], contract, errors=errors, statutes=LIBRARY)
 
     assert len(got) == 1
+    assert got[0].grade == "C"
     assert got[0].span == TRANSFER_SPAN
-    assert any("重叠不足" in e for e in errors)
+    assert any("重叠不足" in e and "降为 C" in e for e in errors)
+
+
+def test_low_overlap_at_c_stays_c_with_diagnostic() -> None:
+    """已是 C 级 → 保持 C（降级只降不升），诊断照记。"""
+    contract = (
+        "甲方有权单方调整乙方工作岗位，乙方不得拒绝。甲方有权单方解除劳动合同，无需支付任何经济补偿。\n"
+    )
+    row = _finding(grade="C", statute_ids=[], quote_statute="", evidence=LOW_OVERLAP_EVIDENCE)
+    llm = StubLLM({"findings": [row]})
+    errors: list[str] = []
+    got = review_clauses(llm, [_candidate()], contract, errors=errors, statutes=LIBRARY)
+
+    assert len(got) == 1
+    assert got[0].grade == "C", "C 级不再往下降，也不能因此升"
+    assert got[0].span == TRANSFER_SPAN
+    assert any("重叠不足" in e and "保持 C" in e for e in errors)
+
+
+def test_high_overlap_does_not_demote() -> None:
+    """重叠 ≈0.8（≥ OVERLAP_MIN）→ 不降级，等级原样保留。"""
+    contract = "甲方有权单方调整乙方工作岗位，乙方不得拒绝。甲方有权单方调整乙方工作岗位，乙方可以拒绝。\n"
+    llm = StubLLM({"findings": [_finding(evidence=HIGH_OVERLAP_EVIDENCE)]})
+    errors: list[str] = []
+    got = review_clauses(llm, [_candidate()], contract, errors=errors, statutes=LIBRARY)
+
+    ratio = _overlap_ratio(HIGH_OVERLAP_EVIDENCE, TRANSFER_SPAN)
+    assert 0.75 <= ratio < 0.85, "本用例的重叠比例应在 0.8 上下，否则断言失去意义"
+    assert len(got) == 1
+    assert got[0].grade == "A"
+    assert not any("重叠不足" in e for e in errors)
 
 
 def test_findings_sorted_by_paragraph_and_grade() -> None:

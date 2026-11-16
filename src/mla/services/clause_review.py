@@ -4,9 +4,9 @@
 
 1. 候选由触发器层产出（`domain.clauses.detect_clauses`），本层**不做召回**；
 2. 每 `batch_size`（默认 5）条候选一次模型调用，批量判定，避免 20 条串行把耗时拖到 100 秒以上；
-3. `_verify` 逐条做程序核验：等级合法 → 证据在原文可定位 → 法条在库（含 quote_statute 回声核验）→
-   触发器条目引用在候选闭集内；A 级缺 quote_statute 降 B，A/B 级缺法条的降为 C（不丢弃），
-   其余硬性不过即丢弃并记诊断；
+3. `_verify` 逐条做程序核验：等级合法 → 证据长度 / 未跨段 / 落在候选所在段落（加严：不再退回首次出现）→
+   法条在库（含 quote_statute 回声核验）→ 触发器条目引用在候选闭集内；A 级缺 quote_statute 降 B，
+   A/B 级缺法条的降为 C（不丢弃），证据与候选片段重叠不足降一级（只降不升），其余硬性不过即丢弃并记诊断；
 4. 模型可在候选之外自提发现（`extra`），**一律降为 C**、标 `source="model_extra"`、条数封顶。
 
 消融开关：`verify=False` 时跳过第 3 步的四道校验，等级与法条 ID 原样保留（含库外条号），
@@ -43,7 +43,13 @@ MAX_REASON = 200
 MAX_FACTS = 5
 MAX_FACT_CHARS = 80
 MAX_LINE_CHARS = 160  # 单行送入 prompt 的字符上限（超长行截断，避免整段公文淹没候选）
-OVERLAP_MIN = 0.5  # 模型证据与候选 span 的重叠下限（低于此值只记诊断，不丢弃）
+# 证据（归一化后）长度硬区间：太短不足以证明是原文连续抄写，太长多半是整段照抄、
+# 把候选之外的约定也带了进来。越界属不可修正（截断会改变证据语义），直接丢弃。
+# 上限 100（原 80）的实测依据：`contract_traps_01` 被触发器命中的段 20 整行 = 84 字、
+# 段 32 = 81 字，模型整行照抄是常见行为，80 会把这两处典型对抗条款误杀；101 字仍拦截。
+MIN_EVIDENCE_CHARS = 10
+MAX_EVIDENCE_CHARS = 100
+OVERLAP_MIN = 0.5  # 模型证据与候选 span 的重叠下限（低于此值降一级 + 记诊断，span 仍取候选）
 
 REVIEW_SYSTEM = """你是劳动合同条款风险审查助手。只输出 JSON 对象，不要解释，不要 Markdown。
 
@@ -58,7 +64,7 @@ REVIEW_SYSTEM = """你是劳动合同条款风险审查助手。只输出 JSON �
 硬性要求：
 1. 每条候选只能从它自己的 candidate_statute_ids 里选法条，不得引用未列出的条号，不得编造条号。
 2. reason 只写冲突点，句式写"该约定与 X 条某某规定不符/存在冲突"；不要写"该条款无效""该条款违法"这类终局结论。
-3. evidence 必须从合同原文逐字连续抄写（10 到 80 字），不得改写、不得拼接、不得用省略号。
+3. evidence 必须从合同原文逐字连续抄写（10 到 100 字），不得改写、不得拼接、不得用省略号。
 4. quote_statute 必须是所引法条原文的一段连续子串（原样摘抄，不改写、不概括、不加省略号）。
    A、B 级必填，抄与本次冲突最相关的那一段即可（对应 statute_ids 里第一顺位那条）；C 级可留空。
    条文原文里没有的句子不能写进来；拿不准原文就降为 C，不要编造原文。
@@ -92,6 +98,9 @@ def _locate(evidence: str, contract_text: str, paragraph: int | None = None) -> 
 
     同一段文字可能在合同里出现多次（模板条款、重复样板）。给了 `paragraph` 时优先取落在该段
     的那一次，避免把第二处的证据绑到第一处；找不到同段命中才退回首次出现。
+
+    **退回首次出现只给消融臂（`_unverified`）用**：生产核验路径（`_verify`）另加
+    「必须落在候选所在段落」的硬校验，别段的那次一律不采信（P2-2 加严）。
     """
     norm_evidence = _norm(evidence)
     if not norm_evidence:
@@ -322,10 +331,11 @@ def _verify(
 ) -> ClauseFinding | None:
     """单条程序核验：任一硬性不过返回 None（丢弃）；软性问题降级或只记诊断。
 
-    硬性（丢弃）：等级不是 A/B/C；证据无法在原文定位；引用法条不在库；触发器条目引用越出候选闭集。
+    硬性（丢弃）：等级不是 A/B/C；证据长度不在 10–100 字；证据含换行 / 跨段落边界；
+    证据不在候选所在段落（不再退回首次出现）；引用法条不在库；触发器条目引用越出候选闭集。
     软性（保留）：A/B 级缺法条 → 降为 C；A 级缺 quote_statute（第 1 道三件套）→ 降为 B；
     quote_statute 不是所引法条原文的连续子串（第 3 道回声核验）→ 清空该引用，A 级随之降 B；
-    模型证据与候选片段重叠不足 → span 仍取候选片段。
+    模型证据与候选片段重叠不足 → 降一级（只降不升），span 仍取候选片段。
     `verify=False` 直接走 `_unverified`（消融的 model_raw 臂），不做任何校验。
     """
     if not verify:
@@ -339,10 +349,42 @@ def _verify(
         return None
 
     evidence = str(finding_raw.get("evidence", "") or "").strip()
+    # 第 2 道（加严 1/3）：长度硬校验。用归一化长度（空白差异不该决定是否越界）。
+    norm_evidence = _norm(evidence)
+    if not MIN_EVIDENCE_CHARS <= len(norm_evidence) <= MAX_EVIDENCE_CHARS:
+        diagnostics.append(
+            f"{tag}：第 2 道核验：证据长度越界（归一化后 {len(norm_evidence)} 字，"
+            f"要求 {MIN_EVIDENCE_CHARS}–{MAX_EVIDENCE_CHARS} 字），已丢弃"
+        )
+        return None
+    # 第 2 道（加严 2/3）：跨段拼接。证据体里出现换行就是两段拼起来的，不是连续抄写。
+    if "\n" in evidence or "\r" in evidence:
+        diagnostics.append(f"{tag}：第 2 道核验：证据跨段拼接（含换行），已丢弃")
+        return None
     located = _locate(evidence, contract_text, candidate.paragraph if candidate is not None else None)
     if located is None:
+        # 多数情况是编造原文；但"只在别的段落出现"要单独成一种原因，便于事后统计看错条款的比例。
+        if candidate is not None and _locate(evidence, contract_text, None) is not None:
+            diagnostics.append(
+                f"{tag}：第 2 道核验：证据只在候选第 {candidate.paragraph} 段之外的段落出现"
+                f"（不再退回首次出现），已丢弃"
+            )
+            return None
         diagnostics.append(f"{tag}：证据无法在合同原文定位，已丢弃")
         return None
+    if candidate is not None:
+        # 第 2 道（加严 3/3）：必须落在候选所在段落内。先核起点（起点在别段＝模型看错了条款），
+        # 再核尾巴：归一化会删掉空白，因此"无换行"也可能把上一段结尾和下一段开头拼成一个匹配。
+        if _paragraph_of(contract_text, located[0]) != candidate.paragraph:
+            diagnostics.append(
+                f"{tag}：第 2 道核验：证据不在候选所在段落（候选在第 {candidate.paragraph} 段），已丢弃"
+            )
+            return None
+        if _paragraph_of(contract_text, located[1] - 1) != candidate.paragraph:
+            diagnostics.append(
+                f"{tag}：第 2 道核验：证据跨段拼接（归一化后跨过第 {candidate.paragraph} 段边界），已丢弃"
+            )
+            return None
 
     raw_ids = finding_raw.get("statute_ids") or []
     if not isinstance(raw_ids, list):
@@ -389,8 +431,22 @@ def _verify(
     if candidate is not None:
         paragraph = candidate.paragraph
         span = candidate.span
-        if _overlap_ratio(evidence, span) < OVERLAP_MIN:
-            diagnostics.append(f"{tag}：模型证据与候选片段重叠不足，span 仍取候选片段")
+        ratio = _overlap_ratio(evidence, span)
+        if ratio < OVERLAP_MIN:
+            # 第 6 道（加严）：重叠不足说明模型可能看错了条款 → 降一级，只降不升。
+            # span 仍一律取候选（证据只看作对照，不改写定位），已是 C 就保持 C 但仍留诊断。
+            lowered = GRADES[min(GRADES.index(grade) + 1, len(GRADES) - 1)]
+            if lowered == grade:
+                diagnostics.append(
+                    f"{tag}：第 6 道核验：模型证据与候选片段重叠不足"
+                    f"（{ratio:.2f} < {OVERLAP_MIN}），已是 C 级，保持 C"
+                )
+            else:
+                diagnostics.append(
+                    f"{tag}：第 6 道核验：模型证据与候选片段重叠不足"
+                    f"（{ratio:.2f} < {OVERLAP_MIN}），{grade} 级降为 {lowered} 级"
+                )
+                grade = lowered
     else:
         paragraph = _paragraph_of(contract_text, start)
         span = contract_text[start : min(end, start + MAX_SPAN)]
