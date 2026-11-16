@@ -1184,14 +1184,19 @@ def test_demote_rule_deduped_when_finding_exists(monkeypatch) -> None:
 
 
 def test_run_check_feeds_rule_checks_and_facts_into_payload(monkeypatch) -> None:
-    """接线：图跑完后的 `rule_checks` 与 `facts` 必须进条款判定 payload（P2-3）。"""
+    """接线：图跑完后的 `rule_checks` 与 `facts` 必须进条款判定 payload（P2-3）。
+
+    用"试用期期限"条款而不是 `CONTRACT`：003 第 5.3 节删掉 4 条规则后，`CONTRACT` 里的
+    社保放弃条款已无对应规则（SIL-58 / SIL-86 两条随之下线），而 `TR-PROBATION-TERM-EXCEED`
+    的候选法条含 LCL-19，与 `R-PROBATION-*` 的 `statute_id` 对齐，接线仍有信号可验。
+    """
     llm = _CapturingWiringLLM()
     _run_check_with(
         monkeypatch,
-        PROBATION_CONTRACT,
+        "乙方试用期为六个月。\n",
         enabled=True,
         llm=llm,
-        facts={"term_years": "3"},
+        facts={"term_years": "1"},
     )
 
     assert llm.payloads, "应当发起至少一次条款判定"
@@ -1199,7 +1204,7 @@ def test_run_check_feeds_rule_checks_and_facts_into_payload(monkeypatch) -> None
     payload = next(p for p in llm.payloads if "candidates" in p)
     assert payload["rule_checks"], "规则校验信号应随 payload 下发"
     assert all(row["status"] in {"mismatch", "needs_fact"} for row in payload["rule_checks"])
-    assert payload["fact_sheet"]["term_years"] == "3"
+    assert payload["fact_sheet"]["term_years"] == "1"
 
 
 # ---------- 落库 ----------

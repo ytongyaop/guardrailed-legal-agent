@@ -651,10 +651,10 @@ task = CheckTask(
     enterprise_id="E1",
     undetermined=[
         UndeterminedRule(
-            rule_id="R-SI-REGISTER-30D",
-            name="应自用工之日起 30 日内办理社会保险登记",
-            statute_id="SIL-58",
-            missing_fields=("days_to_si_register",),
+            rule_id="R-PROBATION-ONCE",
+            name="同一用人单位与同一劳动者只能约定一次试用期",
+            statute_id="LCL-19",
+            missing_fields=("probation_times",),
             reason="field_missing",
         )
     ],
@@ -685,12 +685,12 @@ def test_result_splits_unmet_statutory_and_missing_facts(tmp_path) -> None:
     texts = _all_text(at)
     assert "未约定每月发薪次数，无法判断是否满足“工资至少每月支付一次”" in texts
     assert "《工资支付暂行规定》第七条" in texts
-    assert "社保登记超期天数" in texts
+    assert "约定试用期次数" in texts
     assert "另有 8 条规则因合同未约定而适用法定标准。" in texts
     assert "未能判定的规则" not in texts
     # 互斥：未约定项不进「需补充事实」，合同外事实不进「合同未约定」
     assert texts.count("每月发薪次数") == 1
-    assert texts.count("社保登记超期天数") == 1
+    assert texts.count("约定试用期次数") == 1
 
 
 def test_result_top_admits_incomplete_coverage(tmp_path) -> None:

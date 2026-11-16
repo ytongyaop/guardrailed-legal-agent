@@ -218,24 +218,22 @@ def test_absence_policy_splits_unmet_from_undetermined() -> None:
     assert [u.rule_id for u in unmet] == ["R-WPR-MONTHLY-PAY"]
     assert unmet[0].fields == ("pay_times_per_month",)
     assert unmet[0].statute_id == "WPR-7"
-    # 没写加班倍率 / 年假 / 社保罚款 → 按法定标准适用，不出现
+    # 没写加班倍率 / 未休年假补偿 → 按法定标准适用，不出现
     for rule_id in ("R-OT-WEEKDAY-150", "R-OT-RESTDAY-200", "R-OT-HOLIDAY-300", "R-ALI-UNUSED-300"):
         assert rule_id not in {u.rule_id for u in undetermined}
         assert rule_id not in {u.rule_id for u in unmet}
-    # 留下的只有合同外事实
+    # 留下的只有合同外事实（`R-WRITTEN-1M` / `R-NONCOMPETE-UNPAID-3M` / `R-SI-REGISTER-30D`
+    # 已随 003 第 5.3 节瘦身下线，不再出现在任何一条旁路）
     assert {u.rule_id for u in undetermined} == {
         "R-PROBATION-ONCE",
-        "R-WRITTEN-1M",
-        "R-NONCOMPETE-UNPAID-3M",
-        "R-SI-REGISTER-30D",
         "R-AL-5D",
         "R-AL-10D",
         "R-AL-15D",
     }
     assert items == []
-    assert out.get("statutory_na") == 9
+    assert out.get("statutory_na") == 8
     assert coverage is not None
-    assert coverage.not_applicable == 11
+    assert coverage.not_applicable == 10
     assert coverage.unknown == len(undetermined) + len(unmet)
     assert (
         coverage.violated + coverage.compliant + coverage.not_applicable + coverage.unknown == coverage.total
@@ -250,7 +248,6 @@ def test_absence_policy_splits_unmet_from_undetermined() -> None:
         "ot_weekday_ratio": "150",
         "ot_restday_ratio": "200",
         "ot_holiday_ratio": "300",
-        "si_fine_multiple": "2",
     }
     _, _, _, filled_coverage = _rule_layer(filled)
     assert filled_coverage is not None

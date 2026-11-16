@@ -25,20 +25,19 @@ EVALSETS = (
 )
 
 # 随机事实的取值范围：按各字段在合同里的常见区间取整数，允许整字段缺失。
+# 键集合必须等于规则表的依赖字段集合（`test_dependency_fields_are_all_known` 守住）：
+# 003 第 5.3 节删掉 4 条规则后，`months_without_contract` / `noncompete_unpaid_months` /
+# `days_to_si_register` / `si_fine_multiple` 已无任何规则引用，随之下线。
 _NUMERIC_RANGES = {
     "probation_months": (0, 12),
     "probation_times": (0, 3),
     "probation_wage_ratio": (50, 120),
-    "months_without_contract": (0, 6),
     "noncompete_years": (0, 4),
-    "noncompete_unpaid_months": (0, 12),
     "ot_hours_day": (0, 6),
     "ot_hours_month": (0, 60),
     "ot_weekday_ratio": (100, 200),
     "ot_restday_ratio": (100, 250),
     "ot_holiday_ratio": (100, 400),
-    "days_to_si_register": (0, 90),
-    "si_fine_multiple": (0, 5),
     "annual_leave_days": (0, 20),
     "unused_leave_pay_ratio": (100, 400),
     "pay_times_per_month": (0, 4),

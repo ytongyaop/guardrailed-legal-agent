@@ -26,8 +26,8 @@ RULES_PATH = Path(data_path("rules/rules.yaml"))
 # 现有四态的枚举值：P0-2 不许改名、不许改值（三态校验是新增，不是替换）。
 LEGAL_STATUS_VALUES = ("violated", "compliant", "not_applicable", "unknown")
 
-# 规则表当前 20 条（P1-4 瘦身后应低于此值；条数变化必须别处显式同步）。
-EXPECTED_RULE_COUNT = 20
+# 规则表当前 16 条（规格 003 第 5.3 节瘦身后；条数变化必须别处显式同步）。
+EXPECTED_RULE_COUNT = 16
 
 _FULL_COMPLIANT: dict[str, str] = {
     "term_years": "3",
@@ -156,7 +156,7 @@ def test_every_rule_converts_with_required_fields() -> None:
             if check.status is RuleCheckStatus.NEEDS_FACT:
                 assert check.actual == ""
             seen.add(check.status)
-    # 20 条规则 × 5 组事实必须覆盖全部三态，否则映射有分支从未被跑到。
+    # 16 条规则 × 5 组事实必须覆盖全部三态，否则映射有分支从未被跑到。
     assert seen == set(RuleCheckStatus)
 
 

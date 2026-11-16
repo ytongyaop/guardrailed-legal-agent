@@ -53,8 +53,9 @@ MAX_EVIDENCE_CHARS = 100
 OVERLAP_MIN = 0.5  # 模型证据与候选 span 的重叠下限（低于此值降一级 + 记诊断，span 仍取候选）
 
 # 规格 003 第 13 章 P2-3：payload 每批下发 `rule_checks` 的条数上限。
-# 只发有决策价值的两种状态（`mismatch` / `needs_fact`），当前规则表 20 条里通常 ≤ 20 条；
+# 只发有决策价值的两种状态（`mismatch` / `needs_fact`），规模远小于规则表本身；
 # 留上限是防"规则表将来变大时 payload 无界增长"，截断必记诊断（模型据此知道自己没看全）。
+# 数值 20 保留不动：规则表 16 条（003 第 5.3 节瘦身后）已低于上限，本项上限因此有余量。
 MAX_RULE_CHECKS = 20
 RULE_CHECK_STATUSES = ("mismatch", "needs_fact")
 

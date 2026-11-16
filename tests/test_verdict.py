@@ -45,11 +45,12 @@ def _term(term_id: str, status: MissingStatus) -> MissingTerm:
 
 
 def _undetermined() -> UndeterminedRule:
+    """一条判不了的外部事实（`R-PROBATION-ONCE`：约定过几次试用期合同里抽不到）。"""
     return UndeterminedRule(
-        rule_id="R-SI-REGISTER-30D",
-        name="应自用工之日起 30 日内办理社会保险登记",
-        statute_id="SIL-58",
-        missing_fields=("days_to_si_register",),
+        rule_id="R-PROBATION-ONCE",
+        name="同一用人单位与同一劳动者只能约定一次试用期",
+        statute_id="LCL-19",
+        missing_fields=("probation_times",),
         reason="field_missing",
     )
 

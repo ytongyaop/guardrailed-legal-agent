@@ -32,11 +32,11 @@ NO_LLM = LLMConfig(api_key="")
 # 固定事实与 `tests/test_rule_check_dualwrite.py` 同一口径：结果只随合同正文变化。
 BASE_FACTS = {"employer_type": "有限责任公司", "written_contract": "是", "term_years": "3"}
 
-# 旧路径（无模型、无条款审查）实测的规则条目：改动前即这 5 条，顺序与规则表一致。
+# 旧路径（无模型、无条款审查）实测的规则条目：顺序与规则表一致。
+# 规格 003 P1-4 瘦身后少一条（`R-WRITTEN-1M` 下线：签约时限是行为义务，合同文本里抽不到）。
 LEGACY_ITEMS = [
     "R-PROBATION-6M",
     "R-PROBATION-WAGE-80",
-    "R-WRITTEN-1M",
     "R-NONCOMPETE-TERM-2Y",
     "R-OT-MONTH-36H",
 ]
@@ -44,18 +44,16 @@ LEGACY_ITEMS = [
 # 旧路径 + 有模型：试用期工资规则让位给同域的 TR-PROBATION-WAGE-BASE 结论，条目少一条。
 LEGACY_ITEMS_WITH_MODEL = [
     "R-PROBATION-6M",
-    "R-WRITTEN-1M",
     "R-NONCOMPETE-TERM-2Y",
     "R-OT-MONTH-36H",
 ]
 
-# 新路径实测（同一条款结论下）：2 条模型结论 + 3 条程序追加的数值复核条目。
+# 新路径实测（同一条款结论下）：2 条模型结论 + 2 条程序追加的数值复核条目。
 NEW_PATH_ITEM_IDS = [
     "CF-4-TR-PROBATION-TERM-EXCEED",
     "CF-4-TR-PROBATION-WAGE-BASE",
     "RC-R-NONCOMPETE-TERM-2Y",
     "RC-R-OT-MONTH-36H",
-    "RC-R-WRITTEN-1M",
 ]
 
 
@@ -196,7 +194,7 @@ def test_old_path_with_model_still_merges_clause_findings(monkeypatch: pytest.Mo
     assert [item.grade for item in task.items] == [""] * len(LEGACY_ITEMS_WITH_MODEL)  # 没有共识层字段
     assert [f.grade for f in task.clause_findings] == ["A", "A"]
     verdict = summarize_verdict(task)
-    assert verdict.risk_count == len(LEGACY_ITEMS_WITH_MODEL) + 2 == 6
+    assert verdict.risk_count == len(LEGACY_ITEMS_WITH_MODEL) + 2 == 5
 
 
 # ---------- 4. 新路径：items 只由共识层产出 ----------
@@ -226,7 +224,6 @@ def test_new_path_items_come_from_consensus(monkeypatch: pytest.MonkeyPatch) -> 
     assert [i.rule_id for i in review_items] == [
         "R-NONCOMPETE-TERM-2Y",
         "R-OT-MONTH-36H",
-        "R-WRITTEN-1M",
     ]
     assert all(i.grade == "C" for i in review_items)
     # 规则不再单独出条目：除 rule_check 复核条目外，没有"只有 rule_id"的条目
@@ -247,13 +244,13 @@ def test_new_path_verdict_does_not_double_count(monkeypatch: pytest.MonkeyPatch)
 
     clause_risk = sum(1 for f in task.clause_findings if f.grade in ("A", "B"))
     assert clause_risk == 2  # 确实存在会被旧算法再叠加一遍的 A 级结论
-    assert [i.grade for i in task.items] == ["A", "A", "C", "C", "C"]
+    assert [i.grade for i in task.items] == ["A", "A", "C", "C"]
     assert verdict.risk_count == 2
-    assert verdict.review_count == 3
+    assert verdict.review_count == 2
     assert verdict.status == "risk"
     assert verdict.headline == "发现 2 条与法条存在冲突的事项"
-    assert "5 条" not in verdict.headline  # C 级不能说成“冲突”
-    assert "3 条需人工复核" in verdict.details
+    assert "4 条" not in verdict.headline  # C 级不能说成“冲突”
+    assert "2 条需人工复核" in verdict.details
     # 同一 statute 只算一次：LCL-19 在 items 里只出现一次，不再因为条款 A 级重复计入
     item_statutes = [sid for item in task.items for sid in item.statute_ids]
     assert item_statutes.count("LCL-19") == 1
@@ -277,9 +274,9 @@ def test_two_paths_differ_and_are_self_consistent(monkeypatch: pytest.MonkeyPatc
     assert old.model_first is False and new.model_first is True
     old_verdict = summarize_verdict(old)
     new_verdict = summarize_verdict(new)
-    assert old_verdict.risk_count == 6  # 旧路径照旧：4 条规则条目 + 2 条条款 A
+    assert old_verdict.risk_count == 5  # 旧路径照旧：3 条规则条目 + 2 条条款 A
     assert (old_verdict.review_count, old_verdict.status) == (0, "risk")
-    assert (new_verdict.risk_count, new_verdict.review_count, new_verdict.status) == (2, 3, "risk")
+    assert (new_verdict.risk_count, new_verdict.review_count, new_verdict.status) == (2, 2, "risk")
 
 
 # ---------- 7. 落库与回读 ----------

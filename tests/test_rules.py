@@ -18,7 +18,7 @@ def _hits(facts: dict[str, str]) -> list[RuleHit]:
 
 def test_rules_loaded() -> None:
     rules = load_rules(RULES_PATH)
-    assert len(rules) == 20
+    assert len(rules) == 16  # 规格 003 第 5.3 节瘦身后 16 条（原 20 条）
     ids = {r.rule_id for r in rules}
     assert "R-PROBATION-6M" in ids
     assert "R-OT-WEEKDAY-150" in ids

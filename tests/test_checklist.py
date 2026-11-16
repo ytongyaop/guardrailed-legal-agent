@@ -27,6 +27,6 @@ def test_same_template_is_merged_with_union_sources() -> None:
 
 
 def test_different_templates_stay_separate() -> None:
-    suggestions = build_suggestions([_item("R-PROBATION-6M", "LCL-19"), _item("R-WRITTEN-1M", "LCL-10")])
+    suggestions = build_suggestions([_item("R-PROBATION-6M", "LCL-19"), _item("R-OT-DAILY-3H", "LL-41")])
     assert len(suggestions) == 2
     assert all(s.source_ids for s in suggestions)

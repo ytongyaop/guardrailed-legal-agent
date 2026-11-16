@@ -19,7 +19,9 @@ from mla.domain.slots import (
 
 RULES = load_rules(Path(data_path("rules/rules.yaml")))
 
-# 规则表实际依赖 19 个字段，加 2 项合同外事实（主体类型、是否书面订立）
+# 槽位 = `field_catalog` 全部字段（21 个，含 2 项合同外事实）。003 第 5.3 节瘦身后
+# 规则只依赖其中 15 个；另 4 个字段（未签书面合同月数 / 未付竞业补偿月数 / 社保登记超期天数 /
+# 社保罚款倍率）不再被任何规则引用，但仍在目录里、仍向用户追问，只是 needed_by 为空。
 EXPECTED_FIELDS = 21
 
 
@@ -29,12 +31,16 @@ def _fields_of(rule: RuleEntry) -> tuple[str, ...]:
 
 
 def test_field_set_is_complete() -> None:
-    """导出结果覆盖全部规则字段与两项合同外事实，一个不多一个不少。"""
+    """导出结果覆盖全部规则字段、全部目录字段与两项合同外事实，一个不多一个不少。"""
     slots = derive_slots(RULES, {})
     assert len(slots) == EXPECTED_FIELDS
+    slot_ids = {s.slot_id for s in slots}
     used = {f for rule in RULES for f in _fields_of(rule)}
-    assert used | set(EXTRA_SLOT_FIELDS) == {s.slot_id for s in slots}
-    assert len(used | set(EXTRA_SLOT_FIELDS)) == EXPECTED_FIELDS
+    # 规则依赖的字段一个都不能少（漏了等于追问不到、规则永远判不了）
+    assert used <= slot_ids
+    # 目录里的字段全在，且没有目录外的多余槽位
+    assert set(FIELD_NAMES) | set(EXTRA_SLOT_FIELDS) == slot_ids
+    assert len(slot_ids) == EXPECTED_FIELDS
 
 
 def test_blocking_slots_are_exactly_three() -> None:
@@ -62,7 +68,8 @@ def test_written_contract_has_no_rule_reference() -> None:
     by_id = {s.slot_id: s for s in derive_slots(RULES, {})}
     assert by_id["written_contract"].needed_by == ()
     assert by_id["employer_type"].needed_by == ()
-    assert by_id["months_without_contract"].needed_by == ("R-WRITTEN-1M",)
+    # `R-WRITTEN-1M` 已随 003 第 5.3 节下线：签约时限属行为义务，规则层不再引用该字段
+    assert by_id["months_without_contract"].needed_by == ()
 
 
 def test_filled_fields_are_dropped() -> None:

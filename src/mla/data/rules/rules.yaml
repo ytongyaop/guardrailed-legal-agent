@@ -1,4 +1,4 @@
-# 确定性规则表（首期 20 条）
+# 确定性规则表（16 条；规格 003 第 5.3 节瘦身后条数）
 #
 # 约定：
 #   1) op/threshold 描述"合法区间"：violated = not op(实际值, 阈值)
@@ -86,19 +86,7 @@
   evidence_span: "劳动者在试用期的工资不得低于本单位相同岗位最低档工资的80%或者不得低于劳动合同约定工资的80%"
   note: 劳动合同法实施条例第十五条；与劳动合同法第二十条一致
 
-# ---------- 书面合同（LCL-10）----------
-- rule_id: R-WRITTEN-1M
-  name: 未同时订立书面合同的，应自用工之日起 1 个月内订立
-  field: months_without_contract
-  op: "<="
-  threshold: 1
-  unit: 月
-  statute_id: LCL-10
-  severity: 硬性
-  effective_date: "2013-07-01"
-  evidence_span: "应当自用工之日起一个月内订立书面劳动合同"
-
-# ---------- 竞业限制（LCL-24 / J1-38）----------
+# ---------- 竞业限制（LCL-24）----------
 - rule_id: R-NONCOMPETE-TERM-2Y
   name: 竞业限制期限不得超过 2 年
   field: noncompete_years
@@ -109,17 +97,6 @@
   severity: 硬性
   effective_date: "2013-07-01"
   evidence_span: "竞业限制期限，不得超过二年"
-
-- rule_id: R-NONCOMPETE-UNPAID-3M
-  name: 因用人单位原因 3 个月未支付竞业限制补偿，劳动者可请求解除
-  field: noncompete_unpaid_months
-  op: "<"
-  threshold: 3
-  unit: 月
-  statute_id: J1-38
-  severity: 硬性
-  effective_date: "2021-01-01"
-  evidence_span: "因用人单位的原因导致三个月未支付经济补偿"
 
 # ---------- 工时与加班（LL-41 / LL-44）----------
 - rule_id: R-OT-DAILY-3H
@@ -176,29 +153,6 @@
   severity: 硬性
   effective_date: "2018-12-29"
   evidence_span: "支付不低于工资的百分之三百的工资报酬"
-
-# ---------- 社会保险（SIL-58 / SIL-86）----------
-- rule_id: R-SI-REGISTER-30D
-  name: 应自用工之日起 30 日内办理社会保险登记
-  field: days_to_si_register
-  op: "<="
-  threshold: 30
-  unit: 日
-  statute_id: SIL-58
-  severity: 硬性
-  effective_date: "2018-12-29"
-  evidence_span: "用人单位应当自用工之日起三十日内为其职工向社会保险经办机构申请办理社会保险登记"
-
-- rule_id: R-SI-FINE-CAP-3X
-  name: 逾期不缴社保的罚款不超过欠缴数额 3 倍
-  field: si_fine_multiple
-  op: "<="
-  threshold: 3
-  unit: 倍
-  statute_id: SIL-86
-  severity: 硬性
-  effective_date: "2018-12-29"
-  evidence_span: "处欠缴数额一倍以上三倍以下的罚款"
 
 # ---------- 带薪年休假（AL-3 / ALI-10）----------
 - rule_id: R-AL-5D

@@ -26,13 +26,12 @@ NO_LLM = LLMConfig(api_key="")
 # 固定事实：与 tests/test_missing_terms.py 同一口径，保证结果只随合同正文变化。
 BASE_FACTS = {"employer_type": "有限责任公司", "written_contract": "是", "term_years": "3"}
 
-# 改动前（双写前）实测条目：`sample_contract.txt` + `BASE_FACTS` 下规则通道的全部违规条目，
-# 顺序与规则表一致（`items` 由 `evaluate` 的结果顺序生成，不重排）。
-# 注：P1-4 删除 20 条中的 4 条后，`R-WRITTEN-1M` 不再在表内，此处应同步改为 4 条。
+# 规格 003 P1-4 瘦身后的实测条目：`sample_contract.txt` + `BASE_FACTS` 下规则通道的全部违规
+# 条目，顺序与规则表一致（`items` 由 `evaluate` 的结果顺序生成，不重排）。
+# 比瘦身前少 `R-WRITTEN-1M`（该规则随 5.3 下线：签约时限是行为义务，合同文本里抽不到）。
 SAMPLE_ITEMS = [
     "R-PROBATION-6M",
     "R-PROBATION-WAGE-80",
-    "R-WRITTEN-1M",
     "R-NONCOMPETE-TERM-2Y",
     "R-OT-MONTH-36H",
 ]

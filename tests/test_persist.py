@@ -490,4 +490,4 @@ def test_logs_are_newest_first(tmp_path) -> None:
 def test_statutes_and_rules_loaded(tmp_path) -> None:
     repo = _repo(tmp_path)
     assert len(repo.list_statutes()) >= 100
-    assert len(repo.list_rules()) == 20
+    assert len(repo.list_rules()) == 16  # 规格 003 第 5.3 节瘦身后 16 条

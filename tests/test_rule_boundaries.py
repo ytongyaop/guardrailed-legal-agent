@@ -1,13 +1,9 @@
-"""20 条确定性规则的阈值边界测试（P0-1 回归）。
+"""16 条确定性规则的阈值边界测试（P0-1 回归）。
 
-背景：`R-NONCOMPETE-UNPAID-3M` 原先写的是 `op: "<=", threshold: 3`，于是
-"满 3 个月未支付竞业限制补偿"被判成**合规**。法条原文是"因用人单位的原因导致
-**三个月**未支付经济补偿"（J1-38），边界应是 `< 3`——满三个月即触发。
-本文件对规则表逐条钉住阈值边界，防止同类"边界偏一格"的错误再犯。
-
-语义说明：`R-NONCOMPETE-UNPAID-3M`（"劳动者可请求解除"）本质是**权利触发**，
-不是"用人单位违规"。规则层目前只有合规 / 违规两态，所以它仍以 `VIOLATED`
-表达；语义上应读作"风险触发"，后续若引入规则类型字段（kind）再细分。
+背景：本文件起源于一次"边界偏一格"的真实错误——`R-NONCOMPETE-UNPAID-3M` 原先写的是
+`op: "<=", threshold: 3`，把"满 3 个月"判成**合规**。该规则已随规格 003 第 5.3 节瘦身
+下线（判的是履约状态，不是条款文字），同类风险却没消失：本文件继续对**当前 16 条**规则
+逐条钉住阈值边界，防止同类"边界偏一格"的错误再犯。
 
 做法：
 - 每条规则先按 `when_field` / `when_field2` / `when_mode` 构造一组**满足前提**的事实
@@ -32,8 +28,9 @@ from mla.domain.rules import RuleStatus, judge, load_rules, rule_applies
 
 RULES_PATH = Path(data_path("rules/rules.yaml"))
 
-# 规则表当前有 20 条；改条数必须同步改边界测试，否则下面会报错而不是悄悄漏测。
-EXPECTED_RULE_COUNT = 20
+# 规则表当前有 16 条（规格 003 第 5.3 节瘦身后）；改条数必须同步改边界测试，否则下面会
+# 报错而不是悄悄漏测。
+EXPECTED_RULE_COUNT = 16
 
 # 反向守卫用的白名单：op 必须能和数字阈值组成可判定的边界。
 ALLOWED_OPS = ("<", "<=", ">", ">=", "==", "!=")
@@ -161,12 +158,6 @@ def _expected_statuses(op: str) -> tuple[RuleStatus, RuleStatus, RuleStatus]:
     raise AssertionError(f"未知比较符 {op}")
 
 
-def _rule(rule_id: str) -> RuleEntry:
-    matches = [rule for rule in RULES if rule.rule_id == rule_id]
-    assert len(matches) == 1, rule_id
-    return matches[0]
-
-
 @pytest.mark.parametrize("rule", RULES, ids=[rule.rule_id for rule in RULES])
 def test_rule_boundary(rule: RuleEntry) -> None:
     """每条规则三组边界事实：低于阈值 / 等于阈值 / 高于阈值。"""
@@ -204,12 +195,3 @@ def test_every_rule_declares_valid_op_and_numeric_threshold() -> None:
         assert _as_number(row.get("threshold")) is not None, (
             f"{rule_id} 的 threshold 无法解析为数字: {row.get('threshold')!r}"
         )
-
-
-def test_noncompete_unpaid_boundary_regression() -> None:
-    """P0-1 回归：法条"三个月未支付"= 满三个月即触发，op 必须是 "<"。"""
-    rule = _rule("R-NONCOMPETE-UNPAID-3M")
-    assert rule.op == "<"
-    assert rule.threshold == 3
-    statuses = [judge(rule, {"noncompete_unpaid_months": value}).status for value in ("2", "3", "4")]
-    assert statuses == [RuleStatus.COMPLIANT, RuleStatus.VIOLATED, RuleStatus.VIOLATED]
