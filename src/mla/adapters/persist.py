@@ -719,6 +719,10 @@ class SqliteRepository:
             "source": item.source,
             "note": item.note,
             "statute_ids": list(item.statute_ids),
+            # 展示层字段（规格 003 P2-5）：落库后历史详情仍能按影响度分组，旧记录缺键时读回空串
+            "element_id": item.element_id,
+            "impact": item.impact,
+            "certainty": item.certainty,
         }
 
     @staticmethod
@@ -737,6 +741,8 @@ class SqliteRepository:
             "source": f.source,
             "need_facts": list(f.need_facts),
             "quote_statute": f.quote_statute,
+            "element_id": f.element_id,
+            "impact_suggest": f.impact_suggest,
         }
 
     @staticmethod
@@ -809,6 +815,10 @@ class SqliteRepository:
                 source=d.get("source", ""),
                 note=d.get("note", ""),
                 statute_ids=tuple(d.get("statute_ids", [])),
+                # 旧库没有这三个键：`.get` 默认空串，展示层按 grade 现算（不影响读库）
+                element_id=str(d.get("element_id", "") or ""),
+                impact=str(d.get("impact", "") or ""),
+                certainty=str(d.get("certainty", "") or ""),
             )
             for d in json.loads(row["items"] or "[]")
         ]
@@ -846,6 +856,8 @@ class SqliteRepository:
                     need_facts=tuple(d.get("need_facts", [])),
                     # 旧库记录没有这个键：`.get` 默认空串，反序列化不因新字段报错
                     quote_statute=str(d.get("quote_statute", "") or ""),
+                    element_id=str(d.get("element_id", "") or ""),
+                    impact_suggest=str(d.get("impact_suggest", "") or ""),
                 )
                 for d in json.loads(row["clause_findings"] or "[]")
             ],

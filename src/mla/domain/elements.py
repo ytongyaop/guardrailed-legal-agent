@@ -24,7 +24,7 @@ from ..config import data_path
 
 ELEMENT_IDS: tuple[str, ...] = tuple(f"EL-{i}" for i in range(1, 14))
 IMPACTS = ("高", "中", "低")
-FALLBACK_ELEMENT_ID = "EL-13"  # 兜底要素：前 12 项都没命中的段落（取"低"影响度）
+FALLBACK_ELEMENT_ID = "EL-13"  # 兜底要素：前 12 项都没命中的段落（数据 impact=中，见 elements.yaml）
 MIN_HINTS = 2
 MAX_HINTS = 5
 MIN_FOCUS = 3

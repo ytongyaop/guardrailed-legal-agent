@@ -971,3 +971,69 @@ def test_check_page_offers_contract_qa(tmp_path) -> None:
     assert "结论与依据（法条原文）" in _all_text(at)
     assert any("试用期最长不得超过六个月。" in m.value for m in at.markdown)
     assert _disclaimer_count(at) == 1, "问答结论同样只留底部一行免责"
+
+
+IMPACT_GROUP_SCRIPT = """
+from mla.adapters.persist import SqliteRepository
+from mla.config import Paths, data_path
+from mla.domain.models import CheckItem, CheckTask, ItemKind, TaskMode
+from mla.ui.app import _render_task
+
+repo = SqliteRepository(
+    paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
+    db_path=DB_PATH,
+)
+task = CheckTask(
+    task_id="T-IMPACT",
+    mode=TaskMode.CHECK,
+    enterprise_id="E1",
+    model_first=True,
+    clause_review=True,
+    items=[
+        CheckItem(
+            item_id="I-20", kind=ItemKind.RISK, clause_ref="20",
+            finding="拒绝调岗即解除劳动合同", source_id="LCL-35",
+            grade="A", source="trigger", element_id="EL-11",
+        ),
+        CheckItem(
+            item_id="I-30", kind=ItemKind.UNKNOWN, clause_ref="30",
+            finding="试用期工资基数未写明", source_id="LCL-20",
+            grade="C", source="trigger", element_id="EL-3",
+        ),
+        CheckItem(
+            item_id="I-46", kind=ItemKind.RISK, clause_ref="46",
+            finding="争议解决排除仲裁", source_id="LCL-77",
+            grade="A", source="trigger", element_id="EL-12",
+        ),
+        CheckItem(
+            item_id="I-2", kind=ItemKind.UNKNOWN, clause_ref="2",
+            finding="称谓前后不一致", source_id="LCL-17",
+            grade="C", source="trigger", element_id="EL-1",
+        ),
+    ],
+)
+_render_task(task, repo)
+"""
+
+
+def test_result_groups_by_impact_without_grade_letters(tmp_path) -> None:
+    """新路径按影响度分组：高 → 中 → 低；只标确定性，对外不出现 A/B/C。"""
+    script = IMPACT_GROUP_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
+    at = AppTest.from_string(script, default_timeout=60).run()
+    assert not at.exception
+
+    markdowns = [m.value for m in at.markdown]
+    indices = {title: markdowns.index(f"**{title}**") for title in ("高影响", "中影响", "低影响")}
+    assert indices["高影响"] < indices["中影响"] < indices["低影响"], markdowns
+
+    texts = _all_text(at)
+    for banned in ("A 级", "B 级", "C 级", "A 与法条明文冲突"):
+        assert banned not in texts, f"新路径仍出现内部分级字样：{banned}"
+
+    # 正文输出用普通样式；需补事实用灰色徽标弱化（两者都要出现，且分属不同影响度）
+    assert any("**正文输出**" in m for m in markdowns)
+    assert any(":gray-badge[需补事实]" in m for m in markdowns)
+    # 兜底要素 EL-1（低影响）的条目落在最后一组：分组标题之后才轮得到它
+    low_items = markdowns[indices["低影响"] :]
+    assert any("称谓前后不一致" in m for m in low_items)
+    assert not any("称谓前后不一致" in m for m in markdowns[: indices["低影响"]])

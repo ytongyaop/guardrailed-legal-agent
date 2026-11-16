@@ -300,6 +300,8 @@ def _run(
             deps,
         )
         items = _dedupe_demoted_rule(list(consensus_state.get("items") or []), clause_findings)
+        # 分级诊断（如模型影响度建议与要素值不一致）与条款审查诊断同口径落库，事后可审计。
+        clause_errors = clause_errors + [str(e) for e in (consensus_state.get("errors") or [])]
     else:
         # 旧路径不变：items = 规则条目，让位改成事后去重，写库前完成。
         items = _dedupe_demoted_rule(list(final.get("items") or []), clause_findings)

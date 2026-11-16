@@ -164,6 +164,10 @@ class CheckItem:
     （`trigger` / `model_extra`）与程序追加的数值复核条目（`rule_check`），`note` 是共识层
     给用户看的一句说明，`statute_ids` 保留全部引用条号（`source_id` 只放第一条）。
     旧路径（items 来自规则通道）这四项保持默认值，字段语义不变。
+
+    `element_id` / `impact` / `certainty` 是**展示层**字段（规格 003 第 3.4 节 / P2-5）：
+    影响度与确定性由 `domain/grading.py` 按要素与内部等级机械算出，模型不自由判；新路径由
+    共识层产出条目时填，旧路径保持空串（界面走旧渲染）。
     """
 
     item_id: str
@@ -178,6 +182,9 @@ class CheckItem:
     source: str = ""
     note: str = ""
     statute_ids: tuple[str, ...] = ()
+    element_id: str = ""  # 段落归类到的合同要素，如 EL-3
+    impact: str = ""  # 高 / 中 / 低（由要素决定）
+    certainty: str = ""  # 正文输出 / 需补事实（A/B → 正文输出，C → 需补事实）
 
 
 @dataclass
@@ -207,7 +214,10 @@ class ClauseFinding:
     - `trigger_id` 为空串表示模型自提（`source="model_extra"`），自提一律封顶 C 级；
     - `statute_ids` 已通过闭集核验：全部存在于法源库，触发器条目还需落在该候选的候选集内；
     - `quote_statute` 是模型摘抄的法条原文，第 3 道核验要求它归一化后是所引法条 `text` 的连续子串；
-      核验不过即被清空（空串 = 模型没抄或抄错），旧记录反序列化时同样为空串。
+      核验不过即被清空（空串 = 模型没抄或抄错），旧记录反序列化时同样为空串；
+    - `element_id` 是候选段落归类到的合同要素（规格 003 第 4.3 节），供展示层按要素取影响度；
+    - `impact_suggest` 是模型建议的影响度（可选，规格 6.2）：只作诊断，**不采信**，与要素值
+      不一致时展示仍取要素值并记诊断。
     """
 
     paragraph: int
@@ -219,6 +229,8 @@ class ClauseFinding:
     source: str = "trigger"  # trigger / model_extra
     need_facts: tuple[str, ...] = ()
     quote_statute: str = ""  # 模型引用的法条原文连续子串（第 3 道回声核验；空串表示未抄或已被清空）
+    element_id: str = ""  # 段落归类到的合同要素（EL-3 等；空串 = 无要素骨架/未归类）
+    impact_suggest: str = ""  # 模型建议的影响度（只记诊断，展示以要素值为准）
 
 
 @dataclass(frozen=True)

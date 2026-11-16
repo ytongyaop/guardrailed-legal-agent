@@ -94,6 +94,8 @@ def _conflict_review_counts(task: CheckTask) -> tuple[int, int]:
     """
     items = list(task.items or [])
     if bool(task.model_first):
+        # A/B 即对外"正文输出"（规格 3.4：A 与 B 合并展示，只服务六道核验与降级链），
+        # 其余（C 与无法定级）即"需补事实"；两级不混用、也不叠加条款 A/B。
         conflict = sum(1 for item in items if _item_grade(item) in _CONFLICT_GRADES)
         return conflict, len(items) - conflict
     return len(items) + _clause_risk_count(task), 0

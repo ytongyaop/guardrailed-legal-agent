@@ -193,6 +193,24 @@ def _paragraph_of(text: str, pos: int) -> int:
     return max(paragraph, 1)
 
 
+def _element_of(paragraph: int, contract_text: str, candidate: ClauseCandidate | None) -> str:
+    """段落 → 合同要素 ID（规格 003 第 4.3 节）。
+
+    与 payload 注入 `elements` 同一口径：非空行按 1 起编号，用 `classify_paragraph` 做
+    `section_hints` 匹配；全不命中落兜底 `EL-13`。展示层据此取影响度（`domain/grading.py`
+    会把兜底与未知要素一律按"中"处理），因此这里不改写归类结果。骨架缺失时返回空串。
+    """
+    lines = _non_empty_lines(contract_text)
+    if 0 < paragraph <= len(lines):
+        text = lines[paragraph - 1]
+    elif candidate is not None:
+        text = candidate.span
+    else:
+        return ""
+    element, _ = classify_paragraph(text, default_elements())
+    return element.element_id if element is not None else ""
+
+
 @lru_cache(maxsize=1)
 def _statute_library() -> dict[str, StatuteEntry]:
     """法源库（143 条）：只读一次，供 prompt 摘录与闭集核验共用。"""
@@ -341,7 +359,7 @@ def _elements_payload(
     - 归类按候选**所在段落**（`contract_text` 的非空行，与 `_outline` 同一分段口径）做
       `section_hints` 包含匹配，纯程序、可复算；
     - 命中的要素按骨架文件顺序输出，保证同一批输入得到同一份 payload；
-    - 全不命中落 `EL-13`（其他约定），段落号记进诊断——影响度会因此取"低"，事后要能看出是兜底；
+    - 全不命中落 `EL-13`（其他约定），段落号记进诊断——兜底要素按"中"处理，事后仍要能看出是兜底；
     - 骨架文件缺失（`elements` 为空）→ 空列表且候选不带 `element` 字段（回滚口径：
       删掉 `elements.yaml` 即不再注入，不必改调用方）。
     """
@@ -368,7 +386,7 @@ def _elements_payload(
         for paragraph in sorted(set(fallback_paragraphs)):
             message = (
                 f"第 {paragraph} 段未命中要素骨架的段落特征词，"
-                f"按 {FALLBACK_ELEMENT_ID}（其他约定）归类，影响度取低"
+                f"按 {FALLBACK_ELEMENT_ID}（其他约定）归类，影响度按兜底取中"
             )
             if message not in diagnostics:
                 diagnostics.append(message)
@@ -643,6 +661,9 @@ def _verify(
         source="trigger" if candidate is not None else "model_extra",
         need_facts=facts,
         quote_statute=quote,
+        element_id=_element_of(paragraph, contract_text, candidate),
+        # 模型建议的影响度只留作诊断：展示层以要素值为准（`domain/grading.to_display`）
+        impact_suggest=str(finding_raw.get("impact_suggest", "") or "").strip(),
     )
 
 

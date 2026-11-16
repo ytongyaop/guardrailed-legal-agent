@@ -14,6 +14,7 @@ from ..config import PolicyConfig, load_config
 from ..domain.boundary import classify_by_terms
 from ..domain.checklist import attach_cases
 from ..domain.field_catalog import field_absence, field_question
+from ..domain.grading import to_display
 from ..domain.missing import detect_missing_terms, load_missing_terms
 from ..domain.models import (
     CheckItem,
@@ -351,8 +352,12 @@ def _unique_item_id(base: str, used: set[str]) -> str:
     return item_id
 
 
-def _consensus_item(row: ConsensusRow, used: set[str]) -> CheckItem:
-    """一行对账结果 → 一个 `CheckItem`（等级、来源、说明、全部条号都留在条目上供展示）。"""
+def _consensus_item(row: ConsensusRow, used: set[str], diagnostics: list[str]) -> CheckItem:
+    """一行对账结果 → 一个 `CheckItem`（等级、来源、说明、全部条号都留在条目上供展示）。
+
+    展示层字段（`element_id` / `impact` / `certainty`）在这里一次算清：条目一旦离开共识层，
+    下游就只剩"排版"（规格 003 第 3.4 节：界面与导出都只消费 `DisplayLevel` 的结果）。
+    """
     finding = row.finding
     assert finding is not None  # 调用方已过滤 finding=None 的附注行
     grade = str(finding.grade or "").upper()
@@ -361,6 +366,13 @@ def _consensus_item(row: ConsensusRow, used: set[str]) -> CheckItem:
     rule_id = str(row.check.rule_id) if (is_review and row.check is not None) else ""
     base_id = f"RC-{rule_id}" if rule_id else f"CF-{paragraph}-{str(finding.trigger_id or 'extra')}"
     statute_ids = tuple(str(sid) for sid in finding.statute_ids)
+    level = to_display(
+        grade,
+        finding.element_id,
+        paragraph,
+        impact_suggest=finding.impact_suggest,
+        diagnostics=diagnostics,
+    )
     return CheckItem(
         item_id=_unique_item_id(base_id, used),
         kind=ItemKind.RISK if grade in _RISK_GRADES else ItemKind.UNKNOWN,
@@ -374,6 +386,9 @@ def _consensus_item(row: ConsensusRow, used: set[str]) -> CheckItem:
         source=str(finding.source or ""),
         note=row.note,
         statute_ids=statute_ids,
+        element_id=str(finding.element_id or ""),
+        impact=level.impact,
+        certainty=level.certainty,
     )
 
 
@@ -402,12 +417,14 @@ def consensus(state: CheckState, deps: Deps) -> CheckState:
         if current is None or _row_priority(row) < _row_priority(current):
             best[key] = row
     used: set[str] = set()
-    items = [_consensus_item(row, used) for row in best.values()]
+    diagnostics: list[str] = []
+    items = [_consensus_item(row, used, diagnostics) for row in best.values()]
     # 展示顺序固定：A → B → C，同等级按段落号升序、条目 ID 兜底（同一输入必然同一顺序）。
+    # 对外分组由 `domain/grading.sort_items` 在展示层再做一次（影响度 → 确定性 → 段落号）。
     items.sort(
         key=lambda item: (_GRADE_ORDER.get(item.grade, len(_GRADE_ORDER)), item.clause_ref, item.item_id)
     )
-    return {"items": items}
+    return {"items": items, "errors": diagnostics}
 
 
 def _source_statutes(state: CheckState, deps: Deps) -> list:

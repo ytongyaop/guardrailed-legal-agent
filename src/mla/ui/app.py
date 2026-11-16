@@ -29,6 +29,7 @@ from mla.adapters.persist import SqliteRepository
 from mla.config import LLMConfig, data_path, load_config
 from mla.domain.asking import candidate_fields
 from mla.domain.field_catalog import field_hint, field_name, field_question
+from mla.domain.grading import CERTAINTY_BODY, CERTAINTY_FACTS, display_of, sort_items
 from mla.domain.models import (
     MISSING_TERM_UNJUDGED_ID,
     ContractRecord,
@@ -67,8 +68,9 @@ st.set_page_config(
 DISCLAIMER_FALLBACK = "非法律意见，仅供参考；重大争议请咨询专业人士。"
 CASE_NOTE = "同类情形通常如何认定，不构成本案结论。"
 # 条款审查（存在性域）：等级徽标、片段截断与免责文案集中在此，结果页与历史详情共用。
-# 等级文案只说“与法条存在冲突”，不判“违法/无效”——与 RESULT_DISCLAIMER 的免责口径一致，
-# 也与 prompt 里“不要写该条款违法/无效”的硬性要求对齐。
+# **旧路径专用（`model_first=False`，回滚兼容）**：新路径按影响度分组、只标确定性，不出 A/B/C；
+# 等级文案只说"与法条存在冲突"，不判"违法/无效"——与 RESULT_DISCLAIMER 的免责口径一致，
+# 也与 prompt 里"不要写该条款违法/无效"的硬性要求对齐。
 CLAUSE_GRADES: tuple[tuple[str, str, str], ...] = (
     ("A", "A 与法条明文冲突", "red"),
     ("B", "B 显著失衡", "orange"),
@@ -76,6 +78,7 @@ CLAUSE_GRADES: tuple[tuple[str, str, str], ...] = (
 )
 CLAUSE_SPAN_LIMIT = 80
 # 合并展示的来源徽标：档位 0 = 规则确定性判定，1/2/3 = 条款审查的 A/B/C 级；
+# **旧路径专用（`model_first=False`，回滚兼容）**：新路径不出现 A/B/C（V18 只约束新路径）；
 # 排序口径与 Word 报告共用 `merge_findings`，避免界面与报告两处漂移。
 FINDING_SOURCE_BADGES: tuple[str, ...] = (
     "规则判定·确定性",
@@ -86,6 +89,12 @@ FINDING_SOURCE_BADGES: tuple[str, ...] = (
 FINDING_SOURCE_COLORS: tuple[str, ...] = ("blue", "red", "orange", "gray")
 # 模型主导路径（规格 003 P1-3）里程序追加的数值复核条目：它不是模型结论，徽标必须能区分出来。
 CONSENSUS_RULE_BADGE = "数值复核·需人工"
+# 分级两层（规格 003 第 3.4 节 / P2-5）：主分层按影响度分组，次分层只标确定性；
+# 内部 A/B/C 不再对外出现（A/B 合并为"正文输出"，C 为"需补事实"）。
+IMPACT_TITLES: tuple[tuple[str, str], ...] = (("高", "高影响"), ("中", "中影响"), ("低", "低影响"))
+CONSENSUS_HELP = "按影响度分组：高 / 中 / 低（影响度由合同要素决定）；每组内先列正文输出，再列需补事实。"
+# **旧路径专用（`model_first=False`，回滚兼容）**：新路径用上面的 CONSENSUS_HELP，不出 A/B/C。
+CLAUSE_HELP = "等级含义：A 与法条明文冲突，B 显著失衡，C 待确认；只表示与法条存在冲突的风险。"
 CLAUSE_NOT_REVIEWED_NOTE = "本次未做条款级审查，条款级风险未覆盖。"
 CLAUSE_CLEAR_NOTE = "本次条款级审查未发现可疑条款。"
 # 出现这些诊断说明审查没跑起来或整批输出不可用，只能说“未做”，不能说“未发现”
@@ -907,7 +916,7 @@ def _run_detail(task) -> str:
 
 
 def _grade_badge(grade: str) -> str:
-    """等级徽标；写法与历史页 `_status_badges` 的 markdown 徽标保持一致。"""
+    """等级徽标（**旧路径专用**，`model_first=False`，回滚兼容）；写法与历史页徽标保持一致。"""
     for key, label, color in CLAUSE_GRADES:
         if key == grade:
             return f":{color}-badge[{label}]"
@@ -950,7 +959,7 @@ def _render_unmet_terms(task, repo: SqliteRepository) -> None:
 
 
 def _render_clause_finding(finding, repo: SqliteRepository, *, badge: str = "") -> None:
-    """单条条款结论：来源与等级 → 片段 → 理由 → 依据原文 → 待补事实。"""
+    """**旧路径专用（`model_first=False`，回滚兼容）**：来源与等级 → 片段 → 理由 → 依据原文 → 待补事实。"""
     with st.container(border=True):
         head = _grade_badge(str(finding.grade))
         if badge:
@@ -984,23 +993,30 @@ def _render_clause_finding(finding, repo: SqliteRepository, *, badge: str = "") 
             st.caption("需补充事实：" + "、".join(finding.need_facts))
 
 
+def _certainty_mark(certainty: str) -> str:
+    """确定性标记：正文输出用普通样式；需补事实用灰色徽标弱化（不再用 A/B/C 字母）。"""
+    if certainty == CERTAINTY_BODY:
+        return "**正文输出**"
+    return f":gray-badge[{CERTAINTY_FACTS}]"
+
+
 def _render_consensus_item(item, repo: SqliteRepository) -> None:
-    """模型主导路径（P1-3）的单条目：等级徽标 → 片段 → 理由 → 依据。
+    """模型主导路径（P1-3）的单条目：确定性 → 片段 → 理由 → 依据。
 
     条目已由共识层产出（`items` 里就是最终结论），这里只排版，不再拿 `clause_findings`
     做二次合并——否则同一条模型结论会被渲染两遍。程序追加的数值复核条目（`source="rule_check"`）
-    没有合同段落，只给复核文案与依据。
+    没有合同段落，只给复核文案与依据。分组成"高/中/低影响"由 `_render_impact_groups` 负责，
+    这里不再显示内部 A/B/C 等级。
     """
     source = str(getattr(item, "source", "") or "")
-    grade = str(getattr(item, "grade", "") or "")
+    level = display_of(item)
     with st.container(border=True):
-        head = _grade_badge(grade) if grade else ""
+        head = _certainty_mark(level.certainty)
         if source == SOURCE_RULE_CHECK:
-            head = f":gray-badge[{CONSENSUS_RULE_BADGE}] {head}".strip()
+            head = f":gray-badge[{CONSENSUS_RULE_BADGE}] {head}"
         if source == "model_extra":
             head += "（模型自提，待人工确认）"
-        if head:
-            st.markdown(head)
+        st.markdown(head)
         paragraph = str(getattr(item, "clause_ref", "") or "")
         span = str(getattr(item, "evidence_text", "") or "")
         if span and paragraph:
@@ -1030,6 +1046,18 @@ def _render_consensus_item(item, repo: SqliteRepository) -> None:
                     st.caption(_statute_meta(statute))
         if item.note and item.note != item.finding:
             st.caption(item.note)
+
+
+def _render_impact_groups(items, repo: SqliteRepository) -> None:
+    """按影响度分组渲染（规格 003 第 3.4 节）：只渲染有内容的分组，组内顺序由 grading 决定。"""
+    ranked = [(display_of(item), item) for item in sort_items(items)]
+    for impact, title in IMPACT_TITLES:
+        group = [item for level, item in ranked if level.impact == impact]
+        if not group:
+            continue
+        st.markdown(f"**{title}**")
+        for item in group:
+            _render_consensus_item(item, repo)
 
 
 def _clause_review_note(task, clause_review: bool | None = None) -> str:
@@ -1287,15 +1315,15 @@ def _render_task(
     premise_groups = _group_undetermined(task.undetermined, "premise_missing")
 
     with st.container(border=True):
+        model_first = bool(getattr(task, "model_first", False))
         st.markdown(
             "#### :material/rule: 核对结论",
-            help="等级含义：A 与法条明文冲突，B 显著失衡，C 待确认；只表示与法条存在冲突的风险。",
+            help=CONSENSUS_HELP if model_first else CLAUSE_HELP,
         )
         findings = list(task.clause_findings or [])
-        if bool(getattr(task, "model_first", False)):
-            # 新路径：items 已是共识层结果（含模型结论与数值复核条目），不再二次合并。
-            for item in task.items:
-                _render_consensus_item(item, repo)
+        if model_first:
+            # 新路径：items 已是共识层结果（含模型结论与数值复核条目），按影响度分组渲染。
+            _render_impact_groups(task.items, repo)
         else:
             for rank, entry in merge_findings(task.items, findings):
                 if rank == 0:

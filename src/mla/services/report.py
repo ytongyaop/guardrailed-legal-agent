@@ -19,6 +19,7 @@ from docx.styles.style import ParagraphStyle
 
 from ..adapters.files import normalize_contract_name
 from ..domain.field_catalog import field_name
+from ..domain.grading import display_of, sort_items
 from ..domain.models import MISSING_TERM_UNJUDGED_ID, CheckTask, MissingStatus
 from ..domain.verdict import summarize_verdict
 from ..ports.repository import Repository
@@ -36,12 +37,15 @@ SPAN_LIMIT = 80
 CASE_HOLDING_LIMIT = 120
 CASE_NOTE = "同类情形通常如何认定，不构成本次结论；以裁判文书为准。"
 # 合并列表的来源标注：档位 0 = 规则确定性判定，1/2/3 = 模型审查的 A/B/C 级。
+# **旧路径专用（model_first=False，回滚兼容）**：新路径按影响度分组、只标确定性，不出现 A/B/C；
+# V18 的"无 A/B/C 字母"只约束新路径，本常量不在此列。
 FINDING_SOURCES = ("规则判定", "模型审查 A 级", "模型审查 B 级", "模型审查 C 级")
 CLAUSE_GRADE_RANK = {"A": 1, "B": 2, "C": 3}
 # 模型主导路径（规格 003 P1-3）：条目由共识层产出，程序追加的数值复核条目要单独标注来源。
-CONSENSUS_INTRO = "以下按等级排序：A 与法条明文冲突，B 显著失衡，C 待确认。"
+# 分级两层（第 3.4 节 / P2-5）：导出与界面同口径——按影响度分组、只标确定性，不出现 A/B/C。
+CONSENSUS_INTRO = "以下按影响度分组（高 → 中 → 低）：影响度由合同要素决定；同组内先列正文输出，再列需补事实。"
 CONSENSUS_RULE_SOURCE = "数值复核（需人工确认）"
-CONSENSUS_MODEL_SOURCE = "模型审查 {grade} 级"
+IMPACT_TITLES: tuple[tuple[str, str], ...] = (("高", "高影响"), ("中", "中影响"), ("低", "低影响"))
 
 
 def merge_findings(items, findings) -> list[tuple[int, Any]]:
@@ -61,7 +65,7 @@ def merge_findings(items, findings) -> list[tuple[int, Any]]:
 
 
 def _merged_paragraphs(doc: DocxDocument, task: CheckTask, repo: Repository, findings: list) -> bool:
-    """旧路径的结论区：规则条目 + 条款审查结论按严重度合并（页面与报告同一口径）。
+    """**旧路径专用（`model_first=False`，回滚兼容）**：规则条目 + 条款审查结论按严重度合并。
 
     返回是否真的写了内容（调用方据此决定是否要印“未发现风险”这句）。
     """
@@ -91,38 +95,65 @@ def _merged_paragraphs(doc: DocxDocument, task: CheckTask, repo: Repository, fin
 
 
 def _consensus_paragraphs(doc: DocxDocument, task: CheckTask, repo: Repository) -> bool:
-    """模型主导路径的结论区：逐条排版 `items`（不再调用 `merge_findings`，否则会重复）。"""
+    """模型主导路径的结论区：按影响度分组、逐条排版 `items`（不再调用 `merge_findings`，否则会重复）。
+
+    与界面同一口径（规格 003 第 3.4 节）：分组高 → 中 → 低，组内"正文输出 → 需补事实 → 段落号"，
+    每条只标确定性，不出现内部 A/B/C。
+    """
     if not task.items:
         return False
     doc.add_paragraph(CONSENSUS_INTRO)
-    for idx, item in enumerate(task.items, start=1):
-        source = str(getattr(item, "source", "") or "")
-        if source == SOURCE_RULE_CHECK:
-            _finding_paragraph(doc, f"{idx}. {CONSENSUS_RULE_SOURCE}：{item.finding}")
-        else:
-            grade = str(getattr(item, "grade", "") or "")
-            head = f"{idx}. {CONSENSUS_MODEL_SOURCE.format(grade=grade)}："
-            span = str(getattr(item, "evidence_text", "") or "")
-            paragraph = str(getattr(item, "clause_ref", "") or "")
-            if paragraph and span:
-                head += f"第 {paragraph} 段：{_clip(span)}"
-            else:
-                head += str(item.finding)
-            _finding_paragraph(doc, head)
-            if item.finding and span:
-                _meta_paragraph(doc, f"理由：{item.finding}")
-            if source == "model_extra":
-                _meta_paragraph(doc, "来源：模型自提，未经触发器命中，等级封顶 C，建议人工抽检确认。")
-        ids = list(getattr(item, "statute_ids", ()) or ())
-        if not ids and item.source_id:
-            ids = [item.source_id]
-        cites = "、".join(f"{_statute_label(repo, sid)}（{sid}）" for sid in ids)
-        _meta_paragraph(doc, f"依据：{cites or '未给出法条依据'}")
-        for sid in ids:
-            _statute_source_paragraph(doc, repo, sid)
-        if item.note and item.note != item.finding:
-            _meta_paragraph(doc, item.note)
+    ordered = [(display_of(item), item) for item in sort_items(task.items)]
+    idx = 0
+    for impact, title in IMPACT_TITLES:
+        group = [item for level, item in ordered if level.impact == impact]
+        if not group:
+            continue
+        _impact_heading(doc, title)
+        for item in group:
+            idx += 1
+            _consensus_item_paragraphs(doc, repo, item, idx)
     return True
+
+
+def _impact_heading(doc: DocxDocument, text: str) -> None:
+    """分组标题（报告内的小节，比一级标题更轻）。"""
+    p = doc.add_paragraph()
+    run = p.add_run(text)
+    run.bold = True
+    run.font.size = Pt(11)
+    run.font.name = FONT
+    _apply_ea(run)
+
+
+def _consensus_item_paragraphs(doc: DocxDocument, repo: Repository, item, idx: int) -> None:
+    """单条：确定性 → 片段/理由 → 依据原文。"""
+    source = str(getattr(item, "source", "") or "")
+    certainty = display_of(item).certainty
+    if source == SOURCE_RULE_CHECK:
+        _finding_paragraph(doc, f"{idx}. {CONSENSUS_RULE_SOURCE}（{certainty}）：{item.finding}")
+    else:
+        head = f"{idx}. {certainty}："
+        span = str(getattr(item, "evidence_text", "") or "")
+        paragraph = str(getattr(item, "clause_ref", "") or "")
+        if paragraph and span:
+            head += f"第 {paragraph} 段：{_clip(span)}"
+        else:
+            head += str(item.finding)
+        _finding_paragraph(doc, head)
+        if item.finding and span:
+            _meta_paragraph(doc, f"理由：{item.finding}")
+        if source == "model_extra":
+            _meta_paragraph(doc, "来源：模型自提，未经触发器命中，建议人工抽检确认。")
+    ids = list(getattr(item, "statute_ids", ()) or ())
+    if not ids and item.source_id:
+        ids = [item.source_id]
+    cites = "、".join(f"{_statute_label(repo, sid)}（{sid}）" for sid in ids)
+    _meta_paragraph(doc, f"依据：{cites or '未给出法条依据'}")
+    for sid in ids:
+        _statute_source_paragraph(doc, repo, sid)
+    if item.note and item.note != item.finding:
+        _meta_paragraph(doc, item.note)
 
 
 def _apply_ea(run) -> None:

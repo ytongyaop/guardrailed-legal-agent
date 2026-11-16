@@ -250,7 +250,7 @@ def test_unmatched_paragraph_falls_back_to_other_terms() -> None:
 
 
 def test_fallback_paragraph_recorded_in_diagnostics() -> None:
-    """兜底归类要把段落号写进诊断（影响度会因此取"低"，事后要能看出是兜底）。"""
+    """兜底归类要把段落号写进诊断（影响度按兜底取"中"，事后要能看出是兜底）。"""
     contract = "本合同一式两份，甲乙双方各执一份。\n"
     errors: list[str] = []
     payload = _payload(
