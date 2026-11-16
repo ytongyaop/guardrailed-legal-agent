@@ -4,8 +4,9 @@
 
 1. 候选由触发器层产出（`domain.clauses.detect_clauses`），本层**不做召回**；
 2. 每 `batch_size`（默认 5）条候选一次模型调用，批量判定，避免 20 条串行把耗时拖到 100 秒以上；
-3. `_verify` 逐条做程序核验：等级合法 → 证据在原文可定位 → 法条在库 → 触发器条目引用在候选闭集内；
-   A/B 级缺法条的降为 C（不丢弃），任一硬性不过即丢弃并记诊断；
+3. `_verify` 逐条做程序核验：等级合法 → 证据在原文可定位 → 法条在库（含 quote_statute 回声核验）→
+   触发器条目引用在候选闭集内；A 级缺 quote_statute 降 B，A/B 级缺法条的降为 C（不丢弃），
+   其余硬性不过即丢弃并记诊断；
 4. 模型可在候选之外自提发现（`extra`），**一律降为 C**、标 `source="model_extra"`、条数封顶。
 
 消融开关：`verify=False` 时跳过第 3 步的四道校验，等级与法条 ID 原样保留（含库外条号），
@@ -23,7 +24,7 @@ prompt 与解析同住本模块（与 `services/drafting.py` 同口径）；内�
 from __future__ import annotations
 
 import json
-from collections.abc import Container, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 from typing import Any
 
@@ -35,7 +36,9 @@ from ..domain.models import ClauseFinding, StatuteEntry
 from ..ports.generation import Generator
 
 GRADES = ("A", "B", "C")
-STATUTE_EXCERPT = 200  # 每条法条原文摘录上限（字符）
+# 单条法条原文注入上限（字符）：库内 143 条实测 max 567，故 600 足以整条注入；
+# 只有超出上限时才截断并在 payload 标 `truncated`，让模型知道自己没看全。
+STATUTE_FULL_MAX = 600
 MAX_REASON = 200
 MAX_FACTS = 5
 MAX_FACT_CHARS = 80
@@ -56,15 +59,18 @@ REVIEW_SYSTEM = """你是劳动合同条款风险审查助手。只输出 JSON �
 1. 每条候选只能从它自己的 candidate_statute_ids 里选法条，不得引用未列出的条号，不得编造条号。
 2. reason 只写冲突点，句式写"该约定与 X 条某某规定不符/存在冲突"；不要写"该条款无效""该条款违法"这类终局结论。
 3. evidence 必须从合同原文逐字连续抄写（10 到 80 字），不得改写、不得拼接、不得用省略号。
-4. A、B 级必须给法条 ID：只写 1 条最直接的依据（把最主要的那条放第一位）；
+4. quote_statute 必须是所引法条原文的一段连续子串（原样摘抄，不改写、不概括、不加省略号）。
+   A、B 级必填，抄与本次冲突最相关的那一段即可（对应 statute_ids 里第一顺位那条）；C 级可留空。
+   条文原文里没有的句子不能写进来；拿不准原文就降为 C，不要编造原文。
+5. A、B 级必须给法条 ID：只写 1 条最直接的依据（把最主要的那条放第一位）；
    确有两条并列且缺一不可时才写第二条，最多 2 条；
    不要罗列"可能相关"的条文，也不要为了兜底加引"合同无效"这类总则条款。
-5. need_facts 填"还要补什么事实才能定论"，A 级可留空。
-6. 候选之外若另有发现，放进 extra，最多 __MAX_EXTRA__ 条，grade 一律写 C。
-7. 没有把握就写 C，不要猜。
+6. need_facts 填"还要补什么事实才能定论"，A 级可留空。
+7. 候选之外若另有发现，放进 extra，最多 __MAX_EXTRA__ 条，grade 一律写 C。
+8. 没有把握就写 C，不要猜。
 
 输出格式：
-{"findings":[{"idx":0,"grade":"A","reason":"...","statute_ids":["LCL-35"],"evidence":"...","need_facts":[]}],"extra":[{"grade":"C","reason":"...","evidence":"...","statute_ids":[],"need_facts":[]}]}
+{"findings":[{"idx":0,"grade":"A","reason":"...","statute_ids":["LCL-35"],"quote_statute":"...","evidence":"...","need_facts":[]}],"extra":[{"grade":"C","reason":"...","evidence":"...","statute_ids":[],"quote_statute":"","need_facts":[]}]}
 """
 
 
@@ -162,20 +168,40 @@ def _statute_library() -> dict[str, StatuteEntry]:
     return {s.statute_id: s for s in rows}
 
 
+def _quote_in_statute(quote: str, statute_text: str) -> bool:
+    """模型抄的法条原文是否真在该条 `text` 里（归一化后为连续子串）。
+
+    归一化只消除**空白差异**：`_norm` 删掉全部空白字符（含换行），比"连续空白折叠为单空格"
+    更宽，但同样只动空白——与 `_locate` / `_overlap_ratio` 是同一口径，避免出现两套空白标准。
+    **不做**同义改写容错、不做模糊匹配：形似但不存在的仿写必须被拦住，否则回声核验没有意义。
+    """
+    norm_quote = _norm(quote)
+    if not norm_quote:
+        return False
+    return norm_quote in _norm(statute_text)
+
+
 def _statutes_payload(
     candidate: ClauseCandidate, library: Mapping[str, StatuteEntry]
-) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
+) -> list[dict[str, Any]]:
+    """候选法条全文（单条上限 `STATUTE_FULL_MAX`），超出上限才标 `truncated`。
+
+    旧口径只发前 200 字摘录，会把关键的但书 / 第二款截掉，模型据此判冲突容易判错；
+    改为整条注入后，`quote_statute` 才能逐字抄到"冲突点所在的那一句"。
+    """
+    out: list[dict[str, Any]] = []
     for sid in candidate.candidate_statute_ids:
         entry = library.get(sid)
         if entry is None:  # 触发器表已校验，这里只做防御：库缺条目时不塞空壳
             continue
+        text = entry.text or ""
         out.append(
             {
                 "statute_id": sid,
                 "law": entry.law_name,
                 "article": entry.article_no,
-                "text": (entry.text or "")[:STATUTE_EXCERPT],
+                "text": text[:STATUTE_FULL_MAX],
+                "truncated": len(text) > STATUTE_FULL_MAX,
             }
         )
     return out
@@ -263,6 +289,7 @@ def _unverified(
         )
     )
     reason = str(finding_raw.get("reason", "") or "").strip()[:MAX_REASON]
+    quote = str(finding_raw.get("quote_statute", "") or "").strip()
     raw_facts = finding_raw.get("need_facts") or []
     facts = tuple(
         str(x).strip()[:MAX_FACT_CHARS]
@@ -279,6 +306,8 @@ def _unverified(
         trigger_id=candidate.trigger_id if candidate is not None else "",
         source="trigger" if candidate is not None else "model_extra",
         need_facts=facts,
+        # 消融臂原样保留模型抄的法条原文（不清空、不降级），供评测度量"没有核验层会输出什么"
+        quote_statute=quote,
     )
 
 
@@ -286,7 +315,7 @@ def _verify(
     finding_raw: dict[str, Any],
     candidate: ClauseCandidate | None,
     contract_text: str,
-    library_ids: Container[str],
+    library: Mapping[str, StatuteEntry],
     *,
     errors: list[str] | None = None,
     verify: bool = True,
@@ -294,7 +323,9 @@ def _verify(
     """单条程序核验：任一硬性不过返回 None（丢弃）；软性问题降级或只记诊断。
 
     硬性（丢弃）：等级不是 A/B/C；证据无法在原文定位；引用法条不在库；触发器条目引用越出候选闭集。
-    软性（保留）：A/B 级缺法条 → 降为 C；模型证据与候选片段重叠不足 → span 仍取候选片段。
+    软性（保留）：A/B 级缺法条 → 降为 C；A 级缺 quote_statute（第 1 道三件套）→ 降为 B；
+    quote_statute 不是所引法条原文的连续子串（第 3 道回声核验）→ 清空该引用，A 级随之降 B；
+    模型证据与候选片段重叠不足 → span 仍取候选片段。
     `verify=False` 直接走 `_unverified`（消融的 model_raw 臂），不做任何校验。
     """
     if not verify:
@@ -318,7 +349,7 @@ def _verify(
         diagnostics.append(f"{tag}：statute_ids 不是列表，已丢弃")
         return None
     ids = tuple(dict.fromkeys(str(x).strip() for x in raw_ids if str(x).strip()))
-    unknown = [sid for sid in ids if sid not in library_ids]
+    unknown = [sid for sid in ids if sid not in library]
     if unknown:
         diagnostics.append(f"{tag}：引用了法源库中不存在的条号 {' / '.join(unknown)}，已丢弃")
         return None
@@ -329,10 +360,30 @@ def _verify(
             diagnostics.append(f"{tag}：引用越出候选闭集 {' / '.join(outside)}，已丢弃")
             return None
 
+    # 第 3 道（加严）：quote_statute 必须是所引法条 text 归一化后的连续子串。
+    # 抄错 / 仿写只清空引用、不丢整条——结论的证据已在第 2 道核验过在原文可定位，
+    # 硬性丢弃留给"证据定位不到"这类不可修正的失败。
+    quote = str(finding_raw.get("quote_statute", "") or "").strip()
+    if quote and not ids:
+        diagnostics.append(f"{tag}：第 3 道核验：quote_statute 无对应法条（statute_ids 为空），已清空该引用")
+        quote = ""
+    elif quote and not any(_quote_in_statute(quote, library[sid].text or "") for sid in ids):
+        diagnostics.append(
+            f"{tag}：第 3 道核验：quote_statute 不是所引法条（{' / '.join(ids)}）原文的连续子串，已清空该引用"
+        )
+        quote = ""
+
     grade = raw_grade if candidate is not None else "C"  # 模型自提一律封顶 C，不采信其等级
     if grade in ("A", "B") and not ids:
         diagnostics.append(f"{tag}：{grade} 级没有法条依据，已降为 C")
         grade = "C"
+    # 第 1 道（加严）：A 级要求 statute_ids + evidence + quote_statute 三件套。
+    # evidence 已在第 2 道核验可定位、ids 已过库与闭集，故此处能触发缺件的只有 quote_statute；
+    # 缺则降 B（逐级降，不丢整条）。B 级缺 quote_statute 沿用现规则：保留 B、不降级
+    # （P2-2 的 L3.2 行为校验才会对 B 级缺失判返工）。
+    if grade == "A" and not quote:
+        diagnostics.append(f"{tag}：第 1 道核验：A 级缺 quote_statute（法条原文摘录），已降为 B")
+        grade = "B"
 
     start, end = located
     if candidate is not None:
@@ -365,6 +416,7 @@ def _verify(
         trigger_id=candidate.trigger_id if candidate is not None else "",
         source="trigger" if candidate is not None else "model_extra",
         need_facts=facts,
+        quote_statute=quote,
     )
 
 
@@ -372,7 +424,7 @@ def _collect(
     raw: dict[str, Any],
     batch: Sequence[ClauseCandidate],
     contract_text: str,
-    library_ids: Container[str],
+    library: Mapping[str, StatuteEntry],
     diagnostics: list[str],
     seen: set[tuple[int, str]],
     batch_no: int,
@@ -393,7 +445,7 @@ def _collect(
             if isinstance(idx, bool) or not isinstance(idx, int) or not 0 <= idx < len(batch):
                 diagnostics.append(f"第 {batch_no} 批：idx 越界（{idx}），已丢弃")
                 continue
-            finding = _verify(row, batch[idx], contract_text, library_ids, errors=diagnostics, verify=verify)
+            finding = _verify(row, batch[idx], contract_text, library, errors=diagnostics, verify=verify)
             if finding is None:
                 continue
             key = (finding.paragraph, finding.trigger_id)
@@ -443,7 +495,6 @@ def review_clauses(
         return ()
 
     library: Mapping[str, StatuteEntry] = statutes if statutes is not None else _statute_library()
-    library_ids = set(library)
     size = max(1, int(batch_size))
     batches: Iterable[Sequence[ClauseCandidate]] = (
         candidates[i : i + size] for i in range(0, len(candidates), size)
@@ -462,9 +513,7 @@ def review_clauses(
         if not isinstance(raw, dict):
             diagnostics.append(f"第 {batch_no} 批：模型输出不是 JSON 对象，已忽略")
             continue
-        found, rows = _collect(
-            raw, batch, contract_text, library_ids, diagnostics, seen, batch_no, verify=verify
-        )
+        found, rows = _collect(raw, batch, contract_text, library, diagnostics, seen, batch_no, verify=verify)
         out.extend(found)
         extra_rows.extend(rows)
 
@@ -480,7 +529,7 @@ def review_clauses(
         if kept >= limit:
             overflow += 1
             continue
-        finding = _verify(row, None, contract_text, library_ids, errors=diagnostics, verify=verify)
+        finding = _verify(row, None, contract_text, library, errors=diagnostics, verify=verify)
         if finding is None:
             continue
         if _is_duplicate(finding, out):

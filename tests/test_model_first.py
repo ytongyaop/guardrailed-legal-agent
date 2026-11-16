@@ -60,7 +60,10 @@ NEW_PATH_ITEM_IDS = [
 
 
 class ConsensusLLM:
-    """假模型：条款判定固定给两条 A 级结论（一条与 R-PROBATION-6M 同条号，一条无规则对应）。"""
+    """假模型：条款判定固定给两条 A 级结论（一条与 R-PROBATION-6M 同条号，一条无规则对应）。
+
+    P2-1 起 A 级须带 quote_statute 三件套（否则第 1 道降 B），这里抄的是真实库内条文的连续子串。
+    """
 
     available = True
     usage_in = 0
@@ -79,6 +82,7 @@ class ConsensusLLM:
                             "grade": "A",
                             "reason": "该约定与第十九条关于试用期期限的规定不符",
                             "statute_ids": ["LCL-19"],
+                            "quote_statute": "劳动合同期限三个月以上不满一年的，试用期不得超过一个月",
                             "evidence": candidate["span"],
                             "need_facts": [],
                         }
@@ -90,6 +94,10 @@ class ConsensusLLM:
                             "grade": "A",
                             "reason": "该约定与第二十条关于试用期工资的规定不符",
                             "statute_ids": ["LCL-20"],
+                            "quote_statute": (
+                                "劳动者在试用期的工资不得低于本单位相同岗位最低档工资"
+                                "或者劳动合同约定工资的百分之八十"
+                            ),
                             "evidence": candidate["span"],
                             "need_facts": [],
                         }

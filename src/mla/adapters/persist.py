@@ -736,6 +736,7 @@ class SqliteRepository:
             "trigger_id": f.trigger_id,
             "source": f.source,
             "need_facts": list(f.need_facts),
+            "quote_statute": f.quote_statute,
         }
 
     @staticmethod
@@ -843,6 +844,8 @@ class SqliteRepository:
                     trigger_id=str(d.get("trigger_id", "")),
                     source=str(d.get("source", "trigger")),
                     need_facts=tuple(d.get("need_facts", [])),
+                    # 旧库记录没有这个键：`.get` 默认空串，反序列化不因新字段报错
+                    quote_statute=str(d.get("quote_statute", "") or ""),
                 )
                 for d in json.loads(row["clause_findings"] or "[]")
             ],

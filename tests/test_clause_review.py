@@ -83,6 +83,10 @@ def _statute(sid: str, text: str = "用人单位与劳动者协商一致，可�
 
 LIBRARY = {sid: _statute(sid) for sid in ("LCL-35", "LCL-39", "LCL-26", "LCL-31", "J2-19", "SIL-58")}
 
+# P2-1：A 级要求 statute_ids + evidence + quote_statute 三件套，缺 quote 会降 B。
+# 这里用假库条文的真实子串（也是真实劳动合同法第三十五条的子串），断言里的 A 级才成立。
+QUOTE_35 = "用人单位与劳动者协商一致，可以变更劳动合同约定的内容"
+
 
 def _finding(**over: Any) -> dict[str, Any]:
     row: dict[str, Any] = {
@@ -92,6 +96,7 @@ def _finding(**over: Any) -> dict[str, Any]:
         "statute_ids": ["LCL-35"],
         "evidence": TRANSFER_SPAN,
         "need_facts": [],
+        "quote_statute": QUOTE_35,
     }
     row.update(over)
     return row
@@ -569,7 +574,7 @@ def test_verify_directly_rejects_without_candidate_set() -> None:
         _finding(grade="B", statute_ids=["LCL-26"], evidence=SI_SPAN),
         None,
         CONTRACT,
-        {"LCL-26"},
+        LIBRARY,
         errors=errors,
     )
     assert isinstance(finding, ClauseFinding)

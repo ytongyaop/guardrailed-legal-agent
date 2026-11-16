@@ -205,7 +205,9 @@ class ClauseFinding:
     - `grade`：A 明确冲突（法条明文禁止、无需补事实）/ B 显著失衡（需补事实或含裁量）/ C 待确认；
     - `span` 一律取自触发器候选片段（不采信模型改写的定位），保证是合同原文子串；
     - `trigger_id` 为空串表示模型自提（`source="model_extra"`），自提一律封顶 C 级；
-    - `statute_ids` 已通过闭集核验：全部存在于法源库，触发器条目还需落在该候选的候选集内。
+    - `statute_ids` 已通过闭集核验：全部存在于法源库，触发器条目还需落在该候选的候选集内；
+    - `quote_statute` 是模型摘抄的法条原文，第 3 道核验要求它归一化后是所引法条 `text` 的连续子串；
+      核验不过即被清空（空串 = 模型没抄或抄错），旧记录反序列化时同样为空串。
     """
 
     paragraph: int
@@ -216,6 +218,7 @@ class ClauseFinding:
     trigger_id: str = ""  # 空字符串表示模型自提
     source: str = "trigger"  # trigger / model_extra
     need_facts: tuple[str, ...] = ()
+    quote_statute: str = ""  # 模型引用的法条原文连续子串（第 3 道回声核验；空串表示未抄或已被清空）
 
 
 @dataclass(frozen=True)
