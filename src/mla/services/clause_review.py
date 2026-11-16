@@ -33,6 +33,7 @@ from ..adapters.rag import load_statutes
 from ..config import load_config
 from ..domain.clauses import MAX_SPAN, ClauseCandidate
 from ..domain.models import ClauseFinding, StatuteEntry
+from ..domain.rules import RuleCheck
 from ..ports.generation import Generator
 
 GRADES = ("A", "B", "C")
@@ -51,10 +52,21 @@ MIN_EVIDENCE_CHARS = 10
 MAX_EVIDENCE_CHARS = 100
 OVERLAP_MIN = 0.5  # 模型证据与候选 span 的重叠下限（低于此值降一级 + 记诊断，span 仍取候选）
 
+# 规格 003 第 13 章 P2-3：payload 每批下发 `rule_checks` 的条数上限。
+# 只发有决策价值的两种状态（`mismatch` / `needs_fact`），当前规则表 20 条里通常 ≤ 20 条；
+# 留上限是防"规则表将来变大时 payload 无界增长"，截断必记诊断（模型据此知道自己没看全）。
+MAX_RULE_CHECKS = 20
+RULE_CHECK_STATUSES = ("mismatch", "needs_fact")
+
 REVIEW_SYSTEM = """你是劳动合同条款风险审查助手。只输出 JSON 对象，不要解释，不要 Markdown。
 
-输入两部分：contract_paragraphs（候选条款及其邻近段落，按段落编号）与 candidates（本批待判定的可疑条款）。
+输入四部分：contract_paragraphs（候选条款及其邻近段落，按段落编号）、candidates（本批待判定的可疑条款）、
+rule_checks（程序按法条算出的数值校验结果）与 fact_sheet（用户已确认的用工事实）。
 对每条候选判断：该约定与它给出的候选法条是否存在冲突，并按风险强度定级。
+
+rule_checks 只列 mismatch（合同数值与法条不一致）与 needs_fact（缺事实、无法校验），它是程序的数值校验，
+不是结论；fact_sheet 是用户自报的结构化事实，用来判断哪些条款已具备定级条件。二者只作判断参考，
+不得直接复述为结论，也不得因为 rule_checks 标了 mismatch 就跳过自己的法条判断。
 
 定级口径：
 - A：候选法条明文禁止该约定，不需要补充事实即可判断；
@@ -232,13 +244,103 @@ def _non_empty_lines(text: str) -> list[str]:
     return [line.strip() for line in (text or "").splitlines() if line.strip()]
 
 
+def _rule_checks_payload(
+    checks: Sequence[RuleCheck] | None,
+    allowed_statutes: set[str] | None = None,
+    diagnostics: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """把校验信号压成 payload 形态：只发**与本批候选相关**且有决策价值的那几条。
+
+    口径（规格 003 第 6.1 / 第 13 章 P2-3）：
+    - **按候选相关法条过滤**：只留 `statute_id` 落在本批候选 `candidate_statute_ids` 并集里的
+      规则（`allowed_statutes`）。事实稀疏时规则表里绝大多数是 `needs_fact`，不过滤等于把全表
+      下发给每一批，既撑大 payload 又用无关规则的阈值干扰模型；`allowed_statutes=None` 表示不按
+      法条筛（只在直接调用 / 单测里用，生产路径一律传本批并集）。
+    - `ok` 不发：那是"这条数值没问题"，对判定没有增量，只会稀释模型注意力；
+    - 字段只留 `rule_id` / `status` / `field` / `expected` / `actual`；`evidence_span` 与
+      `statute_id` 不发——法条原文已在候选的 `statutes` 段里，重复一遍是噪音；
+    - 超过 `MAX_RULE_CHECKS` 截断并记诊断；过滤后每批的条数不同，同一句话只记一条
+      （否则 5 批会刷出 5 条重复诊断）。
+    """
+    rows: list[dict[str, str]] = []
+    for check in checks or ():
+        status = str(check.status)
+        if status not in RULE_CHECK_STATUSES:
+            continue
+        if allowed_statutes is not None and check.statute_id not in allowed_statutes:
+            continue
+        rows.append(
+            {
+                "rule_id": check.rule_id,
+                "status": status,
+                "field": check.field,
+                "expected": check.expected,
+                "actual": check.actual,
+            }
+        )
+    if len(rows) > MAX_RULE_CHECKS:
+        if diagnostics is not None:
+            message = (
+                f"rule_checks 按本批候选相关法条过滤后仍有 {len(rows)} 条，"
+                f"超出下发上限 {MAX_RULE_CHECKS} 条，已截断"
+            )
+            if message not in diagnostics:
+                diagnostics.append(message)
+        rows = rows[:MAX_RULE_CHECKS]
+    return rows
+
+
+def _fact_sheet(facts: Mapping[str, Any] | None, priority_fields: Sequence[str] = ()) -> dict[str, str]:
+    """把用户事实压成 payload 形态：只发已填的结构化事实，空值不发。
+
+    口径（规格 003 第 13 章 P2-3）：键名保持字段 id（不翻译，模型能从 checklist 看到中文说明）；
+    条数与单值长度沿用 `MAX_FACTS` / `MAX_FACT_CHARS`（与 `need_facts` 同一口径），
+    只收 `facts` 这类"字段 id → 短值"的结构化字典，不收任何自由文本。
+
+    **优先级**：`priority_fields`（本批 `rule_checks` 涉及的字段）先入选——这些字段直接参与数值
+    校验，被 `MAX_FACTS` 截掉会让模型只看到"缺事实"却看不到"缺哪一个"；其余已填事实按 `facts`
+    原顺序补齐。按插入顺序硬截断会把 `probation_wage_ratio` / `written_contract` 这类排在后位的
+    关键事实丢掉。
+    """
+    filled: dict[str, str] = {}
+    for key, value in (facts or {}).items():
+        text = str(value).strip()
+        if text:
+            filled[str(key)] = text
+
+    ordered: list[str] = []
+    for field in priority_fields:
+        if field in filled and field not in ordered:
+            ordered.append(field)
+    ordered.extend(key for key in filled if key not in ordered)
+
+    return {key: filled[key][:MAX_FACT_CHARS] for key in ordered[:MAX_FACTS]}
+
+
 def _payload(
     batch: Sequence[ClauseCandidate],
     contract_text: str,
     library: Mapping[str, StatuteEntry],
     max_extra: int,
+    *,
+    rule_checks: Sequence[RuleCheck] | None = None,
+    facts: Mapping[str, Any] | None = None,
+    diagnostics: list[str] | None = None,
 ) -> dict[str, Any]:
+    """单批输入。隐私口径不变：正文只发候选 ±2 行（`_outline`），不新增任何合同片段。
+
+    `rule_checks` / `fact_sheet` 是结构化数据（校验信号 + 用户事实），**每批一份**放在顶层，
+    不挂到单条候选上：同一条规则可能与多条候选相关，按候选重复会放大体积。
+
+    两者都**按本批候选**算：并集取本批所有候选的 `candidate_statute_ids`（每批候选不同，
+    不能全局算一次），只有引这些法条的规则才下发；`fact_sheet` 再按这些规则的 `field` 排序，
+    保证参与数值校验的字段不被 `MAX_FACTS` 截掉。
+    """
     focus = {c.paragraph for c in batch}
+    allowed_statutes = {sid for candidate in batch for sid in candidate.candidate_statute_ids}
+    rule_rows = _rule_checks_payload(rule_checks, allowed_statutes, diagnostics)
+    fact_sheet = _fact_sheet(facts, [row["field"] for row in rule_rows])
+
     candidates: list[dict[str, Any]] = []
     for idx, candidate in enumerate(batch):
         candidates.append(
@@ -256,6 +358,8 @@ def _payload(
     return {
         "contract_paragraphs": _outline(contract_text, focus),
         "candidates": candidates,
+        "rule_checks": rule_rows,
+        "fact_sheet": fact_sheet,
         "max_extra": max(0, int(max_extra)),
     }
 
@@ -532,11 +636,17 @@ def review_clauses(
     errors: list[str] | None = None,
     statutes: Mapping[str, StatuteEntry] | None = None,
     verify: bool = True,
+    rule_checks: Sequence[RuleCheck] | None = None,
+    facts: Mapping[str, Any] | None = None,
 ) -> tuple[ClauseFinding, ...]:
     """批量判定候选条款并做程序核验，返回按（段落、等级、触发器）稳定排序的结论。
 
     `errors` 是可选的外置诊断列表（调用方据此判断是否"条款审查未启用"）；
     `statutes` 可注入法源库（单测用假库，不读文件）。
+    `rule_checks` / `facts` 是随 payload 下发对照的结构化数据（规格 003 第 6.1 节 / 第 13 章 P2-3）：
+    校验信号只挑 mismatch / needs_fact，且只发与本批候选 `candidate_statute_ids` 相关的规则；
+    事实只发已填的字段 id，并优先保住参与校验的字段。两者**只作判断参考**，
+    不参与核验、不改变任何结论——模型是否采信由它自己决定（规则不是判官）。
     自提结论（`extra`）按**整份合同**封顶 `max_extra` 条，且与已命中条款重叠的不重复报
     （同一句里的多个问题由触发器按事由分别召回，不靠自提拆分，见 `_is_duplicate`）。
     `verify=False` 是**消融对照臂**（`model_raw`）：等级与法条 ID 原样保留，**不做自提封顶 C**
@@ -560,7 +670,19 @@ def review_clauses(
     out: list[ClauseFinding] = []
     extra_rows: list[dict[str, Any]] = []
     for batch_no, batch in enumerate(batches, start=1):
-        payload = json.dumps(_payload(batch, contract_text, library, max_extra), ensure_ascii=False)
+        # rule_checks / fact_sheet 按**本批候选**算（并集 / 字段优先级都随批变化），不能预先算一次。
+        payload = json.dumps(
+            _payload(
+                batch,
+                contract_text,
+                library,
+                max_extra,
+                rule_checks=rule_checks,
+                facts=facts,
+                diagnostics=diagnostics,
+            ),
+            ensure_ascii=False,
+        )
         try:
             raw = llm.generate(system, payload, {"type": "object"})
         except Exception as exc:  # noqa: BLE001 - 模型失败统一降级，不阻塞主流程

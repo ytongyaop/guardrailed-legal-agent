@@ -14,11 +14,17 @@ from mla.adapters.llm import LLMError
 from mla.config import LLMConfig, load_config
 from mla.domain.clauses import ClauseCandidate
 from mla.domain.models import ClauseFinding, Role, StatuteEntry, User
+from mla.domain.rules import RuleCheck, RuleCheckStatus
 from mla.services.clause_review import (
     MAX_EVIDENCE_CHARS,
+    MAX_FACT_CHARS,
+    MAX_FACTS,
+    MAX_RULE_CHECKS,
     MIN_EVIDENCE_CHARS,
+    REVIEW_SYSTEM,
     _locate,
     _overlap_ratio,
+    _payload,
     _verify,
     review_clauses,
 )
@@ -752,6 +758,261 @@ def test_payload_carries_statute_text_and_closed_set_rule() -> None:
     assert "最多 2 条" in system
 
 
+# ---------- P2-3：payload 增补 rule_checks / fact_sheet ----------
+
+
+def _check(
+    rule_id: str = "R-PROBATION-TERM",
+    status: RuleCheckStatus = RuleCheckStatus.MISMATCH,
+    actual: str = "12 个月",
+    statute_id: str = "LCL-35",
+    field: str = "probation_months",
+) -> RuleCheck:
+    """造一条校验信号；`statute_id` 默认取候选闭集内的 LCL-35，否则会被相关性过滤掉。"""
+    return RuleCheck(
+        rule_id=rule_id,
+        status=status,
+        field=field,
+        expected="<= 6 个月",
+        actual=actual,
+        statute_id=statute_id,
+        evidence_span="同一用人单位与同一劳动者只能约定一次试用期。",
+        severity="hard",
+    )
+
+
+def test_payload_rule_checks_carry_only_decision_relevant_statuses() -> None:
+    """只发 mismatch / needs_fact；ok 不发，且字段只留 5 个（不带 evidence_span / statute_id）。"""
+    checks = [
+        _check("R-MISMATCH", RuleCheckStatus.MISMATCH),
+        _check("R-NEEDS-FACT", RuleCheckStatus.NEEDS_FACT, actual=""),
+        _check("R-OK", RuleCheckStatus.OK),
+    ]
+    llm = StubLLM({"findings": []})
+    review_clauses(llm, [_candidate()], CONTRACT, statutes=LIBRARY, rule_checks=checks)
+
+    got = llm.payloads[0]["rule_checks"]
+    assert [row["rule_id"] for row in got] == ["R-MISMATCH", "R-NEEDS-FACT"]
+    assert {row["status"] for row in got} == {"mismatch", "needs_fact"}
+    assert set(got[0]) == {"rule_id", "status", "field", "expected", "actual"}
+    # 法条原文只在候选的 statutes 段里出现一次：payload 不得出现 evidence_span 的原文
+    assert "evidence_span" not in json.dumps(llm.payloads[0], ensure_ascii=False)
+    assert "R-OK" not in json.dumps(llm.payloads[0], ensure_ascii=False)
+
+
+def test_payload_rule_checks_filtered_by_batch_candidate_statutes() -> None:
+    """只发与本批候选 `candidate_statute_ids` 并集相关的规则；无关规则不下发（规格 6.1 口径）。
+
+    本批两条候选法条不同（LCL-35/39 与 LCL-26）→ 并集是三者，相关规则各留一条，
+    引 SIL-58 的规则不在任何候选的闭集里，必须被过滤掉。
+    """
+    checks = [
+        _check("R-REL-TRANSFER", statute_id="LCL-35"),
+        _check("R-REL-SI", statute_id="LCL-26", field="social_insurance"),
+        _check("R-UNRELATED", statute_id="SIL-58"),
+    ]
+    llm = StubLLM({"findings": []})
+    review_clauses(
+        llm,
+        [
+            _candidate(),
+            _candidate(paragraph=3, span=SI_SPAN, trigger_id="TR-SI-WAIVER", statutes=("LCL-26",)),
+        ],
+        CONTRACT,
+        statutes=LIBRARY,
+        rule_checks=checks,
+    )
+
+    got = llm.payloads[0]["rule_checks"]
+    assert [row["rule_id"] for row in got] == ["R-REL-TRANSFER", "R-REL-SI"]
+    assert "R-UNRELATED" not in json.dumps(llm.payloads[0], ensure_ascii=False)
+    # 每条候选自己的 statutes 段仍是自己的闭集（候选级闭集不变）
+    assert [c["candidate_statute_ids"] for c in llm.payloads[0]["candidates"]] == [
+        ["LCL-35", "LCL-39"],
+        ["LCL-26"],
+    ]
+
+
+def test_payload_rule_checks_empty_when_no_related_rule() -> None:
+    """有校验信号但都与本批候选无关 → 字段是 `[]`（不是缺字段）。"""
+    llm = StubLLM({"findings": []})
+    review_clauses(
+        llm,
+        [_candidate()],
+        CONTRACT,
+        statutes=LIBRARY,
+        rule_checks=[_check("R-UNRELATED", statute_id="SIL-58")],
+    )
+    assert llm.payloads[0]["rule_checks"] == []
+
+
+def test_payload_rule_checks_are_per_batch_not_per_candidate() -> None:
+    """每批都带同一份校验信号（不是挂到单条候选上）。"""
+    checks = [_check("R-MISMATCH", RuleCheckStatus.MISMATCH)]
+    llm = StubLLM({"findings": []}, {"findings": []})
+    review_clauses(
+        llm,
+        [_candidate(), _candidate(paragraph=3, span=SI_SPAN, trigger_id="TR-SI-WAIVER")],
+        CONTRACT,
+        batch_size=1,
+        statutes=LIBRARY,
+        rule_checks=checks,
+        facts={"term_years": "3"},
+    )
+
+    assert len(llm.payloads) == 2
+    for payload in llm.payloads:
+        assert payload["rule_checks"] == [
+            {
+                "rule_id": "R-MISMATCH",
+                "status": "mismatch",
+                "field": "probation_months",
+                "expected": "<= 6 个月",
+                "actual": "12 个月",
+            }
+        ]
+        assert payload["fact_sheet"] == {"term_years": "3"}
+        assert "rule_checks" not in payload["candidates"][0]
+        assert "fact_sheet" not in payload["candidates"][0]
+
+
+def test_payload_rule_checks_truncated_at_limit_with_diagnostic() -> None:
+    """超过 `MAX_RULE_CHECKS` 截断并记诊断；恰好等于上限时不记。"""
+    over = [_check(f"R-{i:02d}", RuleCheckStatus.MISMATCH) for i in range(MAX_RULE_CHECKS + 5)]
+    errors: list[str] = []
+    llm = StubLLM({"findings": []})
+    review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY, rule_checks=over)
+
+    assert len(llm.payloads[0]["rule_checks"]) == MAX_RULE_CHECKS
+    assert any("已截断" in e for e in errors), errors
+
+    at_limit = over[:MAX_RULE_CHECKS]
+    errors_at_limit: list[str] = []
+    llm2 = StubLLM({"findings": []})
+    review_clauses(
+        llm2, [_candidate()], CONTRACT, errors=errors_at_limit, statutes=LIBRARY, rule_checks=at_limit
+    )
+    assert len(llm2.payloads[0]["rule_checks"]) == MAX_RULE_CHECKS
+    assert not any("已截断" in e for e in errors_at_limit), errors_at_limit
+
+
+def test_payload_rule_checks_empty_when_none_passed() -> None:
+    """没有校验信号时字段是 `[]`（不是缺字段，模型不必猜）。"""
+    llm = StubLLM({"findings": []})
+    review_clauses(llm, [_candidate()], CONTRACT, statutes=LIBRARY)
+    assert llm.payloads[0]["rule_checks"] == []
+    assert llm.payloads[0]["fact_sheet"] == {}
+
+
+def test_payload_fact_sheet_skips_empty_values() -> None:
+    """只发已填事实：空串 / 纯空白不下发，键名保持字段 id。"""
+    llm = StubLLM({"findings": []})
+    review_clauses(
+        llm,
+        [_candidate()],
+        CONTRACT,
+        statutes=LIBRARY,
+        facts={"term_years": "3", "probation_months": "   ", "term_type": "固定期限"},
+    )
+    assert llm.payloads[0]["fact_sheet"] == {"term_years": "3", "term_type": "固定期限"}
+
+
+def test_payload_fact_sheet_caps_items_and_value_length() -> None:
+    """超过 `MAX_FACTS` 项只取前几项；单值截断到 `MAX_FACT_CHARS`。"""
+    long_value = "长" * (MAX_FACT_CHARS + 20)
+    facts = {"term_years": long_value, **{f"f{i}": str(i) for i in range(MAX_FACTS + 2)}}
+    llm = StubLLM({"findings": []})
+    review_clauses(llm, [_candidate()], CONTRACT, statutes=LIBRARY, facts=facts)
+
+    sheet = llm.payloads[0]["fact_sheet"]
+    assert len(sheet) == MAX_FACTS
+    assert sheet["term_years"] == long_value[:MAX_FACT_CHARS]
+    assert len(sheet["term_years"]) == MAX_FACT_CHARS
+
+
+def test_payload_fact_sheet_prioritises_fields_used_by_rule_checks() -> None:
+    """超过 5 项时优先保住本批 rule_checks 涉及的字段（排在第 6 位的 probation_months 不被截掉）。"""
+    facts = {
+        "f1": "1",
+        "f2": "2",
+        "f3": "3",
+        "f4": "4",
+        "f5": "5",
+        "probation_months": "12",
+    }
+    llm = StubLLM({"findings": []})
+    review_clauses(
+        llm,
+        [_candidate()],
+        CONTRACT,
+        statutes=LIBRARY,
+        rule_checks=[_check("R-PROBATION-TERM", field="probation_months", statute_id="LCL-35")],
+        facts=facts,
+    )
+
+    sheet = llm.payloads[0]["fact_sheet"]
+    assert list(sheet) == ["probation_months", "f1", "f2", "f3", "f4"]
+    assert len(sheet) == MAX_FACTS
+
+    # 对照：没有相关 rule_checks 时按原顺序截断，排在第 6 位的 probation_months 被丢掉
+    llm2 = StubLLM({"findings": []})
+    review_clauses(llm2, [_candidate()], CONTRACT, statutes=LIBRARY, facts=facts)
+    assert "probation_months" not in llm2.payloads[0]["fact_sheet"]
+
+
+PRIVACY_LINES = [
+    "甲方：某某科技有限公司，统一社会信用代码 914301MA00XXXXXX。",
+    "乙方：张三，身份证号码 4301221998XXXX2517。",
+    "第一条 本合同为固定期限劳动合同。",
+    "第二条 乙方岗位为算法助理。",
+    "第三条 甲方有权单方调整乙方工作岗位，乙方不得拒绝。",
+    "第四条 乙方月工资 8000 元。",
+    "第五条 乙方自愿放弃缴纳社会保险。",
+    "第六条 本合同一式两份。",
+]
+PRIVACY_CONTRACT = "\n".join(PRIVACY_LINES) + "\n"
+
+
+def test_payload_privacy_keeps_candidate_plus_minus_two_only() -> None:
+    """外发范围不变：只发候选 ±2 段；rule_checks / fact_sheet 不夹带任何合同正文。"""
+    llm = StubLLM({"findings": []})
+    review_clauses(
+        llm,
+        [_candidate(paragraph=5)],
+        PRIVACY_CONTRACT,
+        statutes=LIBRARY,
+        rule_checks=[_check("R-MISMATCH", RuleCheckStatus.MISMATCH)],
+        facts={"term_years": "3"},
+    )
+
+    payload = llm.payloads[0]
+    paragraphs = [int(line.split(".")[0]) for line in payload["contract_paragraphs"]]
+    assert paragraphs == [3, 4, 5, 6, 7]
+    dumped = json.dumps(payload, ensure_ascii=False)
+    assert payload["contract_paragraphs"][0].endswith(PRIVACY_LINES[2])
+    assert "身份证号码" not in dumped
+    assert "某某科技" not in dumped
+    assert "4301221998XXXX2517" not in dumped
+    assert PRIVACY_CONTRACT not in dumped
+
+
+def test_review_system_explains_new_fields_without_making_rules_judge() -> None:
+    """prompt 说明两个新字段的用途，且明确它们只作参考（不写"必须服从"）。"""
+    assert "rule_checks" in REVIEW_SYSTEM
+    assert "mismatch" in REVIEW_SYSTEM
+    assert "fact_sheet" in REVIEW_SYSTEM
+    assert "只作判断参考" in REVIEW_SYSTEM
+    assert "不得直接复述为结论" in REVIEW_SYSTEM
+    assert "必须服从" not in REVIEW_SYSTEM
+
+
+def test_payload_direct_call_defaults_to_empty_sections() -> None:
+    """`_payload` 直调（评测脚本等）不传新参数时两段仍存在且为空。"""
+    payload = _payload([_candidate()], CONTRACT, LIBRARY, 3)
+    assert payload["rule_checks"] == []
+    assert payload["fact_sheet"] == {}
+
+
 def test_verify_directly_rejects_without_candidate_set() -> None:
     """`_verify` 可独立调用：自提结论不检查候选集，但等级强制 C。"""
     errors: list[str] = []
@@ -839,7 +1100,24 @@ class _ProbationWageLLM:
         return labels[0] if labels else "不确定"
 
 
-def _run_check_with(monkeypatch: pytest.MonkeyPatch, contract: str, enabled: bool, llm: Any = None):
+class _CapturingWiringLLM(_WiringLLM):
+    """记录每次 payload 的接线用假模型：不产出结论，只看服务层传下了什么。"""
+
+    def __init__(self) -> None:
+        self.payloads: list[dict[str, Any]] = []
+
+    def generate(self, system: str, user: str, schema: dict[str, Any] | None = None) -> dict[str, Any]:
+        self.payloads.append(json.loads(user))
+        return {"findings": [], "extra": []}
+
+
+def _run_check_with(
+    monkeypatch: pytest.MonkeyPatch,
+    contract: str,
+    enabled: bool,
+    llm: Any = None,
+    facts: dict[str, str] | None = None,
+):
     monkeypatch.setenv("MLA_CLAUSE_REVIEW", "on" if enabled else "off")
     fake = llm if llm is not None else _WiringLLM()
     monkeypatch.setattr("mla.services.tasks.DeepSeekLLM", lambda cfg: fake)
@@ -854,6 +1132,7 @@ def _run_check_with(monkeypatch: pytest.MonkeyPatch, contract: str, enabled: boo
     return run_check(
         user=user,
         contract_text=contract,
+        facts=facts,
         llm=LLMConfig(api_key="test-key"),
         save=False,
         enterprise_id="E1",
@@ -902,6 +1181,25 @@ def test_demote_rule_deduped_when_finding_exists(monkeypatch) -> None:
 
     assert [f.trigger_id for f in task.clause_findings] == ["TR-PROBATION-WAGE-BASE"]
     assert all(i.rule_id != "R-PROBATION-WAGE-80" for i in task.items)
+
+
+def test_run_check_feeds_rule_checks_and_facts_into_payload(monkeypatch) -> None:
+    """接线：图跑完后的 `rule_checks` 与 `facts` 必须进条款判定 payload（P2-3）。"""
+    llm = _CapturingWiringLLM()
+    _run_check_with(
+        monkeypatch,
+        PROBATION_CONTRACT,
+        enabled=True,
+        llm=llm,
+        facts={"term_years": "3"},
+    )
+
+    assert llm.payloads, "应当发起至少一次条款判定"
+    # 同一次 run_check 里还有处理建议等其它模型调用，只挑条款判定那一批
+    payload = next(p for p in llm.payloads if "candidates" in p)
+    assert payload["rule_checks"], "规则校验信号应随 payload 下发"
+    assert all(row["status"] in {"mismatch", "needs_fact"} for row in payload["rule_checks"])
+    assert payload["fact_sheet"]["term_years"] == "3"
 
 
 # ---------- 落库 ----------

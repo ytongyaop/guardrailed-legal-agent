@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
+from typing import Any
 
 from ..adapters.extract import RegexExtractor
 from ..adapters.extract_llm import LLMExtractor
@@ -17,7 +19,7 @@ from ..config import LLMConfig, env_flag, load_config
 from ..domain.boundary import classify_by_terms
 from ..domain.clauses import detect_clauses, load_triggers
 from ..domain.models import CheckItem, CheckTask, ClauseFinding, OperationLog, TaskMode, User
-from ..domain.rules import load_rules
+from ..domain.rules import RuleCheck, load_rules
 from ..graph.build import build_graph
 from ..graph.nodes import Deps, consensus
 from ..graph.state import CheckState
@@ -206,13 +208,20 @@ def run_qa(
 
 
 def _review_clauses(
-    init: CheckState, deps: Deps, clause_review: bool | None = None
+    init: CheckState,
+    deps: Deps,
+    clause_review: bool | None = None,
+    *,
+    rule_checks: Sequence[RuleCheck] | None = None,
+    facts: Mapping[str, Any] | None = None,
 ) -> tuple[list[ClauseFinding], list[str], bool]:
     """条款审查（存在性域）：仅启用且有模型时执行；失败不阻塞主流程。
 
     `clause_review` 为 None 时按配置（`MLA_CLAUSE_REVIEW`），否则以调用方开关为准。
     第三个返回值是「本次是否真的跑了审查」——落库后历史详情据此区分「未做」与「未发现」；
     未配置模型 / 触发器读不出 / 没有合同正文都算没跑（False），命中不了候选算跑过（True）。
+    `rule_checks` / `facts` 来自图跑完后的最终状态，随 payload 下发给模型作判断参考
+    （规格 003 第 13 章 P2-3）；不传时 payload 是空列表 / 空对象，行为与改造前一致。
     """
     cfg = load_config()
     if not (cfg.clause_review.enabled if clause_review is None else clause_review):
@@ -237,6 +246,8 @@ def _review_clauses(
         batch_size=cfg.clause_review.batch_size,
         max_extra=cfg.clause_review.max_extra,
         errors=errors,
+        rule_checks=rule_checks,
+        facts=facts,
     )
     return list(findings), errors, True
 
@@ -267,7 +278,15 @@ def _run(
 ) -> CheckTask:
     started = time.perf_counter()
     final = build_graph(deps).invoke(init)
-    clause_findings, clause_errors, review_ran = _review_clauses(init, deps, clause_review)
+    # 条款审查要看到图跑完后的最终校验信号与事实梳理：只在此时它们才是完整的
+    # （`extract` 已把正则/模型抽取的事实并进 `facts`，`rule_check` 已产出 `rule_checks`）。
+    clause_findings, clause_errors, review_ran = _review_clauses(
+        init,
+        deps,
+        clause_review,
+        rule_checks=list(final.get("rule_checks") or []),
+        facts=dict(final.get("facts") or {}),
+    )
     # 路径判定只看"本次是不是核对 + 开关"：问答任务 items 恒为空，不走共识层，也不写这个标志。
     model_first = model_first_enabled() and str(init.get("mode") or "") == TaskMode.CHECK.value
     if model_first:
