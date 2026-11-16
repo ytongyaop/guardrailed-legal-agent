@@ -32,6 +32,13 @@ from ..adapters.extract import _norm
 from ..adapters.rag import load_statutes
 from ..config import load_config
 from ..domain.clauses import MAX_SPAN, ClauseCandidate
+from ..domain.elements import (
+    FALLBACK_ELEMENT_ID,
+    Element,
+    classify_paragraph,
+    default_elements,
+    element_payload,
+)
 from ..domain.models import ClauseFinding, StatuteEntry
 from ..domain.rules import RuleCheck
 from ..ports.generation import Generator
@@ -61,9 +68,12 @@ RULE_CHECK_STATUSES = ("mismatch", "needs_fact")
 
 REVIEW_SYSTEM = """你是劳动合同条款风险审查助手。只输出 JSON 对象，不要解释，不要 Markdown。
 
-输入四部分：contract_paragraphs（候选条款及其邻近段落，按段落编号）、candidates（本批待判定的可疑条款）、
-rule_checks（程序按法条算出的数值校验结果）与 fact_sheet（用户已确认的用工事实）。
+输入五部分：contract_paragraphs（候选条款及其邻近段落，按段落编号）、candidates（本批待判定的可疑条款）、
+rule_checks（程序按法条算出的数值校验结果）、fact_sheet（用户已确认的用工事实）与 elements（合同要素骨架）。
 对每条候选判断：该约定与它给出的候选法条是否存在冲突，并按风险强度定级。
+
+elements 告诉你这段属于合同的哪个部分、该盯哪些方向（候选的 element 字段指向其中一项）；
+它不是结论，也不要逐条复述。
 
 rule_checks 只列 mismatch（合同数值与法条不一致）与 needs_fact（缺事实、无法校验），它是程序的数值校验，
 不是结论；fact_sheet 是用户自报的结构化事实，用来判断哪些条款已具备定级条件。二者只作判断参考，
@@ -318,6 +328,55 @@ def _fact_sheet(facts: Mapping[str, Any] | None, priority_fields: Sequence[str] 
     return {key: filled[key][:MAX_FACT_CHARS] for key in ordered[:MAX_FACTS]}
 
 
+def _elements_payload(
+    batch: Sequence[ClauseCandidate],
+    contract_text: str,
+    elements: Sequence[Element] | None,
+    diagnostics: list[str] | None,
+) -> tuple[list[dict[str, object]], list[str]]:
+    """本批候选的要素骨架：只发**本批出现**的要素（通常 1–3 个，批内跨要素多时会更多），
+    不是 13 个全表。
+
+    口径（规格 003 第 4.3 / 6.1 节）：
+    - 归类按候选**所在段落**（`contract_text` 的非空行，与 `_outline` 同一分段口径）做
+      `section_hints` 包含匹配，纯程序、可复算；
+    - 命中的要素按骨架文件顺序输出，保证同一批输入得到同一份 payload；
+    - 全不命中落 `EL-13`（其他约定），段落号记进诊断——影响度会因此取"低"，事后要能看出是兜底；
+    - 骨架文件缺失（`elements` 为空）→ 空列表且候选不带 `element` 字段（回滚口径：
+      删掉 `elements.yaml` 即不再注入，不必改调用方）。
+    """
+    library = default_elements() if elements is None else tuple(elements)
+    if not library:
+        return [], ["" for _ in batch]
+
+    lines = _non_empty_lines(contract_text)
+    ids: list[str] = []
+    used: dict[str, Element] = {}
+    fallback_paragraphs: list[int] = []
+    for candidate in batch:
+        text = lines[candidate.paragraph - 1] if 0 < candidate.paragraph <= len(lines) else candidate.span
+        element, matched = classify_paragraph(text, library)
+        if element is None:
+            ids.append("")
+            continue
+        ids.append(element.element_id)
+        used[element.element_id] = element
+        if not matched:
+            fallback_paragraphs.append(candidate.paragraph)
+
+    if fallback_paragraphs and diagnostics is not None:
+        for paragraph in sorted(set(fallback_paragraphs)):
+            message = (
+                f"第 {paragraph} 段未命中要素骨架的段落特征词，"
+                f"按 {FALLBACK_ELEMENT_ID}（其他约定）归类，影响度取低"
+            )
+            if message not in diagnostics:
+                diagnostics.append(message)
+
+    rows = [element_payload(element) for element in library if element.element_id in used]
+    return rows, ids
+
+
 def _payload(
     batch: Sequence[ClauseCandidate],
     contract_text: str,
@@ -326,39 +385,45 @@ def _payload(
     *,
     rule_checks: Sequence[RuleCheck] | None = None,
     facts: Mapping[str, Any] | None = None,
+    elements: Sequence[Element] | None = None,
     diagnostics: list[str] | None = None,
 ) -> dict[str, Any]:
     """单批输入。隐私口径不变：正文只发候选 ±2 行（`_outline`），不新增任何合同片段。
 
-    `rule_checks` / `fact_sheet` 是结构化数据（校验信号 + 用户事实），**每批一份**放在顶层，
-    不挂到单条候选上：同一条规则可能与多条候选相关，按候选重复会放大体积。
+    `rule_checks` / `fact_sheet` / `elements` 都是结构化数据（校验信号、用户事实、要素骨架），
+    **每批一份**放在顶层，不挂到单条候选上：同一要素可能覆盖多条候选，按候选重复会放大体积。
 
-    两者都**按本批候选**算：并集取本批所有候选的 `candidate_statute_ids`（每批候选不同，
+    三者都**按本批候选**算：并集取本批所有候选的 `candidate_statute_ids`（每批候选不同，
     不能全局算一次），只有引这些法条的规则才下发；`fact_sheet` 再按这些规则的 `field` 排序，
-    保证参与数值校验的字段不被 `MAX_FACTS` 截掉。
+    保证参与数值校验的字段不被 `MAX_FACTS` 截掉；`elements` 只发本批候选段落命中的那几个，
+    每条候选的 `element` 字段指向其中一项。
     """
     focus = {c.paragraph for c in batch}
     allowed_statutes = {sid for candidate in batch for sid in candidate.candidate_statute_ids}
     rule_rows = _rule_checks_payload(rule_checks, allowed_statutes, diagnostics)
     fact_sheet = _fact_sheet(facts, [row["field"] for row in rule_rows])
+    element_rows, element_ids = _elements_payload(batch, contract_text, elements, diagnostics)
 
     candidates: list[dict[str, Any]] = []
     for idx, candidate in enumerate(batch):
-        candidates.append(
-            {
-                "idx": idx,
-                "paragraph": candidate.paragraph,
-                "span": candidate.span,
-                "trigger_id": candidate.trigger_id,
-                "name": candidate.name,
-                "severity_hint": candidate.severity_hint,
-                "candidate_statute_ids": list(candidate.candidate_statute_ids),
-                "statutes": _statutes_payload(candidate, library),
-            }
-        )
+        row: dict[str, Any] = {
+            "idx": idx,
+            "paragraph": candidate.paragraph,
+            "span": candidate.span,
+            "trigger_id": candidate.trigger_id,
+            "name": candidate.name,
+            "severity_hint": candidate.severity_hint,
+            "candidate_statute_ids": list(candidate.candidate_statute_ids),
+            "statutes": _statutes_payload(candidate, library),
+        }
+        # `element` 指向本批 `elements` 段里的一项；骨架缺失时不给这个字段（注入按不存在即不发降级）
+        if element_ids[idx]:
+            row["element"] = element_ids[idx]
+        candidates.append(row)
     return {
         "contract_paragraphs": _outline(contract_text, focus),
         "candidates": candidates,
+        "elements": element_rows,
         "rule_checks": rule_rows,
         "fact_sheet": fact_sheet,
         "max_extra": max(0, int(max_extra)),
