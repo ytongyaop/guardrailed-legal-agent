@@ -64,7 +64,7 @@ def _model_only(llm: DeepSeekLLM, question: str) -> list[tuple[str, ...]]:
 
 def main() -> None:
     cfg = load_config()
-    llm_cfg, _resolved = resolve_llm_config(cfg, legacy_db=cfg.paths.db)
+    llm_cfg, _ = resolve_llm_config(cfg)
     if llm_cfg is None:
         raise SystemExit("未配置 DeepSeek Key")
     llm = DeepSeekLLM(llm_cfg)

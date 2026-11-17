@@ -228,8 +228,8 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = load_config()
     cases = load_cases(args.cases)
-    # Key 统一走 resolver（env > auth.json > 阶段三旧库兜底），脚本不再直接读 cfg.llm.api_key
-    llm_cfg, _resolved = resolve_llm_config(cfg, legacy_db=cfg.paths.db)
+    # Key 统一走 resolver（env > auth.json > 未配置），脚本不再直接读 cfg.llm.api_key
+    llm_cfg, _ = resolve_llm_config(cfg)
     generator = None if args.no_llm else (DeepSeekLLM(llm_cfg) if llm_cfg else None)
     model_name = llm_cfg.model if llm_cfg is not None else cfg.llm.model
     print(f"大模型：{'已启用 ' + model_name if generator else '未配置（生成层将拒答/为空）'}")

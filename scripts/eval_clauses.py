@@ -1059,7 +1059,7 @@ def main(argv: list[str] | None = None) -> int:
     triggers = load_triggers(cfg.paths.clauses)
     rules = load_rules(cfg.paths.rules)
     library_ids = {row.statute_id for row in load_statutes(cfg.paths.statutes)}
-    llm_cfg, _resolved = resolve_llm_config(cfg, legacy_db=cfg.paths.db)
+    llm_cfg, _ = resolve_llm_config(cfg)
     llm: Generator | None = DeepSeekLLM(llm_cfg) if llm_cfg else None
     model_note = (
         f"已启用 {llm_cfg.model}"

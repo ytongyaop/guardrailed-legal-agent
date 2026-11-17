@@ -407,3 +407,27 @@ def test_lock_blocks_concurrent_write(home: Path) -> None:
     set_key("deepseek", DUMMY_KEY, home=home)
     assert resolve_key("deepseek", env={}, home=home).key == DUMMY_KEY
     assert not lock.exists()
+
+
+# ---------------------------------------------------------------- 静态守卫
+
+
+def test_no_removed_legacy_db_parameter_in_production_code() -> None:
+    """阶段四删掉了 `legacy_db` 形参：生产代码（`src/mla` + `scripts`）里不得再出现该字样。
+
+    只做字符串匹配（不上 ast）：删参数时漏改调用方，ruff 不管、`pyright src` 看不到
+    `scripts/`、pytest 不解析脚本，只能等人工实跑才炸成 TypeError；这条守卫让 pytest 当场报警。
+    测试文件允许出现该字样——它们要验证“参数确实已删、再传即 TypeError”。
+    """
+    root = Path(__file__).resolve().parents[1]
+    targets = sorted([*root.glob("src/mla/**/*.py"), *root.glob("scripts/*.py")])
+    # 扫描范围兜底：glob 失效（目录改名 / 模式拼错）时不能空跑成“通过”
+    assert len(targets) >= 50, f"扫描范围异常，只找到 {len(targets)} 个文件"
+
+    hits = [
+        f"{path.relative_to(root).as_posix()}:{number}: {line.strip()}"
+        for path in targets
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if "legacy_db" in line
+    ]
+    assert not hits, "生产代码不得再出现已删除的 legacy_db 形参 / 实参：\n" + "\n".join(hits)
