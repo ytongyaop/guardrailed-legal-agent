@@ -57,3 +57,4 @@ jobs:
           python scripts/validate_triggers.py
           python scripts/validate_missing_terms.py
           python scripts/validate_clause_gold.py
+          python scripts/validate_elements.py
