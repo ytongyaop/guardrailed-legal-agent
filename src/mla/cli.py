@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import secrets
 import string
@@ -26,9 +27,26 @@ from .graph.build import build_graph
 from .graph.nodes import Deps
 from .graph.state import CheckState
 from .services.bootstrap import STATUS_FAILED, ensure_runtime_ready
-from .services.credentials import resolve_llm_config
+from .services.credentials import (
+    DEFAULT_PROVIDER,
+    CredentialError,
+    clear_key,
+    list_key_status,
+    record_check_status,
+    resolve_key,
+    resolve_llm_config,
+    set_key,
+)
 from .services.retrieval import build_retriever
 from .services.tasks import NO_MODEL_MESSAGE, allow_no_model
+
+# 校验失败的三类固定文案（规格 002 第 10.9 节），与设置页同一套口径。
+# 不从 `mla.ui.app` 导入：界面依赖是可选安装项（`pip install -e .[ui]`）。
+AUTH_PROBE_MESSAGES: dict[str, str] = {
+    "auth": "Key 不正确，请检查后重新输入",
+    "network": "网络不通，请稍后重试（本次未保存）",
+    "server": "服务暂时不可用，本次未保存",
+}
 
 
 def _load_facts(path: str | None) -> dict[str, str]:
@@ -262,6 +280,91 @@ def cmd_admin(args: argparse.Namespace) -> int:
     return 0
 
 
+def _file_entry_exists(provider: str) -> bool:
+    """凭据文件里是否有该 provider 条目：把环境变量映射清空，只看 `auth.json` 这一级。"""
+    return resolve_key(provider, env={}).source == "auth_file"
+
+
+def cmd_auth(args: argparse.Namespace) -> int:
+    """管理服务商 API Key（规格 002 第 6 章 CLI 开放问题建议、第 10.9 节）。
+
+    - `list`：只显示 provider / 类型 / 来源标签 / 凭据文件路径，**不含 Key、不含长度**；
+    - `set`：`getpass` 隐藏输入（不接受命令行参数传 Key，避免进 shell 历史），
+      保存前先发 `GET /models` 校验，校验不通过不落盘；
+    - `remove`：只删文件里对应 provider 条目，幂等；环境变量需用户自行管理。
+
+    Key 一律不进 stdout / stderr：成功只报结论，失败只报 10.9 的固定文案或路径类诊断。
+    """
+    try:
+        statuses = list_key_status()
+    except CredentialError as exc:
+        # 文件损坏是显式配置错误：给出可操作的修复提示，不吐堆栈、不静默当“未配置”
+        print(f"无法读取凭据文件：{exc}", file=sys.stderr)
+        return 1
+    if args.auth_cmd == "list":
+        # `list_key_status()` 覆盖全部 provider；只挑真正有来源的（env 或 auth.json）
+        configured = [status for status in statuses if status.source != "none"]
+        if not configured:
+            print("未配置任何服务商凭据。")
+            return 0
+        print("服务商｜类型｜来源｜凭据文件")
+        for status in configured:
+            print(f"{status.provider}｜{status.type}｜{status.label}｜{status.path}")
+        return 0
+
+    provider = (getattr(args, "provider", "") or DEFAULT_PROVIDER).strip().lower()
+    supported = [status.provider for status in statuses]
+    if provider not in supported:
+        print(f"未支持的服务商：{provider}（当前可选：{'、'.join(supported)}）", file=sys.stderr)
+        return 1
+
+    if args.auth_cmd == "remove":
+        try:
+            exists = _file_entry_exists(provider)
+        except CredentialError as exc:
+            print(f"无法读取凭据文件：{exc}", file=sys.stderr)
+            return 1
+        if not exists:
+            print("未配置该服务商凭据。")
+            return 0
+        try:
+            clear_key(provider)
+        except CredentialError as exc:
+            # 异常消息只含 provider 与路径，不含 Key
+            print(f"清除失败：{exc}", file=sys.stderr)
+            return 1
+        print(f"已清除 {provider} 的 Key。")
+        return 0
+
+    try:
+        raw = getpass.getpass(f"请输入 {provider} 的 API Key（输入不回显）：")
+    except (EOFError, KeyboardInterrupt):
+        # 非交互环境（管道输入、Ctrl+C）按“没输入”处理：不打堆栈，也不写文件
+        print("未输入 Key，未做任何改动。", file=sys.stderr)
+        return 1
+    key = raw.strip()
+    if not key:
+        print("未输入 Key，未做任何改动。", file=sys.stderr)
+        return 1
+    # 唯一的结构化校验出口：只发 GET /models，不构造 messages，不产生 token 费用
+    probe = DeepSeekLLM(load_config().llm).probe_models(key)
+    if probe.kind != "ok":
+        print(AUTH_PROBE_MESSAGES.get(probe.kind, AUTH_PROBE_MESSAGES["server"]), file=sys.stderr)
+        return 1
+    try:
+        set_key(provider, key)
+    except CredentialError as exc:
+        print(f"保存失败：{exc}", file=sys.stderr)
+        return 1
+    try:
+        record_check_status(provider, True, "ok")
+    except OSError:
+        # 校验历史是可丢的展示数据：写失败只让状态行回落"未校验"，不回滚已成功的保存
+        pass
+    print("已保存到用户凭据文件（连接校验通过）")
+    return 0
+
+
 def _bootstrap_runtime(args: argparse.Namespace) -> None:
     """解析出命令后、执行前引导运行目录：旧库复制与首次凭据迁移，并把结果路径写回 `args`。
 
@@ -327,6 +430,25 @@ def main(argv: list[str] | None = None) -> int:
     p_admin_promote = admin_sub.add_parser("promote", help="把指定账号提升为管理员")
     p_admin_promote.add_argument("--username", required=True)
     p_admin_promote.set_defaults(func=cmd_admin)
+
+    # `auth`：服务商 Key 的 CLI 管理闭环（与设置页调同一套 `services.credentials`）。
+    # `set` **没有**接收 Key 的参数：Key 只能从隐藏输入读，避免进 shell 历史。
+    p_auth = sub.add_parser("auth", help="管理服务商 API Key（用户级 auth.json）")
+    auth_sub = p_auth.add_subparsers(dest="auth_cmd", required=True)
+    p_auth_list = auth_sub.add_parser("list", help="列出已配置的服务商（不含 Key 与长度）")
+    p_auth_list.set_defaults(func=cmd_auth)
+    p_auth_set = auth_sub.add_parser(
+        "set", help="隐藏输入保存服务商 Key（先做 GET /models 校验，不通过不落盘）"
+    )
+    p_auth_set.add_argument(
+        "provider", nargs="?", default=DEFAULT_PROVIDER, help="服务商键名（默认 deepseek）"
+    )
+    p_auth_set.set_defaults(func=cmd_auth)
+    p_auth_remove = auth_sub.add_parser("remove", help="清除某服务商 Key（幂等；环境变量需自行管理）")
+    p_auth_remove.add_argument(
+        "provider", nargs="?", default=DEFAULT_PROVIDER, help="服务商键名（默认 deepseek）"
+    )
+    p_auth_remove.set_defaults(func=cmd_auth)
 
     args = parser.parse_args(argv)
     _bootstrap_runtime(args)

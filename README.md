@@ -68,7 +68,7 @@ streamlit run src/mla/ui/app.py
 
 - 密码至少 8 位：注册、首次初始化、改密码用同一条下限。
 - 首次登录会展示一次使用说明与免责声明，看过一次后不再弹出。
-- 账号相关操作都在设置页：管理员可在那里填写模型 Key，所有登录用户都可以修改密码。
+- 账号相关操作都在设置页：管理员可在那里测试并保存模型 Key，所有登录用户都可以修改密码。
 
 ### 无界面部署（可选）
 
@@ -83,7 +83,7 @@ python -m mla check --contract src/mla/data/evalsets/sample_contract.txt
 
 没有安装界面依赖（`[ui,files]`）时，`streamlit run` 与 Word 报告导出不可用；命令行核对与评测脚本不受影响。
 
-密钥按需配置：完整能力需要 DeepSeek 的模型 Key，语义向量检索另需 `DASHSCOPE_API_KEY`（阿里云）。模型 Key 有三处来源，优先级为 `.streamlit/secrets.toml` > 设置页保存到本机数据库 > 环境变量 `MLA_LLM_API_KEY`；在设置页配置一次后，之后每次登录自动沿用，不必反复填。不配 Key 时系统不装作能用，而是显式拒绝或降级：
+密钥按需配置：完整能力需要 DeepSeek 的模型 Key，语义向量检索另需 `DASHSCOPE_API_KEY`（阿里云）。模型 Key 在**设置页 → 「测试并保存」**里配置（没有界面时用 `mla auth set deepseek`）：保存前会发一次 `GET /models` 校验，不通过不落盘；保存成功后写入当前操作系统用户的凭据文件，之后每次启动自动沿用。环境变量 `MLA_LLM_API_KEY` 可临时覆盖凭据文件（优先级更高，且不写任何文件）。不配 Key 时系统不装作能用，而是显式拒绝或降级：
 
 - 核对整体被拒绝：没有模型就不发起核对，不给缺了主判定通道的结论（服务层同一道门禁，CLI 退出码 2，界面提示去设置页配置）；
 - 不再是"条款审查不执行但规则照跑"：核对既然被拒绝，也就不存在半套结果；条款审查开关同时置灰；
@@ -93,29 +93,34 @@ python -m mla check --contract src/mla/data/evalsets/sample_contract.txt
 
 ## 配置
 
-密钥来源与优先级（三处都读原始值，前一处非空即生效）：
+密钥来源与优先级（只有两级，前一处非空即生效）：
 
 | 优先级 | 位置 | 说明 |
 | --- | --- | --- |
-| 1 | `.streamlit/secrets.toml` 的 `[llm]` 段 `api_key` | 服务端统一配置，该文件不入库 |
-| 2 | 设置页保存到本机数据库 | 管理员填一次即落库，之后各次登录自动沿用 |
-| 3 | 环境变量 `MLA_LLM_API_KEY` | 容器或 CI 里常用 |
+| 1 | 环境变量 `MLA_LLM_API_KEY` | 临时覆盖、容器或 CI 里常用；只读，不会写进任何文件 |
+| 2 | 用户凭据文件 `<MLA_HOME>/auth.json` 的 `deepseek` 条目 | 设置页「测试并保存」或 `mla auth set deepseek` 写入；Windows 下即 `%LOCALAPPDATA%\mla\auth.json` |
+| — | 都为空 | 未配置：核对被拒绝，不降级成模板回答 |
 
-任何一处都不写进仓库、不写进日志；要换 Key 时优先改前一处，改完重启界面即可。
+`.streamlit/secrets.toml` 的 `[llm]` 段**不再被读取**：本版没有这条来源，填了也不生效；该文件现在只用于向量检索（`[embedding].api_key`，与 `DASHSCOPE_API_KEY` 等价，二选一）。要换 Key 就在设置页重填并保存，或用 `mla auth set`。
+
+凭据文件以明文保存（已收紧权限，只当前用户可读），**不要分享或提交该文件**；`mla auth list` 只显示服务商、类型、来源与文件路径，不显示 Key。
 
 | 变量 | 说明 | 默认 |
 | --- | --- | --- |
-| `MLA_LLM_API_KEY` | DeepSeek API 密钥；也可放 `secrets.toml` 的 `[llm]` 段 `api_key`，或在设置页保存到本机数据库 | 空 |
+| `MLA_LLM_API_KEY` | DeepSeek API 密钥；优先级最高，临时覆盖用户凭据文件，不写入任何文件 | 空 |
 | `MLA_LLM_MODEL` | 对话模型名（OpenAI 兼容接口） | `deepseek-chat` |
 | `MLA_LLM_BASE_URL` | 接口地址 | `https://api.deepseek.com` |
 | `DASHSCOPE_API_KEY` | 阿里云密钥，用于 `qwen3.7-text-embedding-flash` 语义向量；也可放 `secrets.toml` 的 `[embedding]` 段 `api_key` | 空，未配置时检索回退 BM25 |
 | `MLA_EXTRACT_MODE` | 抽取档位：`auto`＝正则优先、模型补缺失字段；`llm`＝强制模型；`regex`＝纯正则 | `auto` |
 | `MLA_CLAUSE_REVIEW` | 条款判定（触发器召回 + 模型判定）开关，`on` / `true` / `1` / `yes` 为开 | `on` |
 | `MLA_EXTRACT_MAX_CHARS` | 发送给模型的合同正文字数上限 | `20000` |
-| `MLA_DB` | SQLite 数据库路径（账号/企业/合同/任务/日志） | 工作目录下的 `mla.sqlite3` |
-| `MLA_INDEX_DIR` | 向量缓存目录 | 工作目录下的 `data/index/` |
+| `MLA_HOME` | 用户级运行目录（凭据、数据库、索引都放这里）；必须是绝对路径 | Windows 下 `%LOCALAPPDATA%\mla\` |
+| `MLA_DB` | SQLite 数据库路径（账号/企业/合同/任务/日志） | `<MLA_HOME>\mla.sqlite3` |
+| `MLA_INDEX_DIR` | 向量缓存目录 | `<MLA_HOME>\index` |
 
-数据库与向量缓存是运行期可写文件，默认落在**当前工作目录**，不写进包目录（`site-packages` 可能只读）。数据文件本身（法源、规则、条款、案例、评测集）随包只读分发；需要指向别处时用上表中的 `MLA_*` 变量覆盖。
+数据库、向量缓存与凭据都是运行期可写文件，默认落在**用户级目录** `%LOCALAPPDATA%\mla\`（`MLA_HOME`；非 Windows 为 `$XDG_DATA_HOME/mla` 或 `~/.local/share/mla`），不写进包目录（`site-packages` 可能只读），也不再随启动目录变化。数据文件本身（法源、规则、条款、案例、评测集）随包只读分发；需要指向别处时用上表中的 `MLA_*` 变量覆盖。
+
+从 0.2.x 升级时：未显式设置 `MLA_DB`，首次启动会把旧的工作目录 `mla.sqlite3` 一致性复制到新位置（旧文件保留），并把旧库里的 Key 迁进 `auth.json`、清掉旧库那一行。降级回 0.2.x 需要重新填写 Key，业务数据不会删。
 
 ### 忘记密码
 
@@ -233,7 +238,7 @@ python scripts/eval_clauses.py --runs 1
 | 追问 / 问答 | 只发送问题 + 本次核对的结构化事实（已抽字段、规则命中、条款段落号与等级、命中法条） | 合同正文、条款片段原文 |
 
 - 抽取环节发送正文这件事界面有明确提示；条款审查只发候选邻近段落，因此模型看不到全文，它自己"额外发现"的问题会相应变少——这是隐私优先的取舍。
-- 账号、企业、合同、任务、日志存本地 SQLite（默认工作目录下的 `mla.sqlite3`，可用 `MLA_DB` 覆盖；6 张表：users / enterprises / contracts / tasks / logs / settings）；一个账号绑定一个企业，任务删除为软删、日志留痕。设置页保存的模型 Key 也在这张 `settings` 表里，明文落库、不写日志，随数据库文件一起备份或迁移。
+- 账号、企业、合同、任务、日志存本地 SQLite（默认 `<MLA_HOME>\mla.sqlite3`，Windows 下即 `%LOCALAPPDATA%\mla\mla.sqlite3`，可用 `MLA_DB` 覆盖；6 张表：users / enterprises / contracts / tasks / logs / settings）；一个账号绑定一个企业，任务删除为软删、日志留痕。模型 Key **不在数据库里**：它明文保存在当前操作系统用户的凭据文件 `auth.json`（同一目录），已收紧权限、不进日志；不要复制或分享该文件。数据库本身仍含账号口令散列，也应限制权限。
 
 ## 免责声明
 
@@ -246,7 +251,7 @@ python scripts/eval_clauses.py --runs 1
 
 ## 版本
 
-当前版本 0.2.1（以 `src/mla/__init__.py` 与 [Releases](https://github.com/ytongyaop/guardrailed-legal-agent/releases) 为准）。
+当前版本 0.3.0（以 `src/mla/__init__.py` 与 [Releases](https://github.com/ytongyaop/guardrailed-legal-agent/releases) 为准）。
 
 详细变更见 [CHANGELOG.md](CHANGELOG.md)，版本号遵循语义化版本。
 

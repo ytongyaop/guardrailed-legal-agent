@@ -8,9 +8,9 @@
 | --- | --- | --- |
 | domain | `src/mla/domain` | 纯函数内核：规则判定（rules）、必备条款缺项（missing）、条款候选（clauses）、槽位与追问规则（slots、asking）、可溯源校验（verify）、越界判定（boundary）、清单组装（checklist）、数据模型（models）、策略常量（policy）、字段目录（field_catalog）。零 I/O、零模型依赖，相同输入必然相同输出 |
 | ports | `src/mla/ports` | 接口定义：存储（repository）、生成（generation）、检索（retrieval）。只声明协议，不含实现 |
-| adapters | `src/mla/adapters` | 接口实现：SQLite 持久化（persist）、正则抽取（extract）、模型抽取（extract_llm）、BM25 / 向量 / 混合检索（rag）、DeepSeek 调用（llm）、Word 与 PDF 解析（files）、语义向量（embedding） |
+| adapters | `src/mla/adapters` | 接口实现：SQLite 持久化（persist）、正则抽取（extract）、模型抽取（extract_llm）、BM25 / 向量 / 混合检索（rag）、DeepSeek 调用（llm）、Word 与 PDF 解析（files）、凭据文件读写与权限收紧（auth_file）、语义向量（embedding） |
 | graph | `src/mla/graph` | LangGraph 状态图：13 个固定节点、状态定义与条件路由 |
-| services | `src/mla/services` | 用例编排：核对任务（tasks）、条款审查（clause_review）、共识层对账（consensus）、追问（asking）、问答循环（qa_agent）、Word 报告（report） |
+| services | `src/mla/services` | 用例编排：账号与权限（auth）、凭据解析（credentials）、运行期引导与迁移（bootstrap）、检索装配（retrieval）、核对任务（tasks）、条款审查（clause_review）、共识层对账（consensus）、追问（asking）、生成式表述与来源校验（drafting）、问答循环（qa_agent）、Word 报告（report） |
 | ui | `src/mla/ui` | Streamlit 界面（app） |
 
 依赖方向单向：外层依赖内层，domain 不 import 任何 adapter。节点函数用闭包绑定依赖集合（`Deps` 实例不进 state），单元测试注入假实现即可离线跑全图；节点返回状态增量，不原地修改。
@@ -19,10 +19,10 @@
 
 | 数据 | 位置 | 说明 |
 | --- | --- | --- |
-| 账号、企业、合同、任务、日志、设置 | 工作目录下的 `mla.sqlite3`（SQLite，6 张表：users / enterprises / contracts / tasks / logs / settings） | 运行时数据，不进包目录。一个账号绑定一个企业；企业 ID 为空的查询不得返回全库数据；任务删除为软删，日志留痕；`settings` 存通用键值设置（键值对，如界面侧配置项） |
+| 账号、企业、合同、任务、日志、设置 | 用户级目录下的 `mla.sqlite3`（`MLA_HOME`，Windows 默认 `%LOCALAPPDATA%\mla\`；SQLite，6 张表：users / enterprises / contracts / tasks / logs / settings） | 运行时数据，不进包目录，也不再绑定启动目录。一个账号绑定一个企业；企业 ID 为空的查询不得返回全库数据；任务删除为软删，日志留痕；`settings` 存通用键值设置（键值对，如界面侧配置项），**不存模型 Key** |
 | 法源、规则、触发器、必备条款规格、案例、回归集与留出集 | `src/mla/data/` 下的 JSONL / YAML 文件（随包分发，安装后在 `site-packages/mla/data/`） | 判定依据，只读，经 `mla.config.data_path()` 解析，各有独立校验脚本把关结构一致性 |
-| 语义向量缓存 | 工作目录下的 `data/index/` | 向量检索路径的本地缓存目录（运行期可写，不写进包目录）；BM25 路径不依赖它 |
-| 密钥 | 环境变量或 `.streamlit/secrets.toml`（不入库） | 只读取、不落盘、不进数据库 |
+| 语义向量缓存 | 用户级目录下的 `index/`（`MLA_HOME`，Windows 默认 `%LOCALAPPDATA%\mla\index\`） | 向量检索路径的本地缓存目录（运行期可写，不写进包目录，不随启动目录分散）；BM25 路径不依赖它 |
+| 模型 Key | 用户级 `auth.json`（环境变量 `MLA_LLM_API_KEY` 可临时覆盖）；向量 Key 仍可来自 `DASHSCOPE_API_KEY` 或 `secrets.toml [embedding]` | 明文 JSON + 权限收紧，不进数据库、不进仓库；解析只走 `services.credentials` 一处，来源标签只有环境变量 / 用户凭据文件 / 未配置 |
 
 ## 状态图：13 个固定节点
 

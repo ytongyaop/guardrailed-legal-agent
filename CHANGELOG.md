@@ -6,6 +6,26 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-17
+
+### Changed（破坏性）
+
+- 凭据从业务数据库迁到**用户级 `auth.json`**（Windows 默认 `%LOCALAPPDATA%\mla\`，可用 `MLA_HOME` 覆盖）；业务数据库与向量缓存同迁到该目录，不再绑定启动目录
+- 来源优先级改为**两级**：环境变量 `MLA_LLM_API_KEY` > `auth.json`；`.streamlit/secrets.toml` 的 `[llm].api_key` **不再被读取**，填了也不生效（模板文件已改为只保留 `[embedding]` 指引）
+- 设置页的写动作合并为「测试并保存」：保存前先发 `GET /models` 校验（不消耗 token），校验不通过不落盘；Key 保存后不可回显
+- `mla check` 等命令取 Key 统一走同一套 resolver，UI、CLI、服务层与评测脚本得到同一个值与来源标签
+
+### Added
+
+- `mla auth list` / `mla auth set [provider]` / `mla auth remove [provider]`：`set` 用 `getpass` 隐藏输入（不接受命令行传 Key），内置连接校验；`list` 只显示服务商 / 类型 / 来源 / 文件路径
+- 设置页新增服务商下拉、手动「测试连接」与更改 / 清除 Key 流程；清除需二次确认并说明能力损失
+- 校验历史写入 `auth-status.json`（只含是否通过、分类与时间戳，不含 Key），重启后状态行仍显示上次校验时间
+
+### Migration
+
+- **破坏性**：首次启动会把旧库里的 Key 迁移到 `auth.json`，迁移校验成功后删除旧库 `settings.llm_api_key` 行。降级到 0.2.x 需重新填写 Key，业务数据不删除
+- 数据库与索引默认位置改变：未显式设置 `MLA_DB` 时，旧库首次启动做一次性一致性复制，旧库文件原样保留；旧 `data/index` 不搬迁，缓存可重建
+
 ## [0.2.1] - 2026-11-17
 
 ### Changed

@@ -21,7 +21,7 @@ data/index/
 *.db
 .coverage
 
-# 密钥（默认 DeepSeek Key 放这里，不入库）
+# 本地 secrets（0.3.0 起 LLM Key 不再从这里读，只有可选的向量检索 Key；不入库）
 .streamlit/secrets.toml
 .env
 

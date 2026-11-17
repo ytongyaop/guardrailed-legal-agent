@@ -332,6 +332,39 @@ def test_runtime_notice_reports_legacy_key_migration(tmp_path, monkeypatch) -> N
     assert resolve_key("deepseek").source == "auth_file"
 
 
+def test_migration_failure_warning_shown_once_per_session(tmp_path, monkeypatch) -> None:
+    """迁移失败的警告在同一会话只提示一次：坏 auth.json 每次 rerun 都会失败，但只刷一条。
+
+    失败场景是真实构造的（预置损坏的 `auth.json` → 迁移走 `MSG_CORRUPT` 分支），
+    不是打桩 `_show_runtime_notice`；因此覆盖的是 app.py `main()` 引导 + 提示整条渲染路径。
+    """
+    home = _home(tmp_path)
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "auth.json").write_text("{ not json", encoding="utf-8")
+
+    at = _app(tmp_path, monkeypatch).run()
+    assert not at.exception
+    first = _all_text(at)
+    # 页面文本里该警告恰好出现一次，且带凭据文件路径、不含 Key
+    assert first.count("用户凭据文件已损坏") == 1
+    assert str(home / "auth.json") in first
+    assert KEY_PREFIX not in first
+    first_warnings = [w.value for w in at.warning]
+    assert len(first_warnings) == 1
+    # 失败条件在第二次运行前仍然成立（没写完成标记、坏文件没被覆盖），
+    # 这样“不再出现”证明的是去重，而不是第二次压根没失败。
+    assert not (home / "auth-migration.json").exists()
+    assert (home / "auth.json").read_text(encoding="utf-8") == "{ not json"
+
+    # 同一会话再跑一次（失败条件仍在，迁移会再失败）：警告不再出现
+    again = at.run()
+    assert not again.exception
+    second = _all_text(again)
+    assert second.count("用户凭据文件已损坏") == 0
+    assert KEY_PREFIX not in second
+    assert again.session_state["runtime_notice_warned"] == first_warnings
+
+
 def test_resolve_llm_unconfigured_returns_none(tmp_path, monkeypatch) -> None:
     """两处来源都空 → 未配置（界面按缺 Key 处理，不降级成模板回答）。"""
     monkeypatch.delenv("MLA_LLM_API_KEY", raising=False)

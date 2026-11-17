@@ -136,7 +136,9 @@ def get_config():
 def _show_runtime_notice(report: BootstrapReport) -> None:
     """把运行目录引导与首次凭据迁移的结果提示出来（不静默吞掉），不含任何 Key。
 
-    成功类提示同一会话只显示一次；迁移失败的消息每次都以警告呈现，避免"看起来迁移成功"。
+    每条消息在同一会话里只提示一次：`st.session_state` 记住已提示的文案，
+    rerun 不再重复。成功类走 info，迁移失败走 warning——失败同样只提示一次，
+    否则每次 rerun 都刷一条警告，会把真正需要注意的失败淹掉。
     """
     messages: list[str] = []
     if report.copied_from:
@@ -151,8 +153,12 @@ def _show_runtime_notice(report: BootstrapReport) -> None:
 
     migration = report.migration
     if migration.status == STATUS_FAILED:
+        warned: list[str] = st.session_state.setdefault("runtime_notice_warned", [])
         for text in migration.messages:
+            if text in warned:
+                continue
             st.warning(text)
+            warned.append(text)
         return
     for text in migration.messages:
         if text in shown:
