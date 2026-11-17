@@ -52,6 +52,12 @@ version = {attr = "mla.__version__"}
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
+# 规格 003 第 9.2 节的两套划分：默认 `pytest` 仍跑全部（含未打标记的用例），
+# `pytest -m no_llm` / `pytest -m mock_llm` 分别只跑一套，两套都必须全绿。
+markers = [
+  "no_llm: 不需要模型的用例（门禁、设置、历史、规则引擎、纯函数）",
+  "mock_llm: 用假 Generator 走模型主导路径的用例",
+]
 
 [tool.ruff]
 line-length = 110

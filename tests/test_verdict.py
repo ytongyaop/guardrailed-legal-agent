@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from mla.domain.models import (
     CheckItem,
     CheckTask,
@@ -18,6 +20,8 @@ from mla.domain.models import (
     UndeterminedRule,
 )
 from mla.domain.verdict import Verdict, summarize_verdict
+
+pytestmark = pytest.mark.no_llm
 
 COVERAGE = RuleCoverage(total=20, violated=1, compliant=8, not_applicable=8, unknown=3)
 

@@ -10,6 +10,8 @@ from mla.adapters.extract import extract_facts
 from mla.adapters.extract_llm import LLMExtractor, _normalize_value
 from mla.adapters.llm import LLMError
 
+pytestmark = pytest.mark.mock_llm
+
 NO_KEY = "本次未使用模型抽取：未配置 Key"
 
 

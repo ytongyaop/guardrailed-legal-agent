@@ -19,6 +19,8 @@ from mla.services.auth import (
     verify_password,
 )
 
+pytestmark = pytest.mark.no_llm
+
 
 def _repo(tmp_path) -> SqliteRepository:
     return SqliteRepository(

@@ -11,6 +11,11 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+from helpers import FakeGenerator
+
+pytestmark = pytest.mark.mock_llm
+
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "eval_clauses.py"
 
 
@@ -228,28 +233,20 @@ def test_run_consistency_counts_common_keys() -> None:
 
 # ---------- 消融开关：review_clauses(verify=False) ----------
 
-
-class _StubLLM:
-    """固定返回一条越界结论的假模型：等级非法、引库外条号、证据不在原文。"""
-
-    available = True
-    usage_in = 0
-    usage_out = 0
-
-    def generate(self, system: str, user: str, schema: dict | None = None) -> dict:
-        return {
-            "findings": [
-                {
-                    "idx": 0,
-                    "grade": "S",
-                    "reason": "该约定与某条不存在的规定存在冲突",
-                    "statute_ids": ["LCL-999"],
-                    "evidence": "合同里根本没有的一句话",
-                    "need_facts": [],
-                }
-            ],
-            "extra": [],
+# 固定回一条越界结论的假模型应答：等级非法、引库外条号、证据不在原文。
+OFF_LIBRARY_REPLY: dict = {
+    "findings": [
+        {
+            "idx": 0,
+            "grade": "S",
+            "reason": "该约定与某条不存在的规定存在冲突",
+            "statute_ids": ["LCL-999"],
+            "evidence": "合同里根本没有的一句话",
+            "need_facts": [],
         }
+    ],
+    "extra": [],
+}
 
 
 def _candidate() -> object:
@@ -266,7 +263,9 @@ def _candidate() -> object:
 
 
 def test_verify_false_keeps_raw_output() -> None:
-    findings = ev.review_clauses(_StubLLM(), [_candidate()], CONTRACT, statutes={}, verify=False)
+    findings = ev.review_clauses(
+        FakeGenerator(OFF_LIBRARY_REPLY), [_candidate()], CONTRACT, statutes={}, verify=False
+    )
     assert len(findings) == 1
     # 等级与法条原样保留（不校验、不降级），span 是模型原文（定位不到）
     assert findings[0].grade == "S"
@@ -277,7 +276,7 @@ def test_verify_false_keeps_raw_output() -> None:
 def test_verify_true_drops_the_same_output() -> None:
     errors: list[str] = []
     findings = ev.review_clauses(
-        _StubLLM(), [_candidate()], CONTRACT, statutes={}, errors=errors, verify=True
+        FakeGenerator(OFF_LIBRARY_REPLY), [_candidate()], CONTRACT, statutes={}, errors=errors, verify=True
     )
     assert findings == ()
     assert any("等级不合法" in line for line in errors)

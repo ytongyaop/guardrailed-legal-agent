@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
+import pytest
 from docx import Document
 
 from mla.adapters.persist import SqliteRepository
@@ -26,6 +27,8 @@ from mla.domain.models import (
 )
 from mla.services.report import build_report_docx, merge_findings
 from mla.services.tasks import run_check
+
+pytestmark = pytest.mark.no_llm
 
 CONTRACT = Path(data_path("evalsets/sample_contract.txt")).read_text(encoding="utf-8")
 

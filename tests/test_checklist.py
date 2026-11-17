@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
 from mla.domain.checklist import build_suggestions
 from mla.domain.models import CheckItem, ItemKind, Severity
+
+pytestmark = pytest.mark.no_llm
 
 
 def _item(rule_id: str, source_id: str) -> CheckItem:

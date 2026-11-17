@@ -29,6 +29,8 @@ from mla.domain.elements import (
 from mla.domain.models import StatuteEntry
 from mla.services.clause_review import REVIEW_SYSTEM, _payload
 
+pytestmark = pytest.mark.no_llm
+
 ELEMENTS_PATH = Path(data_path("clauses/elements.yaml"))
 VALIDATOR_PATH = Path(__file__).resolve().parents[1] / "scripts" / "validate_elements.py"
 TRAPS_01 = Path(data_path("evalsets/contract_traps_01.txt"))

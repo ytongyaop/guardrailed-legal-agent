@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+import pytest
+from helpers import FakeGenerator
 
 from mla.domain.models import CheckItem, ItemKind, Severity, StatuteEntry
 from mla.graph.nodes import Deps, checklist, qa_answer
 from mla.services.drafting import draft_answer, draft_suggestions
+
+pytestmark = pytest.mark.mock_llm
 
 RULES: tuple = ()
 
@@ -33,23 +36,8 @@ def _statute() -> StatuteEntry:
     )
 
 
-class FakeLLM:
-    available = True
-
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self.payload = payload
-        self.calls = 0
-
-    def generate(self, system: str, user: str, schema: dict | None = None) -> dict[str, Any]:
-        self.calls += 1
-        return self.payload
-
-    def classify(self, text: str, labels: list[str]) -> str:
-        return "不确定"
-
-
 def test_suggestions_drop_unknown_or_empty_sources() -> None:
-    llm = FakeLLM(
+    llm = FakeGenerator(
         {
             "suggestions": [
                 {"text": "把试用期调到 6 个月内", "source_ids": ["LCL-19", "BAD-ID"]},
@@ -74,7 +62,7 @@ def test_answer_requires_model_and_sources() -> None:
     answers, errors = draft_answer(None, "试用期多久", [_statute()])
     assert answers == [] and any("未配置大模型" in e for e in errors)
 
-    llm = FakeLLM({"answers": [{"text": "最长 6 个月", "source_ids": ["LCL-19"]}]})
+    llm = FakeGenerator({"answers": [{"text": "最长 6 个月", "source_ids": ["LCL-19"]}]})
     answers, errors = draft_answer(llm, "试用期多久", [_statute()])
     assert len(answers) == 1 and answers[0].source_ids == ("LCL-19",)
 

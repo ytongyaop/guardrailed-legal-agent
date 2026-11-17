@@ -28,6 +28,8 @@ from mla.domain.verdict import summarize_verdict
 from mla.services.consensus import NOTE_CONSISTENT, NOTE_NO_CHECK, SOURCE_RULE_CHECK
 from mla.services.tasks import model_first_enabled, run_check
 
+pytestmark = pytest.mark.mock_llm
+
 NO_LLM = LLMConfig(api_key="")
 # 固定事实与 `tests/test_rule_check_dualwrite.py` 同一口径：结果只随合同正文变化。
 BASE_FACTS = {"employer_type": "有限责任公司", "written_contract": "是", "term_years": "3"}

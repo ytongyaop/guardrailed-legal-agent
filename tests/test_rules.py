@@ -5,8 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from mla.config import data_path
 from mla.domain.rules import RuleHit, evaluate, load_rules
+
+pytestmark = pytest.mark.no_llm
 
 RULES_PATH = Path(data_path("rules/rules.yaml"))
 STATUTES = Path(data_path("statutes/statutes.jsonl"))

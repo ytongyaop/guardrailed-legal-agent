@@ -8,10 +8,10 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pytest
+from helpers import FakeGenerator
 
 from mla.domain.clauses import ClauseCandidate
 from mla.domain.models import StatuteEntry
@@ -22,38 +22,12 @@ from mla.services.clause_review import (
     review_clauses,
 )
 
+pytestmark = pytest.mark.mock_llm
+
 CONTRACT = "甲方有权单方调整乙方工作岗位，乙方不得拒绝。\n乙方月综合薪资 8000 元，其中基本工资 2200 元。\n"
 TRANSFER_SPAN = "甲方有权单方调整乙方工作岗位，乙方不得拒绝"
 # 假库条文的真实子串（真实劳动合同法第三十五条），A 级三件套要过第 3 道回声核验才靠得住。
 QUOTE_35 = "用人单位与劳动者协商一致，可以变更劳动合同约定的内容"
-
-
-class StubLLM:
-    """按顺序返回预置结果的假模型；记录每次调用的 payload 与 system。"""
-
-    available = True
-
-    def __init__(self, *responses: Any) -> None:
-        self.responses = list(responses)
-        self.payloads: list[dict[str, Any]] = []
-        self.systems: list[str] = []
-
-    @property
-    def calls(self) -> int:
-        return len(self.payloads)
-
-    def generate(self, system: str, user: str, schema: dict[str, Any] | None = None) -> dict[str, Any]:
-        self.systems.append(system)
-        self.payloads.append(json.loads(user))
-        if not self.responses:
-            return {"findings": [], "extra": []}
-        response = self.responses[min(self.calls - 1, len(self.responses) - 1)]
-        if isinstance(response, Exception):
-            raise response
-        return response
-
-    def classify(self, text: str, labels: list[str]) -> str:
-        return labels[0] if labels else "不确定"
 
 
 def _candidate(statutes: tuple[str, ...] = ("LCL-35", "LCL-39")) -> ClauseCandidate:
@@ -236,7 +210,7 @@ def test_unknown_field_passes_with_note() -> None:
 
 
 def test_unknown_field_does_not_drop_finding() -> None:
-    llm = StubLLM({"findings": [_row(confidence=0.92)]})
+    llm = FakeGenerator({"findings": [_row(confidence=0.92)]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -250,7 +224,7 @@ def test_unknown_field_does_not_drop_finding() -> None:
 
 def test_l3_2_failed_row_never_reaches_l3_1() -> None:
     """缺 quote（L3.2）× 证据抄错（L3.1 第 2 道）→ 只留 L3.2 诊断，拿不出第 2 道的诊断。"""
-    llm = StubLLM({"findings": [_row(quote_statute="", evidence="合同里根本没有的一句话")]})
+    llm = FakeGenerator({"findings": [_row(quote_statute="", evidence="合同里根本没有的一句话")]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -266,7 +240,7 @@ def test_l3_1_diagnostics_do_not_carry_l3_2_prefix() -> None:
         _row(reason=""),  # L3.2：reason 空
         _row(statute_ids=["LCL-31"]),  # L3.1 第 4 道：越出候选闭集
     ]
-    llm = StubLLM({"findings": rows})
+    llm = FakeGenerator({"findings": rows})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -282,7 +256,7 @@ def test_every_l3_2_diagnostic_starts_with_fixed_prefix() -> None:
         _row(evidence=""),
         _row(statute_ids=[]),
     ]
-    llm = StubLLM({"findings": rows})
+    llm = FakeGenerator({"findings": rows})
     errors: list[str] = []
     review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -296,7 +270,7 @@ def test_every_l3_2_diagnostic_starts_with_fixed_prefix() -> None:
 
 def test_verify_false_skips_behavior_check() -> None:
     """`verify=False`（model_raw 臂）原样保留模型输出：非法等级也不能被 L3.2 提前丢掉。"""
-    llm = StubLLM({"findings": [_row(grade="S", reason="", statute_ids=[])]})
+    llm = FakeGenerator({"findings": [_row(grade="S", reason="", statute_ids=[])]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY, verify=False)
 

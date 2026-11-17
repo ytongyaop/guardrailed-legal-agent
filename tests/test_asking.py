@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
 from mla.adapters.persist import SqliteRepository
 from mla.config import Paths, data_path
 from mla.domain.asking import candidate_fields
@@ -17,6 +19,8 @@ from mla.domain.slots import BLOCKING_SLOTS, derive_slots
 from mla.graph.nodes import Deps, ask
 from mla.graph.state import CheckState
 from mla.services.asking import _verify_asks, polish_questions, suggest_optional
+
+pytestmark = pytest.mark.mock_llm
 
 RULES = load_rules(Path(data_path("rules/rules.yaml")))
 DEPS = Deps(rules=RULES)

@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 
+import pytest
+
 from mla.adapters.persist import SqliteRepository
 from mla.config import Paths, data_path
 from mla.domain.models import (
@@ -25,6 +27,8 @@ from mla.domain.models import (
     User,
 )
 from mla.services.auth import hash_password
+
+pytestmark = pytest.mark.no_llm
 
 
 def _repo(tmp_path) -> SqliteRepository:

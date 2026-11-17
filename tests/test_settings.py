@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from mla.adapters.persist import SqliteRepository
 from mla.config import Paths, data_path
 from mla.domain.models import User
 from mla.services.auth import hash_password
+
+pytestmark = pytest.mark.no_llm
 
 
 def _repo(tmp_path) -> SqliteRepository:

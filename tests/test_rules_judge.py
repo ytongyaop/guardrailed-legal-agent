@@ -6,6 +6,8 @@ import json
 import random
 from pathlib import Path
 
+import pytest
+
 from mla.config import data_path
 from mla.domain.rules import (
     RuleEntry,
@@ -17,6 +19,8 @@ from mla.domain.rules import (
     load_rules,
     rule_applies,
 )
+
+pytestmark = pytest.mark.no_llm
 
 RULES_PATH = Path(data_path("rules/rules.yaml"))
 EVALSETS = (

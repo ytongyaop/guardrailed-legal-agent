@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from mla.domain.models import StatuteEntry
 from mla.graph.nodes import Deps, qa_answer
 from mla.services.qa_agent import run_qa_agent
+
+pytestmark = pytest.mark.mock_llm
 
 
 def _statute() -> StatuteEntry:

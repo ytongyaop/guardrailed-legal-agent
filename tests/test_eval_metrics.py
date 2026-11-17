@@ -12,6 +12,8 @@ from types import ModuleType
 
 import pytest
 
+pytestmark = pytest.mark.no_llm
+
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "eval_clauses.py"
 
 

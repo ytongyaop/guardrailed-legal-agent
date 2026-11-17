@@ -15,6 +15,8 @@ from mla.adapters.extract import _norm
 from mla.config import data_path
 from mla.domain.clauses import MAX_SPAN, Trigger, detect_clauses, load_triggers
 
+pytestmark = pytest.mark.no_llm
+
 TRIGGERS_PATH = Path(data_path("clauses/triggers.yaml"))
 GOLD_PATH = Path(data_path("evalsets/clause_gold.jsonl"))
 STATUTES_PATH = Path(data_path("statutes/statutes.jsonl"))

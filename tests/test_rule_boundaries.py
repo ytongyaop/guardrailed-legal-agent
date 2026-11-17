@@ -26,6 +26,8 @@ from mla.config import data_path
 from mla.domain.models import RuleEntry
 from mla.domain.rules import RuleStatus, judge, load_rules, rule_applies
 
+pytestmark = pytest.mark.no_llm
+
 RULES_PATH = Path(data_path("rules/rules.yaml"))
 
 # 规则表当前有 16 条（规格 003 第 5.3 节瘦身后）；改条数必须同步改边界测试，否则下面会

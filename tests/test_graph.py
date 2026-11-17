@@ -6,12 +6,16 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from mla.config import data_path
 from mla.domain.models import CheckItem, ItemKind, RuleCoverage, UndeterminedRule
 from mla.domain.rules import evaluate, load_rules
 from mla.graph.build import build_graph
 from mla.graph.nodes import Deps, rule_check
 from mla.graph.state import CheckState
+
+pytestmark = pytest.mark.no_llm
 
 RULES = load_rules(Path(data_path("rules/rules.yaml")))
 DEPS = Deps(rules=RULES)

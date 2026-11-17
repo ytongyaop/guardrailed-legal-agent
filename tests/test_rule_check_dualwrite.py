@@ -16,11 +16,15 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from mla.adapters.persist import SqliteRepository
 from mla.config import LLMConfig, Paths, data_path
 from mla.domain.models import CheckTask, Role, TaskMode, User
 from mla.domain.rules import RuleCheckStatus, judge_all, load_rules, to_rule_check
 from mla.services.tasks import run_check
+
+pytestmark = pytest.mark.no_llm
 
 NO_LLM = LLMConfig(api_key="")
 # 固定事实：与 tests/test_missing_terms.py 同一口径，保证结果只随合同正文变化。

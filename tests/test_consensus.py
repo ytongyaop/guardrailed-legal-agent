@@ -32,6 +32,8 @@ from mla.services.consensus import (
     reconcile,
 )
 
+pytestmark = pytest.mark.no_llm
+
 # 「模型指出该数值点有问题」的理由：不含任何合规表述，用于表 1 / 表 3 之外的对照
 CONFLICT_REASON = "试用期长度与第十九条的档位不一致"
 # 「模型说合规」的理由：命中 _COMPLIANT_MARKS

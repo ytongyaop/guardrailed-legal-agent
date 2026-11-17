@@ -22,6 +22,8 @@ from mla.domain.models import (  # noqa: E402 - 先跳 streamlit 再导界面模
 )
 from mla.ui.app import _filter_checks  # noqa: E402
 
+pytestmark = pytest.mark.no_llm
+
 
 def _items_task() -> CheckTask:
     return CheckTask(

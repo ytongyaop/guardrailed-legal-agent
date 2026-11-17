@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mla.adapters.persist import SqliteRepository
 from mla.config import LLMConfig, Paths, data_path
 from mla.domain.models import Role, TaskMode, User
 from mla.services.tasks import run_check, run_qa
+
+pytestmark = pytest.mark.no_llm
 
 CONTRACT = Path(data_path("evalsets/sample_contract.txt")).read_text(encoding="utf-8")
 NO_LLM = LLMConfig(api_key="")  # 测试不读 secrets、不联网

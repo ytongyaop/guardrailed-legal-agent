@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mla.adapters.extract import cn_to_int, extract_facts
 from mla.config import data_path
+
+pytestmark = pytest.mark.no_llm
 
 CONTRACT = Path(data_path("evalsets/sample_contract.txt"))
 

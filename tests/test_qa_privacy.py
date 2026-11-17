@@ -12,6 +12,9 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
+import pytest
+from helpers import FakeGenerator
+
 from mla.adapters.extract import RegexExtractor
 from mla.adapters.persist import SqliteRepository
 from mla.config import Paths, data_path, load_config
@@ -22,6 +25,8 @@ from mla.graph.nodes import Deps
 from mla.services import tasks as tasks_module
 from mla.services.clause_review import review_clauses
 from mla.services.tasks import run_check, run_qa
+
+pytestmark = pytest.mark.mock_llm
 
 SENTINEL = "SENTINEL_CONTRACT_ONLY_9F3A"
 SPAN_SENTINEL = "SENTINEL_SPAN_ONLY_7B21"
@@ -171,22 +176,6 @@ CLAUSE_CONTRACT = (
 )
 
 
-class CapturingReviewLLM:
-    """捕获条款审查实际发出的 prompt（system + user）；判定一律空结果，只验证外发内容。"""
-
-    available = True
-
-    def __init__(self) -> None:
-        self.prompts: list[str] = []
-
-    def generate(self, system: str, user: str, schema: dict | None = None) -> dict:
-        self.prompts.append(f"{system}\n{user}")
-        return {"findings": [], "extra": []}
-
-    def classify(self, text: str, labels: list[str]) -> str:
-        return labels[0] if labels else "不确定"
-
-
 def _candidate_library(candidates: Sequence[ClauseCandidate]) -> dict[str, StatuteEntry]:
     """只为候选引用的条号造占位法条：本用例验证外发内容，不验证语料。"""
     return {
@@ -211,7 +200,7 @@ def test_clause_review_prompt_excludes_unrelated_paragraphs() -> None:
         "哨兵在段落 1，必须离所有候选 >2 行，否则这条用例测不到「不整份外发」"
     )
 
-    llm = CapturingReviewLLM()
+    llm = FakeGenerator()
     review_clauses(llm, candidates, CLAUSE_CONTRACT, statutes=_candidate_library(candidates))
 
     assert llm.prompts, "应当发起至少一次条款判定"

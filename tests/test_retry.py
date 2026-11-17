@@ -9,6 +9,7 @@ import json
 from typing import Any
 
 import pytest
+from helpers import FakeGenerator
 
 from mla.adapters.persist import SqliteRepository
 from mla.config import LLMConfig, Paths, data_path, load_config
@@ -16,6 +17,8 @@ from mla.domain.clauses import ClauseCandidate
 from mla.domain.models import CheckTask, Role, StatuteEntry, TaskMode, User
 from mla.services.clause_review import REVIEW_SYSTEM, RetryStats, review_clauses
 from mla.services.tasks import run_check
+
+pytestmark = pytest.mark.mock_llm
 
 # 三行合同：每条候选的段落与证据都落在自己那一行里（第 2 道核验要求同段）。
 LINES = [
@@ -73,36 +76,8 @@ def _finding(idx: int = 0, **over: Any) -> dict[str, Any]:
     return row
 
 
-class ScriptedLLM:
-    """按调用顺序返回预置结果的假模型（Generator 协议）；记录每次送进去的 user 串。"""
-
-    available = True
-    usage_in = 0
-    usage_out = 0
-
-    def __init__(self, *responses: Any) -> None:
-        self.responses = list(responses)
-        self.users: list[str] = []
-        self.systems: list[str] = []
-
-    @property
-    def calls(self) -> int:
-        return len(self.users)
-
-    def generate(self, system: str, user: str, schema: dict[str, Any] | None = None) -> dict[str, Any]:
-        self.systems.append(system)
-        self.users.append(user)
-        response = self.responses[min(self.calls - 1, len(self.responses) - 1)]
-        if isinstance(response, Exception):
-            raise response
-        return response
-
-    def classify(self, text: str, labels: list[str]) -> str:
-        return labels[0] if labels else "不确定"
-
-
 def _run(
-    llm: ScriptedLLM,
+    llm: FakeGenerator,
     candidates: list[ClauseCandidate],
     *,
     batch_size: int = 5,
@@ -130,7 +105,7 @@ def test_missing_quote_fixed_on_first_retry_is_accepted() -> None:
     """第 1 次缺 quote、第 2 次补上 → 采纳，`retry_calls=1`、`retry_passed=1`。"""
     broken = _finding(quote_statute="")
     fixed = _finding()
-    llm = ScriptedLLM({"findings": [broken]}, {"findings": [fixed]})
+    llm = FakeGenerator({"findings": [broken]}, {"findings": [fixed]})
     findings, errors, stats = _run(llm, [_candidate()])
 
     assert [f.grade for f in findings] == ["A"]
@@ -158,7 +133,7 @@ def test_missing_quote_fixed_on_first_retry_is_accepted() -> None:
 def test_still_missing_quote_after_two_retries_is_dropped() -> None:
     """三次都缺 quote → 丢弃；`retry_calls=2`、`retry_passed=0`，诊断含"返工 2 次仍失败"。"""
     broken = {"findings": [_finding(quote_statute="")]}
-    llm = ScriptedLLM(broken, broken, broken)
+    llm = FakeGenerator(broken, broken, broken)
     findings, errors, stats = _run(llm, [_candidate()])
 
     assert findings == ()
@@ -176,7 +151,7 @@ def test_still_missing_quote_after_two_retries_is_dropped() -> None:
 
 def test_unlocatable_evidence_does_not_trigger_retry() -> None:
     """证据在合同原文定位不到（编造原文）→ 不返工，1 次调用后直接丢弃。"""
-    llm = ScriptedLLM({"findings": [_finding(evidence="乙方同意无限期加班且不主张任何报酬")]})
+    llm = FakeGenerator({"findings": [_finding(evidence="乙方同意无限期加班且不主张任何报酬")]})
     findings, errors, stats = _run(llm, [_candidate()])
 
     assert findings == ()
@@ -190,7 +165,7 @@ def test_unlocatable_evidence_does_not_trigger_retry() -> None:
 # ---------- 开关：MLA_CLAUSE_RETRY=0 等价 P2-6 ----------
 
 
-class _OutOfLibraryLLM(ScriptedLLM):
+class _OutOfLibraryLLM(FakeGenerator):
     """按 payload 里的候选回一条"条号不在库"的结论（证据取候选 span），用于多批计数。"""
 
     def generate(self, system: str, user: str, schema: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -242,7 +217,7 @@ def test_failed_list_contains_only_retryable_items() -> None:
         _finding(statute_ids=["LCL-31"]),  # 库内但越出候选闭集
         _finding(evidence="合同里根本没有的一句话"),
     ]
-    llm = ScriptedLLM({"findings": rows}, {"findings": [_finding()]})
+    llm = FakeGenerator({"findings": rows}, {"findings": [_finding()]})
     findings, errors, stats = _run(llm, [_candidate()])
 
     assert len(llm.users) == 2, "有可返工项就要重发一次"
@@ -276,7 +251,7 @@ def test_three_failures_two_fixed_counts_are_correct() -> None:
         _finding(idx=2, statute_ids=["LCL-31"]),
     ]
     still = [_finding(idx=2, statute_ids=["LCL-31"])]
-    llm = ScriptedLLM({"findings": broken}, {"findings": partly}, {"findings": still})
+    llm = FakeGenerator({"findings": broken}, {"findings": partly}, {"findings": still})
     findings, errors, stats = _run(llm, candidates)
 
     assert sorted(f.paragraph for f in findings) == [1, 2]
@@ -293,7 +268,7 @@ def test_three_failures_two_fixed_counts_are_correct() -> None:
 # ---------- 成本字段落库 ----------
 
 
-class _ClauseScriptedLLM(ScriptedLLM):
+class _ClauseScriptedLLM(FakeGenerator):
     """只对条款判定（payload 里有 candidates）按脚本应答；其他调用回空对象。"""
 
     def generate(self, system: str, user: str, schema: dict[str, Any] | None = None) -> dict[str, Any]:

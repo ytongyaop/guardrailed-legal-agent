@@ -9,8 +9,8 @@ import json
 from typing import Any
 
 import pytest
+from helpers import FakeGenerator
 
-from mla.adapters.llm import LLMError
 from mla.config import LLMConfig, load_config
 from mla.domain.clauses import ClauseCandidate
 from mla.domain.models import ClauseFinding, Role, StatuteEntry, User
@@ -31,6 +31,8 @@ from mla.services.clause_review import (
 )
 from mla.services.tasks import run_check
 
+pytestmark = pytest.mark.mock_llm
+
 CONTRACT = (
     "甲方有权单方调整乙方工作岗位，乙方不得拒绝。\n"
     "乙方月综合薪资 8000 元，其中基本工资 2200 元。\n"
@@ -39,34 +41,6 @@ CONTRACT = (
 
 TRANSFER_SPAN = "甲方有权单方调整乙方工作岗位，乙方不得拒绝"
 SI_SPAN = "乙方自愿放弃缴纳社会保险，甲方折算为现金补贴"
-
-
-class StubLLM:
-    """按顺序返回预置结果的假模型；记录每次调用的 payload 与 system。"""
-
-    available = True
-
-    def __init__(self, *responses: Any) -> None:
-        self.responses = list(responses)
-        self.payloads: list[dict[str, Any]] = []
-        self.systems: list[str] = []
-
-    @property
-    def calls(self) -> int:
-        return len(self.payloads)
-
-    def generate(self, system: str, user: str, schema: dict[str, Any] | None = None) -> dict[str, Any]:
-        self.systems.append(system)
-        self.payloads.append(json.loads(user))
-        if not self.responses:
-            return {"findings": [], "extra": []}
-        response = self.responses[min(self.calls - 1, len(self.responses) - 1)]
-        if isinstance(response, Exception):
-            raise response
-        return response
-
-    def classify(self, text: str, labels: list[str]) -> str:
-        return labels[0] if labels else "不确定"
 
 
 def _candidate(
@@ -121,7 +95,7 @@ def _finding(**over: Any) -> dict[str, Any]:
 
 def test_out_of_candidate_set_dropped() -> None:
     """引用了库内存在、但不在该候选候选集里的条号（LCL-31）→ 丢弃并留痕。"""
-    llm = StubLLM({"findings": [_finding(statute_ids=["LCL-31"])]})
+    llm = FakeGenerator({"findings": [_finding(statute_ids=["LCL-31"])]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -130,7 +104,7 @@ def test_out_of_candidate_set_dropped() -> None:
 
 
 def test_unknown_statute_id_dropped() -> None:
-    llm = StubLLM({"findings": [_finding(statute_ids=["LCL-35", "LCL-999"])]})
+    llm = FakeGenerator({"findings": [_finding(statute_ids=["LCL-35", "LCL-999"])]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -142,7 +116,7 @@ def test_unknown_statute_id_dropped() -> None:
 
 
 def test_evidence_not_in_contract_dropped() -> None:
-    llm = StubLLM({"findings": [_finding(evidence="乙方同意无限期加班且不主张任何报酬")]})
+    llm = FakeGenerator({"findings": [_finding(evidence="乙方同意无限期加班且不主张任何报酬")]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -152,7 +126,7 @@ def test_evidence_not_in_contract_dropped() -> None:
 
 def test_evidence_with_space_difference_still_located() -> None:
     """证据与原文只差空格（归一化后一致）→ 允许保留（与 _norm 口径一致）。"""
-    llm = StubLLM({"findings": [_finding(evidence="甲方有权 单方调整乙方工作岗位，乙方不得拒绝")]})
+    llm = FakeGenerator({"findings": [_finding(evidence="甲方有权 单方调整乙方工作岗位，乙方不得拒绝")]})
     got = review_clauses(llm, [_candidate()], CONTRACT, statutes=LIBRARY)
 
     assert len(got) == 1
@@ -187,7 +161,7 @@ EVIDENCE_100 = (
 def test_evidence_shorter_than_min_dropped_with_length_diagnostic() -> None:
     """证据归一化后 9 字 < 下限 → 丢弃，诊断里能看出是"长度"原因。"""
     assert len(NINE_CHARS) < MIN_EVIDENCE_CHARS
-    llm = StubLLM({"findings": [_finding(evidence=NINE_CHARS)]})
+    llm = FakeGenerator({"findings": [_finding(evidence=NINE_CHARS)]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -198,7 +172,7 @@ def test_evidence_shorter_than_min_dropped_with_length_diagnostic() -> None:
 def test_evidence_longer_than_max_dropped_with_length_diagnostic() -> None:
     """证据归一化后 101 字 > 上限 → 丢弃，诊断里能看出是"长度"原因。"""
     assert len(LONG_EVIDENCE) > MAX_EVIDENCE_CHARS
-    llm = StubLLM({"findings": [_finding(evidence=LONG_EVIDENCE)]})
+    llm = FakeGenerator({"findings": [_finding(evidence=LONG_EVIDENCE)]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], LONG_CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -210,7 +184,7 @@ def test_evidence_84_chars_passes_after_upper_bound_widened() -> None:
     """84 字整行照抄（真实对抗合同段 20）→ 通过；改前上限 80 会把它判成超限。"""
     assert len(EVIDENCE_84) == 84
     span = "甲方有权根据经营需要、项目调整，单方无条件调整乙方工作岗位"
-    llm = StubLLM({"findings": [_finding(evidence=EVIDENCE_84)]})
+    llm = FakeGenerator({"findings": [_finding(evidence=EVIDENCE_84)]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate(span=span)], EVIDENCE_84 + "\n", errors=errors, statutes=LIBRARY)
 
@@ -223,7 +197,7 @@ def test_evidence_exactly_100_chars_passes_at_boundary() -> None:
     """正好 100 字（上限本身）→ 通过：区间是闭区间。"""
     assert len(EVIDENCE_100) == 100
     span = "乙方确认甲方已在签订本合同前就全部条款逐条说明并充分协商"
-    llm = StubLLM({"findings": [_finding(evidence=EVIDENCE_100)]})
+    llm = FakeGenerator({"findings": [_finding(evidence=EVIDENCE_100)]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate(span=span)], EVIDENCE_100 + "\n", errors=errors, statutes=LIBRARY)
 
@@ -233,7 +207,7 @@ def test_evidence_exactly_100_chars_passes_at_boundary() -> None:
 
 def test_evidence_inside_candidate_paragraph_passes() -> None:
     """证据落在候选所在段落内 → 通过（加严后唯一被接受的定位形态）。"""
-    llm = StubLLM({"findings": [_finding()]})
+    llm = FakeGenerator({"findings": [_finding()]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -245,7 +219,7 @@ def test_evidence_inside_candidate_paragraph_passes() -> None:
 
 def test_evidence_only_in_another_paragraph_dropped() -> None:
     """证据只在第 2 段出现、候选在第 1 段 → 丢弃，不再退回首次出现。"""
-    llm = StubLLM({"findings": [_finding(evidence="乙方月综合薪资 8000 元")]})
+    llm = FakeGenerator({"findings": [_finding(evidence="乙方月综合薪资 8000 元")]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -256,7 +230,7 @@ def test_evidence_only_in_another_paragraph_dropped() -> None:
 def test_evidence_with_newline_dropped_as_cross_paragraph() -> None:
     """证据把两段拼起来（含换行）→ 丢弃，诊断含"跨段"。"""
     evidence = TRANSFER_SPAN + "\n乙方月综合薪资 8000 元"
-    llm = StubLLM({"findings": [_finding(evidence=evidence)]})
+    llm = FakeGenerator({"findings": [_finding(evidence=evidence)]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -268,7 +242,7 @@ def test_evidence_spanning_paragraph_boundary_dropped_as_cross_paragraph() -> No
     """没有换行，但归一化后把段尾与段首拼成了一个匹配 → 同样按跨段丢弃。"""
     boundary_contract = "甲方有权单方调整乙方工作岗位，乙方不得拒绝\n乙方月综合薪资 8000 元\n"
     evidence = "乙方不得拒绝乙方月综合薪资"
-    llm = StubLLM({"findings": [_finding(evidence=evidence)]})
+    llm = FakeGenerator({"findings": [_finding(evidence=evidence)]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], boundary_contract, errors=errors, statutes=LIBRARY)
 
@@ -285,7 +259,7 @@ def test_grade_a_without_statute_dropped_by_l3_2() -> None:
     L3.1 第 1 道的"缺法条依据降 C"口径未变（`_verify` 未改），但它现在只对**已过 L3.2** 的条目生效：
     自提条目（`extra`）不走 L3.2，直接调用 `_verify` 也仍走老口径，故这里两种口径都断言。
     """
-    llm = StubLLM({"findings": [_finding(statute_ids=[])]})
+    llm = FakeGenerator({"findings": [_finding(statute_ids=[])]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -300,7 +274,7 @@ def test_grade_a_without_statute_dropped_by_l3_2() -> None:
 
 
 def test_invalid_grade_dropped() -> None:
-    llm = StubLLM({"findings": [_finding(grade="S")]})
+    llm = FakeGenerator({"findings": [_finding(grade="S")]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -309,7 +283,7 @@ def test_invalid_grade_dropped() -> None:
 
 
 def test_idx_out_of_range_dropped() -> None:
-    llm = StubLLM({"findings": [_finding(idx=7)]})
+    llm = FakeGenerator({"findings": [_finding(idx=7)]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -320,7 +294,7 @@ def test_idx_out_of_range_dropped() -> None:
 def test_idx_bool_dropped_not_used_as_index() -> None:
     """JSON 的 true 是 bool（int 子类），不能被当成 idx=1 命中别的候选。"""
     second = _candidate(paragraph=2, span="乙方月综合薪资 8000 元")
-    llm = StubLLM({"findings": [_finding(idx=True, evidence="乙方月综合薪资 8000 元")]})
+    llm = FakeGenerator({"findings": [_finding(idx=True, evidence="乙方月综合薪资 8000 元")]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate(), second], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -342,7 +316,7 @@ def test_verify_off_keeps_extra_grade_without_c_cap() -> None:
             "need_facts": [],
         }
     ]
-    llm = StubLLM({"findings": [], "extra": extra})
+    llm = FakeGenerator({"findings": [], "extra": extra})
     got = review_clauses(llm, [_candidate()], CONTRACT, statutes=LIBRARY, verify=False)
 
     assert len(got) == 1
@@ -350,7 +324,7 @@ def test_verify_off_keeps_extra_grade_without_c_cap() -> None:
     assert got[0].grade == "A", "消融臂不封顶 C；生产臂（verify=True）才封顶"
     # 同一份输出走生产臂：自提一律降 C
     kept = review_clauses(
-        StubLLM({"findings": [], "extra": extra}), [_candidate()], CONTRACT, statutes=LIBRARY
+        FakeGenerator({"findings": [], "extra": extra}), [_candidate()], CONTRACT, statutes=LIBRARY
     )
     assert [f.grade for f in kept] == ["C"]
 
@@ -387,7 +361,7 @@ def test_extra_always_c_and_capped() -> None:
             "need_facts": [],
         },
     ]
-    llm = StubLLM({"findings": [], "extra": extra})
+    llm = FakeGenerator({"findings": [], "extra": extra})
     got = review_clauses(llm, [_candidate()], CONTRACT, max_extra=2, statutes=LIBRARY)
 
     assert len(got) == 2
@@ -408,7 +382,7 @@ def test_extra_unknown_statute_still_dropped() -> None:
             "need_facts": [],
         }
     ]
-    llm = StubLLM({"findings": [], "extra": extra})
+    llm = FakeGenerator({"findings": [], "extra": extra})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -418,7 +392,7 @@ def test_extra_unknown_statute_still_dropped() -> None:
 
 def test_extra_overlapping_trigger_finding_dropped() -> None:
     """自提与已命中条款重叠 → 不算"触发器之外"的新发现，丢弃。"""
-    llm = StubLLM(
+    llm = FakeGenerator(
         {
             "findings": [_finding()],
             "extra": [
@@ -472,7 +446,7 @@ def test_extra_deduped_even_if_different_reason() -> None:
             "need_facts": [],
         }
     ]
-    llm = StubLLM(
+    llm = FakeGenerator(
         {
             "findings": [
                 _finding(
@@ -502,7 +476,7 @@ def test_extra_dropped_when_same_span_and_same_subject() -> None:
             "need_facts": [],
         }
     ]
-    llm = StubLLM(
+    llm = FakeGenerator(
         {
             "findings": [
                 _finding(
@@ -566,7 +540,7 @@ def test_extra_cap_counts_unprocessed_instead_of_silent_break() -> None:
             "need_facts": [],
         },
     ]
-    llm = StubLLM({"findings": [_finding()], "extra": extra})
+    llm = FakeGenerator({"findings": [_finding()], "extra": extra})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, max_extra=1, errors=errors, statutes=LIBRARY)
 
@@ -597,7 +571,7 @@ def test_extra_cap_is_global_across_batches() -> None:
         _candidate(paragraph=1, trigger_id="TR-UNILATERAL-TRANSFER"),
         _candidate(paragraph=3, trigger_id="TR-SI-WAIVER", statutes=("J2-19",)),
     ]
-    llm = StubLLM({"findings": [], "extra": extra})
+    llm = FakeGenerator({"findings": [], "extra": extra})
     got = review_clauses(llm, candidates, CONTRACT, batch_size=1, max_extra=1, statutes=LIBRARY)
 
     assert len(got) == 1
@@ -610,7 +584,7 @@ def test_extra_cap_is_global_across_batches() -> None:
 def test_batching_splits_candidates() -> None:
     """20 条候选、batch_size=5 → 4 次调用，每批 ≤5 条且 idx 从 0 起。"""
     candidates = [_candidate(paragraph=i + 1, trigger_id=f"TR-TEST-{i:02d}") for i in range(20)]
-    llm = StubLLM({"findings": []})
+    llm = FakeGenerator({"findings": []})
     errors: list[str] = []
     got = review_clauses(llm, candidates, CONTRACT, batch_size=5, errors=errors, statutes=LIBRARY)
 
@@ -622,7 +596,7 @@ def test_batching_splits_candidates() -> None:
 
 
 def test_invalid_json_returns_empty_with_errors() -> None:
-    llm = StubLLM(ValueError("Expecting value: line 1 column 1"))
+    llm = FakeGenerator(ValueError("Expecting value: line 1 column 1"))
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -631,7 +605,7 @@ def test_invalid_json_returns_empty_with_errors() -> None:
 
 
 def test_non_object_output_returns_empty_with_errors() -> None:
-    llm = StubLLM(["不是 JSON 对象"])  # type: ignore[list-item]
+    llm = FakeGenerator(["不是 JSON 对象"])  # type: ignore[list-item]
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -657,7 +631,7 @@ HIGH_OVERLAP_EVIDENCE = "甲方有权单方调整乙方工作岗位，乙方可�
 def test_span_comes_from_candidate_not_model_rewrite() -> None:
     """模型自己给出 span 字段也不采信：span 一律取候选片段。"""
     row = _finding(span="模型改写的定位")
-    llm = StubLLM({"findings": [row]})
+    llm = FakeGenerator({"findings": [row]})
     got = review_clauses(llm, [_candidate()], CONTRACT, statutes=LIBRARY)
 
     assert len(got) == 1
@@ -672,7 +646,7 @@ def test_low_overlap_evidence_demotes_one_grade() -> None:
     contract = (
         "甲方有权单方调整乙方工作岗位，乙方不得拒绝。甲方有权单方解除劳动合同，无需支付任何经济补偿。\n"
     )
-    llm = StubLLM({"findings": [_finding(evidence=LOW_OVERLAP_EVIDENCE)]})
+    llm = FakeGenerator({"findings": [_finding(evidence=LOW_OVERLAP_EVIDENCE)]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], contract, errors=errors, statutes=LIBRARY)
 
@@ -692,7 +666,7 @@ def test_low_overlap_from_b_demotes_to_c() -> None:
     row = _finding(
         grade="B", statute_ids=["LCL-35"], evidence=LOW_OVERLAP_EVIDENCE, need_facts=["是否经协商一致"]
     )
-    llm = StubLLM({"findings": [row]})
+    llm = FakeGenerator({"findings": [row]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], contract, errors=errors, statutes=LIBRARY)
 
@@ -708,7 +682,7 @@ def test_low_overlap_at_c_stays_c_with_diagnostic() -> None:
         "甲方有权单方调整乙方工作岗位，乙方不得拒绝。甲方有权单方解除劳动合同，无需支付任何经济补偿。\n"
     )
     row = _finding(grade="C", statute_ids=[], quote_statute="", evidence=LOW_OVERLAP_EVIDENCE)
-    llm = StubLLM({"findings": [row]})
+    llm = FakeGenerator({"findings": [row]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], contract, errors=errors, statutes=LIBRARY)
 
@@ -721,7 +695,7 @@ def test_low_overlap_at_c_stays_c_with_diagnostic() -> None:
 def test_high_overlap_does_not_demote() -> None:
     """重叠 ≈0.8（≥ OVERLAP_MIN）→ 不降级，等级原样保留。"""
     contract = "甲方有权单方调整乙方工作岗位，乙方不得拒绝。甲方有权单方调整乙方工作岗位，乙方可以拒绝。\n"
-    llm = StubLLM({"findings": [_finding(evidence=HIGH_OVERLAP_EVIDENCE)]})
+    llm = FakeGenerator({"findings": [_finding(evidence=HIGH_OVERLAP_EVIDENCE)]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], contract, errors=errors, statutes=LIBRARY)
 
@@ -741,7 +715,7 @@ def test_findings_sorted_by_paragraph_and_grade() -> None:
         _candidate(paragraph=1, span=TRANSFER_SPAN, trigger_id="TR-UNILATERAL-TRANSFER"),
         _candidate(paragraph=3, span=SI_SPAN, trigger_id="TR-SI-WAIVER", statutes=("J2-19", "SIL-58")),
     ]
-    llm = StubLLM({"findings": rows})
+    llm = FakeGenerator({"findings": rows})
     got = review_clauses(llm, candidates, CONTRACT, statutes=LIBRARY)
 
     assert [(f.paragraph, f.grade, f.trigger_id) for f in got] == [
@@ -754,7 +728,7 @@ def test_findings_sorted_by_paragraph_and_grade() -> None:
 
 
 def test_payload_carries_statute_text_and_closed_set_rule() -> None:
-    llm = StubLLM({"findings": []})
+    llm = FakeGenerator({"findings": []})
     review_clauses(llm, [_candidate()], CONTRACT, max_extra=2, statutes=LIBRARY)
 
     payload = llm.payloads[0]
@@ -799,7 +773,7 @@ def test_payload_rule_checks_carry_only_decision_relevant_statuses() -> None:
         _check("R-NEEDS-FACT", RuleCheckStatus.NEEDS_FACT, actual=""),
         _check("R-OK", RuleCheckStatus.OK),
     ]
-    llm = StubLLM({"findings": []})
+    llm = FakeGenerator({"findings": []})
     review_clauses(llm, [_candidate()], CONTRACT, statutes=LIBRARY, rule_checks=checks)
 
     got = llm.payloads[0]["rule_checks"]
@@ -822,7 +796,7 @@ def test_payload_rule_checks_filtered_by_batch_candidate_statutes() -> None:
         _check("R-REL-SI", statute_id="LCL-26", field="social_insurance"),
         _check("R-UNRELATED", statute_id="SIL-58"),
     ]
-    llm = StubLLM({"findings": []})
+    llm = FakeGenerator({"findings": []})
     review_clauses(
         llm,
         [
@@ -846,7 +820,7 @@ def test_payload_rule_checks_filtered_by_batch_candidate_statutes() -> None:
 
 def test_payload_rule_checks_empty_when_no_related_rule() -> None:
     """有校验信号但都与本批候选无关 → 字段是 `[]`（不是缺字段）。"""
-    llm = StubLLM({"findings": []})
+    llm = FakeGenerator({"findings": []})
     review_clauses(
         llm,
         [_candidate()],
@@ -860,7 +834,7 @@ def test_payload_rule_checks_empty_when_no_related_rule() -> None:
 def test_payload_rule_checks_are_per_batch_not_per_candidate() -> None:
     """每批都带同一份校验信号（不是挂到单条候选上）。"""
     checks = [_check("R-MISMATCH", RuleCheckStatus.MISMATCH)]
-    llm = StubLLM({"findings": []}, {"findings": []})
+    llm = FakeGenerator({"findings": []}, {"findings": []})
     review_clauses(
         llm,
         [_candidate(), _candidate(paragraph=3, span=SI_SPAN, trigger_id="TR-SI-WAIVER")],
@@ -891,7 +865,7 @@ def test_payload_rule_checks_truncated_at_limit_with_diagnostic() -> None:
     """超过 `MAX_RULE_CHECKS` 截断并记诊断；恰好等于上限时不记。"""
     over = [_check(f"R-{i:02d}", RuleCheckStatus.MISMATCH) for i in range(MAX_RULE_CHECKS + 5)]
     errors: list[str] = []
-    llm = StubLLM({"findings": []})
+    llm = FakeGenerator({"findings": []})
     review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY, rule_checks=over)
 
     assert len(llm.payloads[0]["rule_checks"]) == MAX_RULE_CHECKS
@@ -899,7 +873,7 @@ def test_payload_rule_checks_truncated_at_limit_with_diagnostic() -> None:
 
     at_limit = over[:MAX_RULE_CHECKS]
     errors_at_limit: list[str] = []
-    llm2 = StubLLM({"findings": []})
+    llm2 = FakeGenerator({"findings": []})
     review_clauses(
         llm2, [_candidate()], CONTRACT, errors=errors_at_limit, statutes=LIBRARY, rule_checks=at_limit
     )
@@ -909,7 +883,7 @@ def test_payload_rule_checks_truncated_at_limit_with_diagnostic() -> None:
 
 def test_payload_rule_checks_empty_when_none_passed() -> None:
     """没有校验信号时字段是 `[]`（不是缺字段，模型不必猜）。"""
-    llm = StubLLM({"findings": []})
+    llm = FakeGenerator({"findings": []})
     review_clauses(llm, [_candidate()], CONTRACT, statutes=LIBRARY)
     assert llm.payloads[0]["rule_checks"] == []
     assert llm.payloads[0]["fact_sheet"] == {}
@@ -917,7 +891,7 @@ def test_payload_rule_checks_empty_when_none_passed() -> None:
 
 def test_payload_fact_sheet_skips_empty_values() -> None:
     """只发已填事实：空串 / 纯空白不下发，键名保持字段 id。"""
-    llm = StubLLM({"findings": []})
+    llm = FakeGenerator({"findings": []})
     review_clauses(
         llm,
         [_candidate()],
@@ -932,7 +906,7 @@ def test_payload_fact_sheet_caps_items_and_value_length() -> None:
     """超过 `MAX_FACTS` 项只取前几项；单值截断到 `MAX_FACT_CHARS`。"""
     long_value = "长" * (MAX_FACT_CHARS + 20)
     facts = {"term_years": long_value, **{f"f{i}": str(i) for i in range(MAX_FACTS + 2)}}
-    llm = StubLLM({"findings": []})
+    llm = FakeGenerator({"findings": []})
     review_clauses(llm, [_candidate()], CONTRACT, statutes=LIBRARY, facts=facts)
 
     sheet = llm.payloads[0]["fact_sheet"]
@@ -951,7 +925,7 @@ def test_payload_fact_sheet_prioritises_fields_used_by_rule_checks() -> None:
         "f5": "5",
         "probation_months": "12",
     }
-    llm = StubLLM({"findings": []})
+    llm = FakeGenerator({"findings": []})
     review_clauses(
         llm,
         [_candidate()],
@@ -966,7 +940,7 @@ def test_payload_fact_sheet_prioritises_fields_used_by_rule_checks() -> None:
     assert len(sheet) == MAX_FACTS
 
     # 对照：没有相关 rule_checks 时按原顺序截断，排在第 6 位的 probation_months 被丢掉
-    llm2 = StubLLM({"findings": []})
+    llm2 = FakeGenerator({"findings": []})
     review_clauses(llm2, [_candidate()], CONTRACT, statutes=LIBRARY, facts=facts)
     assert "probation_months" not in llm2.payloads[0]["fact_sheet"]
 
@@ -986,7 +960,7 @@ PRIVACY_CONTRACT = "\n".join(PRIVACY_LINES) + "\n"
 
 def test_payload_privacy_keeps_candidate_plus_minus_two_only() -> None:
     """外发范围不变：只发候选 ±2 段；rule_checks / fact_sheet 不夹带任何合同正文。"""
-    llm = StubLLM({"findings": []})
+    llm = FakeGenerator({"findings": []})
     review_clauses(
         llm,
         [_candidate(paragraph=5)],
@@ -1043,7 +1017,7 @@ def test_verify_directly_rejects_without_candidate_set() -> None:
 
 def test_reason_missing_dropped_by_l3_2() -> None:
     """P2-6 起 reason 空属 L3.2 形态失败（7.2 第 3 项）→ 丢弃，不再由 L3.1 补通用描述。"""
-    llm = StubLLM({"findings": [_finding(reason="")]})
+    llm = FakeGenerator({"findings": [_finding(reason="")]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -1052,7 +1026,7 @@ def test_reason_missing_dropped_by_l3_2() -> None:
 
 
 def test_reason_kept_when_present() -> None:
-    llm = StubLLM({"findings": [_finding(reason="该约定与第三十五条不符")]})
+    llm = FakeGenerator({"findings": [_finding(reason="该约定与第三十五条不符")]})
     got = review_clauses(llm, [_candidate()], CONTRACT, statutes=LIBRARY)
 
     assert len(got) == 1
@@ -1070,76 +1044,41 @@ def test_verify_fills_generic_reason_when_missing() -> None:
 # ---------- 接线：开关打开才跑，且试用期工资规则让位 ----------
 
 
-class _WiringLLM:
+class _WiringLLM(FakeGenerator):
     """接线测试用假模型：条款判定固定返回一条 A 级结论。"""
 
-    available = True
-    usage_in = 0
-    usage_out = 0
-
-    def generate(self, system: str, user: str, schema: dict[str, Any] | None = None) -> dict[str, Any]:
-        return {"findings": [_finding()], "extra": []}
-
-    def classify(self, text: str, labels: list[str]) -> str:
-        return labels[0] if labels else "不确定"
+    def __init__(self) -> None:
+        super().__init__({"findings": [_finding()], "extra": []})
 
 
-class _FailingLLM:
-    """条款判定必失败（模拟网络 / 鉴权错误）：用于验证规则回补、风险不静默消失。"""
-
-    available = True
-    usage_in = 0
-    usage_out = 0
-
-    def generate(self, system: str, user: str, schema: dict[str, Any] | None = None) -> dict[str, Any]:
-        raise LLMError("HTTP 401：鉴权失败")
-
-    def classify(self, text: str, labels: list[str]) -> str:
-        return labels[0] if labels else "不确定"
-
-
-class _ProbationWageLLM:
+class _ProbationWageLLM(FakeGenerator):
     """只对试用期工资基数这一条候选出结论，其余候选一律不报。"""
 
-    available = True
-    usage_in = 0
-    usage_out = 0
-
-    def generate(self, system: str, user: str, schema: dict[str, Any] | None = None) -> dict[str, Any]:
-        payload = json.loads(user)
-        for idx, candidate in enumerate(payload.get("candidates") or []):
-            if candidate.get("trigger_id") != "TR-PROBATION-WAGE-BASE":
-                continue
-            return {
-                "findings": [
-                    {
-                        "idx": idx,
-                        "grade": "A",
-                        "reason": "该约定与第二十条关于试用期工资不得低于约定工资 80% 的规定不符",
-                        "statute_ids": [candidate["candidate_statute_ids"][0]],
-                        # P2-6：A 级要过 L3.2 就必须带 quote_statute（此处抄的是 LCL-20 的真实子串）
-                        "quote_statute": "劳动者在试用期的工资不得低于本单位相同岗位最低档工资",
-                        "evidence": candidate["span"],
-                        "need_facts": [],
-                    }
-                ],
-                "extra": [],
-            }
-        return {"findings": [], "extra": []}
-
-    def classify(self, text: str, labels: list[str]) -> str:
-        return labels[0] if labels else "不确定"
-
-
-class _CapturingWiringLLM(_WiringLLM):
-    """记录每次 payload 的接线用假模型：不产出结论，只看服务层传下了什么。"""
-
     def __init__(self) -> None:
-        self.payloads: list[dict[str, Any]] = []
+        super().__init__(_probation_wage_reply)
 
-    def generate(self, system: str, user: str, schema: dict[str, Any] | None = None) -> dict[str, Any]:
-        self.payloads.append(json.loads(user))
-        return {"findings": [], "extra": []}
+
+def _probation_wage_reply(system: str, user: str) -> dict[str, Any]:
+    payload = json.loads(user)
+    for idx, candidate in enumerate(payload.get("candidates") or []):
+        if candidate.get("trigger_id") != "TR-PROBATION-WAGE-BASE":
+            continue
+        return {
+            "findings": [
+                {
+                    "idx": idx,
+                    "grade": "A",
+                    "reason": "该约定与第二十条关于试用期工资不得低于约定工资 80% 的规定不符",
+                    "statute_ids": [candidate["candidate_statute_ids"][0]],
+                    # P2-6：A 级要过 L3.2 就必须带 quote_statute（此处抄的是 LCL-20 的真实子串）
+                    "quote_statute": "劳动者在试用期的工资不得低于本单位相同岗位最低档工资",
+                    "evidence": candidate["span"],
+                    "need_facts": [],
+                }
+            ],
+            "extra": [],
+        }
+    return {"findings": [], "extra": []}
 
 
 def _run_check_with(
@@ -1199,7 +1138,7 @@ def test_wiring_on_keeps_rule_without_matching_finding(monkeypatch) -> None:
 
 def test_demote_rule_kept_when_model_fails(monkeypatch) -> None:
     """模型失败 → 条款通道为空，试用期工资风险必须由规则报出来（不静默消失）。"""
-    task = _run_check_with(monkeypatch, PROBATION_WAGE_CONTRACT, enabled=True, llm=_FailingLLM())
+    task = _run_check_with(monkeypatch, PROBATION_WAGE_CONTRACT, enabled=True, llm=FakeGenerator(raises=True))
 
     assert task.clause_findings == []
     assert any(i.rule_id == "R-PROBATION-WAGE-80" for i in task.items)
@@ -1221,7 +1160,7 @@ def test_run_check_feeds_rule_checks_and_facts_into_payload(monkeypatch) -> None
     社保放弃条款已无对应规则（SIL-58 / SIL-86 两条随之下线），而 `TR-PROBATION-TERM-EXCEED`
     的候选法条含 LCL-19，与 `R-PROBATION-*` 的 `statute_id` 对齐，接线仍有信号可验。
     """
-    llm = _CapturingWiringLLM()
+    llm = FakeGenerator()  # 不产出结论，只看服务层传下了什么
     _run_check_with(
         monkeypatch,
         "乙方试用期为六个月。\n",

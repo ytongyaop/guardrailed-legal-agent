@@ -9,11 +9,16 @@ import json
 import sqlite3
 from typing import Any
 
+import pytest
+from helpers import FakeGenerator
+
 from mla.adapters.persist import SqliteRepository
 from mla.config import Paths, data_path
 from mla.domain.clauses import ClauseCandidate
 from mla.domain.models import CheckTask, ClauseFinding, StatuteEntry, TaskMode
 from mla.services.clause_review import STATUTE_FULL_MAX, _payload, _verify, review_clauses
+
+pytestmark = pytest.mark.mock_llm
 
 CONTRACT = "甲方有权单方调整乙方工作岗位，乙方不得拒绝。\n乙方月综合薪资 8000 元。\n"
 TRANSFER_SPAN = "甲方有权单方调整乙方工作岗位，乙方不得拒绝"
@@ -38,25 +43,6 @@ LIBRARY = {
         issuing_body="全国人民代表大会常务委员会",
     )
 }
-
-
-class StubLLM:
-    """假模型：返回预置结果，并记录每次调用的 payload 与 system。"""
-
-    available = True
-
-    def __init__(self, *responses: Any) -> None:
-        self.responses = list(responses)
-        self.payloads: list[dict[str, Any]] = []
-        self.systems: list[str] = []
-
-    def generate(self, system: str, user: str, schema: dict[str, Any] | None = None) -> dict[str, Any]:
-        self.systems.append(system)
-        self.payloads.append(json.loads(user))
-        return self.responses[min(len(self.payloads) - 1, len(self.responses) - 1)]
-
-    def classify(self, text: str, labels: list[str]) -> str:
-        return labels[0] if labels else "不确定"
 
 
 def _candidate() -> ClauseCandidate:
@@ -88,7 +74,7 @@ def _finding(**over: Any) -> dict[str, Any]:
 
 def test_true_statute_substring_kept() -> None:
     """逐字抄的原文 → 通过核验，等级 A 与 quote_statute 都保留。"""
-    llm = StubLLM({"findings": [_finding(quote_statute=QUOTE_TRUE)]})
+    llm = FakeGenerator({"findings": [_finding(quote_statute=QUOTE_TRUE)]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -100,7 +86,7 @@ def test_true_statute_substring_kept() -> None:
 
 def test_fabricated_statute_text_cleared_and_downgraded() -> None:
     """形似但原文里不存在的 quote → 清空该引用（条号保留），A 级按第 1 道降 B。"""
-    llm = StubLLM({"findings": [_finding(quote_statute=QUOTE_FAKE)]})
+    llm = FakeGenerator({"findings": [_finding(quote_statute=QUOTE_FAKE)]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -115,7 +101,7 @@ def test_fabricated_statute_text_cleared_and_downgraded() -> None:
 def test_whitespace_difference_still_passes() -> None:
     """只差空白（空格 / 换行）的合法子串 → 归一化后通过，保留模型抄的原文形态。"""
     quote = "用人单位与劳动者协商一致，\n  可以变更劳动合同约定的内容"
-    llm = StubLLM({"findings": [_finding(quote_statute=quote)]})
+    llm = FakeGenerator({"findings": [_finding(quote_statute=quote)]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -127,7 +113,7 @@ def test_whitespace_difference_still_passes() -> None:
 
 def test_quote_without_statute_ids_cleared() -> None:
     """C 级给了 quote 但没给条号 → 无法归因，清空并留痕（结论本身保留）。"""
-    llm = StubLLM({"findings": [_finding(grade="C", statute_ids=[], quote_statute=QUOTE_TRUE)]})
+    llm = FakeGenerator({"findings": [_finding(grade="C", statute_ids=[], quote_statute=QUOTE_TRUE)]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -147,7 +133,7 @@ def test_grade_a_without_quote_dropped_by_l3_2() -> None:
     直接调用 `_verify` 仍是降 B，故这里两种口径都断言。"抄错原文"（quote 非空但不是原文）
     不受影响，仍走第 3 道清空 + 降 B（见上一个用例）。
     """
-    llm = StubLLM({"findings": [_finding()]})
+    llm = FakeGenerator({"findings": [_finding()]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 
@@ -166,7 +152,7 @@ def test_grade_b_without_quote_dropped_by_l3_2() -> None:
 
     L3.1 第 1 道不要求 B 级三件套，该口径未变：直接调用 `_verify` 时 B 级缺 quote 仍保持 B。
     """
-    llm = StubLLM({"findings": [_finding(grade="B", need_facts=["工资基数"])]})
+    llm = FakeGenerator({"findings": [_finding(grade="B", need_facts=["工资基数"])]})
     errors: list[str] = []
     got = review_clauses(llm, [_candidate()], CONTRACT, errors=errors, statutes=LIBRARY)
 

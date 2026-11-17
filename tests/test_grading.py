@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from mla.domain.elements import Element, default_elements
 from mla.domain.grading import (
     CERTAINTY_BODY,
@@ -18,6 +20,8 @@ from mla.domain.grading import (
     to_display,
 )
 from mla.domain.models import CheckItem, ItemKind
+
+pytestmark = pytest.mark.no_llm
 
 ELEMENTS = (
     Element("EL-1", "当事人与基本信息", ("用人单位", "劳动者"), "低", ("确认主体", "确认送达", "确认身份")),

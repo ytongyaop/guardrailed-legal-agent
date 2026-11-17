@@ -24,6 +24,8 @@ from mla.config import Paths, data_path
 from mla.domain.models import Role, TaskMode, User
 from mla.services.tasks import NO_MODEL_MESSAGE, NO_MODEL_QA_MESSAGE, NoModelError, run_check, run_qa
 
+pytestmark = pytest.mark.no_llm
+
 CONTRACT = Path(data_path("evalsets/sample_contract.txt")).read_text(encoding="utf-8")
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 
