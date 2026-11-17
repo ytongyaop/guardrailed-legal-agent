@@ -22,7 +22,15 @@
     4. span 定位率     结论的 span 能在合同原文（`_norm` 后）定位的比例
     5. 分级一致率      与 gold `grade` 完全一致的条数 / 覆盖条数；另给相邻容忍口径
                       （完全一致 1.0 + A↔B 相邻 0.5）
-附带：model_extra 条数、耗时、token、多次重跑的等级稳定率。
+附带：结论精确率（命中任一 gold 正样本的结论条数 ÷ 结论条数）、model_extra 条数、
+耗时、token、多次重跑的等级稳定率。
+
+P3 口径（规格 11.2 / 11.3）：
+    - 所有二项比率都带分母条数与 Wilson 95% 区间（`wilson_interval`），分母为 0 时印 `-`；
+      容忍一致率带半权（A↔B 记 0.5），不是二项比例，只报 n、不报区间。
+    - 输出首行是开发集声明：clause_gold 是开发集，指标不代表泛化结论。
+    - 用例集（`eval_cases` / `eval_generalization`）里 `gold_items` 全部指向已下线规则的条目，
+      运行时识别为 retired、剔出分母并计数（**gold 数据不改**），结果 JSON 与终端都可见。
 
 多合同口径：gold 按 `gold.contract` 分组，逐合同独立算五指标；末尾「汇总」表把
 各合同**最后一轮**的原始计数相加后重算比率（不是把比率取平均）。gold 里没有标注的合同
@@ -39,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 import unicodedata
@@ -70,6 +79,12 @@ DEFAULT_HISTORY = data_path("evalsets/clause_eval_history.jsonl")
 GENERALIZATION = data_path("evalsets/eval_generalization.jsonl")
 PREVIEW_CHARS = 40
 PREVIEW_ROWS = 10
+WILSON_Z = 1.959964  # 95% 双侧正态分位数（规格 11.2）
+# 用例集里 gold_items 指向规则 ID 的文件：规则下线后要能在运行时识别出来（**不改数据**）
+CASE_FILES = (
+    data_path("evalsets/eval_cases.jsonl"),
+    data_path("evalsets/eval_generalization.jsonl"),
+)
 
 # 规则 → gold 正样本的人工映射（`rule_only` 臂专用；**不改 gold 文件**）。
 # 判定口径：规则的 statute_id 与 gold.statute_ids 对得上，且规则字段就是该陷阱的数值形态。
@@ -112,6 +127,122 @@ class ArmFinding:
 
 
 # ---------- 纯函数：指标计算 ----------
+
+
+def wilson_interval(k: int, n: int, z: float = WILSON_Z) -> tuple[float, float] | None:
+    """Wilson score interval；n == 0 返回 None。
+
+    `k` 是命中的原始条数，`n` 是分母条数。小样本（n<30）时正态近似区间会越界，也会
+    给出「0 误差」的假象，Wilson 区间不会，故所有比率统一报这一种（规格 11.2）。
+    """
+    if n <= 0:
+        return None
+    if k < 0 or k > n:
+        raise ValueError(f"命中条数 {k} 必须落在 [0, {n}] 内")
+    p = k / n
+    denom = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return (max(0.0, center - half), min(1.0, center + half))
+
+
+def _rate(hits: int, total: int) -> tuple[float | None, tuple[float, float] | None]:
+    """比率的点估计（4 位小数）+ Wilson 95% 区间；分母为 0 时两者都给 None（不报 0）。"""
+    if total <= 0:
+        return None, None
+    return round(hits / total, 4), wilson_interval(hits, total)
+
+
+# 区间口径：指标名 → (分子计数键, 分母计数键)；打印与汇总都走这张表，避免两处算两套
+INTERVAL_PAIRS: dict[str, tuple[str, str]] = {
+    "coverage": ("coverage_hits", "coverage_total"),
+    "false_a_rate": ("false_a", "false_a_total"),
+    "precision": ("precision_hits", "precision_total"),
+    "citation_accuracy": ("citation_ok", "citation_total"),
+    "span_rate": ("span_located", "span_total"),
+    "grade_exact": ("grade_exact_hits", "grade_covered"),
+}
+
+
+def intervals_from_counts(counts: Mapping[str, int]) -> dict[str, tuple[float, float] | None]:
+    """按原始计数重算六项比率的 Wilson 95% 区间（分母为 0 → None）。"""
+    return {
+        name: wilson_interval(int(counts.get(num) or 0), int(counts.get(den) or 0))
+        for name, (num, den) in INTERVAL_PAIRS.items()
+    }
+
+
+def _ci_block(intervals: Mapping[str, tuple[float, float] | None]) -> dict[str, Any]:
+    """摊平成 `coverage_ci` 这类键，落盘后消费方不用再摸 `intervals`。"""
+    return {f"{name}_ci": interval for name, interval in intervals.items()}
+
+
+def load_case_rows(path: str | Path) -> tuple[dict[str, Any], ...]:
+    """读用例 JSONL（`eval_cases` / `eval_generalization`）；只读，不校验。"""
+    return tuple(
+        json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()
+    )
+
+
+def audit_gold_cases(
+    rows: Sequence[Mapping[str, Any]], rule_ids: Container[str], *, source: str = ""
+) -> dict[str, Any]:
+    """按当前规则表给用例集分类（**不改 gold**，只在运行时识别）。
+
+    - `retired`：`gold_items` 全部指向已不存在的规则 → 从分母剔除，单独计数；
+    - `partial`：只有部分指向已下线规则 → 留在分母内（其余 gold 仍有效），单列规则名；
+    - `usable`：`gold_items` 全部指向现存规则的条数（partial 不计入这一列）；
+    - `no_gold`：本来就没有 `gold_items` 的用例，照常进分母（它们产出的结论仍会算误报）。
+    """
+    retired: list[dict[str, Any]] = []
+    partial: list[dict[str, Any]] = []
+    no_gold: list[str] = []
+    usable = 0
+    for row in rows:
+        case_id = str(row.get("case_id") or "")
+        gold_items = tuple(str(item) for item in (row.get("gold_items") or []))
+        if not gold_items:
+            no_gold.append(case_id)
+            continue
+        missing = tuple(item for item in gold_items if item not in rule_ids)
+        if not missing:
+            usable += 1
+            continue
+        record = {
+            "case_id": case_id,
+            "gold_items": list(gold_items),
+            "missing_rules": list(missing),
+        }
+        if len(missing) == len(gold_items):
+            retired.append(record)
+        else:
+            partial.append(record)
+    return {
+        "source": source,
+        "total": len(rows),
+        "denominator": len(rows) - len(retired),
+        "usable": usable,
+        "retired": retired,
+        "partial": partial,
+        "no_gold": no_gold,
+        "retired_rules": sorted({rule for row in (*retired, *partial) for rule in row["missing_rules"]}),
+    }
+
+
+def retired_gold_audit(rule_ids: Container[str], paths: Sequence[str | Path] = CASE_FILES) -> dict[str, Any]:
+    """逐文件核对 gold 指向的规则是否还在规则表里；返回可直接落盘的明细。"""
+    files: list[dict[str, Any]] = []
+    for path in paths:
+        if not Path(path).is_file():
+            continue
+        files.append(audit_gold_cases(load_case_rows(path), rule_ids, source=Path(path).name))
+    return {
+        "rule_ids_in_use": len(rule_ids),
+        "files": files,
+        "retired_total": sum(len(item["retired"]) for item in files),
+        "retired_rules": sorted({rule for item in files for rule in item["retired_rules"]}),
+        "denominator_total": sum(item["denominator"] for item in files),
+    }
 
 
 def load_gold(path: str | Path) -> tuple[GoldRow, ...]:
@@ -229,9 +360,10 @@ def arm_metrics(
 
     covered = [gold for gold in positives if matches.get(gold.gold_id) is not None]
     uncovered = [gold.gold_id for gold in positives if matches.get(gold.gold_id) is None]
-    coverage = round(len(covered) / len(positives), 4) if positives else None
+    coverage, coverage_ci = _rate(len(covered), len(positives))
 
-    # 2. A 级误报：负样本片段被某条 A 级结论覆盖 ≥50%，按负样本条计
+    # 2. A 级误报：负样本片段被某条 A 级结论覆盖 ≥50%，按负样本条计；
+    #    另给误报率（÷ 负样本条数），比数本身才能跨合同比较
     false_a_ids = [
         gold.gold_id
         for gold in negatives
@@ -240,6 +372,13 @@ def arm_metrics(
             for finding in findings
         )
     ]
+    false_a_rate, false_a_ci = _rate(len(false_a_ids), len(negatives))
+
+    # 2b. 结论精确率：命中任一 gold 正样本的结论条数 ÷ 结论条数
+    #     （与 A 级误报互补：前者按负样本计、后者按结论计，负样本为 0 的合同也能算）
+    covered_indices = {matches[gold.gold_id] for gold in covered}
+    precision_hits = len(covered_indices - {None})
+    precision, precision_ci = _rate(precision_hits, len(findings))
 
     # 3. 引用准确率：只看"覆盖到 gold 的结论"的引用；库外条号单列，无 gold 对应的引用单列
     allowed = allowed_statutes(covered, matches)
@@ -255,11 +394,11 @@ def arm_metrics(
             cited_total += 1
             if statute_id in gold_statutes:
                 cited_ok += 1
-    citation_accuracy = round(cited_ok / cited_total, 4) if cited_total else None
+    citation_accuracy, citation_ci = _rate(cited_ok, cited_total)
 
     # 4. span 定位率
     located = sum(1 for finding in findings if locate(finding.span, contract_text) is not None)
-    span_rate = round(located / len(findings), 4) if findings else None
+    span_rate, span_ci = _rate(located, len(findings))
 
     # 5. 分级一致率：完全一致 / 相邻容忍（A↔B 记 0.5）
     exact = 0
@@ -277,15 +416,24 @@ def arm_metrics(
             grade_mismatch.append(f"{gold.gold_id}：gold={gold.grade} 实测={predicted}（相邻）")
         else:
             grade_mismatch.append(f"{gold.gold_id}：gold={gold.grade} 实测={predicted}")
+    grade_exact, grade_exact_ci = _rate(exact, len(covered))
 
     return {
         "coverage": coverage,
+        "coverage_ci": coverage_ci,
         "coverage_hits": len(covered),
         "coverage_total": len(positives),
         "false_a": len(false_a_ids),
         "false_a_total": len(negatives),
+        "false_a_rate": false_a_rate,
+        "false_a_ci": false_a_ci,
         "false_a_ids": false_a_ids,
+        "precision": precision,
+        "precision_ci": precision_ci,
+        "precision_hits": precision_hits,
+        "precision_total": len(findings),
         "citation_accuracy": citation_accuracy,
+        "citation_accuracy_ci": citation_ci,
         "citation_ok": cited_ok,
         "citation_total": cited_total,
         "citation_no_gold": cited_no_gold,
@@ -293,7 +441,10 @@ def arm_metrics(
         "span_located": located,
         "span_total": len(findings),
         "span_rate": span_rate,
-        "grade_exact": round(exact / len(covered), 4) if covered else None,
+        "span_rate_ci": span_ci,
+        "grade_exact": grade_exact,
+        "grade_exact_ci": grade_exact_ci,
+        # 容忍口径带半权（A↔B 记 0.5），不是二项比例，故不给二项区间
         "grade_tolerant": round(tolerant / len(covered), 4) if covered else None,
         # 原始计数（跨合同汇总时相加再重算比率，避免「比率的平均」）
         "grade_exact_hits": exact,
@@ -418,10 +569,17 @@ def _mean(values: Sequence[float | None]) -> float | None:
 MEAN_KEYS = (
     "coverage",
     "false_a",
+    "false_a_rate",
+    "precision",
+    "precision_hits",
+    "precision_total",
     "citation_accuracy",
     "span_rate",
     "grade_exact",
     "grade_tolerant",
+    "grade_exact_hits",
+    "grade_tolerant_score",
+    "grade_covered",
     "n_findings",
     "n_extra",
     "out_of_library",
@@ -439,6 +597,8 @@ SUM_KEYS = (
     "coverage_total",
     "false_a",
     "false_a_total",
+    "precision_hits",
+    "precision_total",
     "citation_ok",
     "citation_total",
     "citation_no_gold",
@@ -483,9 +643,12 @@ def pooled_arms(contracts: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, A
             base = counts[den]
             return round(counts[num] / base, 4) if base else None
 
+        intervals = intervals_from_counts(totals)
         pooled[arm_name] = {
             "metrics": {
                 "coverage": _ratio("coverage_hits", "coverage_total"),
+                "false_a_rate": _ratio("false_a", "false_a_total"),
+                "precision": _ratio("precision_hits", "precision_total"),
                 "citation_accuracy": _ratio("citation_ok", "citation_total"),
                 "span_rate": _ratio("span_located", "span_total"),
                 "grade_exact": _ratio("grade_exact_hits", "grade_covered"),
@@ -495,14 +658,22 @@ def pooled_arms(contracts: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, A
                 "out_of_library": totals["out_of_library"],
                 "citation_ok": totals["citation_ok"],
                 "citation_total": totals["citation_total"],
+                **_ci_block(intervals),
             },
+            # 汇总口径的 Wilson 区间：用相加后的原始计数重算（分母跨合同累加）
+            "intervals": intervals,
             "counts": {
                 "coverage_hits": totals["coverage_hits"],
                 "coverage_total": totals["coverage_total"],
                 "false_a": totals["false_a"],
                 "false_a_total": totals["false_a_total"],
+                "precision_hits": totals["precision_hits"],
+                "precision_total": totals["precision_total"],
                 "citation_ok": totals["citation_ok"],
                 "citation_total": totals["citation_total"],
+                "span_located": totals["span_located"],
+                "span_total": totals["span_total"],
+                "grade_covered": totals["grade_covered"],
                 "out_of_library": totals["out_of_library"],
                 "n_findings": totals["n_findings"],
                 "n_extra": totals["n_extra"],
@@ -525,17 +696,28 @@ def summarize_arm(
     """多轮汇总：指标取均值，逐轮明细留在 `per_run`。"""
     metrics = {key: _mean([row["metrics"].get(key) for row in per_run]) for key in MEAN_KEYS}
     last = per_run[-1]["metrics"]
+    sums = _sums(last)
+    intervals = intervals_from_counts(sums)
+    # 把区间摊平进 metrics（`coverage_ci` 等），落盘后不用再进 `intervals` 里找
+    metrics.update(_ci_block(intervals))
     return {
         "metrics": metrics,
         # 最后一轮的原始计数：跨合同汇总时相加用（见 `pooled_arms`）
-        "sums": _sums(last),
+        "sums": sums,
+        # 区间也按最后一轮的原始计数算：点估计与 k/n 同源，多轮时与上方均值可能略有差异
+        "intervals": intervals,
         "counts": {
             "coverage_hits": metrics["coverage_hits"],
             "coverage_total": positives,
             "false_a": metrics["false_a"],
             "false_a_total": negatives,
+            "precision_hits": metrics["precision_hits"],
+            "precision_total": metrics["precision_total"],
             "citation_ok": metrics["citation_ok"],
             "citation_total": metrics["citation_total"],
+            "span_located": metrics["span_located"],
+            "span_total": metrics["span_total"],
+            "grade_covered": metrics["grade_covered"],
             "out_of_library": metrics["out_of_library"],
             "n_findings": metrics["n_findings"],
             "n_extra": metrics["n_extra"],
@@ -690,8 +872,17 @@ def _cell(text: str, width: int, align: str = ">") -> str:
     return (" " * padding + text) if align == ">" else (text + " " * padding)
 
 
-WIDTHS = (10, 8, 8, 10, 10, 10, 10, 6, 9, 14)
+WIDTHS = (10, 9, 9, 14, 14, 14, 14, 14, 6, 9, 14)
 LABELS = {"rule_only": "规则-only", "model_raw": "触发+模型", "full": "完整方案"}
+INTERVAL_LABELS = (
+    ("coverage", "覆盖率(召回)"),
+    ("false_a_rate", "A 级误报率"),
+    ("precision", "结论精确率"),
+    ("citation_accuracy", "引用准确率"),
+    ("span_rate", "span 定位率"),
+    ("grade_exact", "分级一致率"),
+)
+INTERVAL_WIDTHS = (10, 14, 9, 10, 10, 10)
 
 
 def _print_table_header() -> None:
@@ -703,6 +894,7 @@ def _print_table_header() -> None:
         "span定位",
         "分级一致",
         "容忍一致",
+        "结论精确",
         "额外",
         "耗时(s)",
         "token入/出",
@@ -716,25 +908,31 @@ def _print_table_header() -> None:
     print("-" * sum(WIDTHS))
 
 
+def _ratio_cell(value: float | None, hits: float | None, total: float | None) -> str:
+    """比率单元格：`值 k/n`（分母为 0 时印 `-`，不印 0 误导成「0 误差」）。"""
+    if not total:
+        return "-"
+    return f"{_fmt(value)} {hits or 0:g}/{total:g}"
+
+
 def _print_arm_rows(arms: Mapping[str, Any]) -> None:
-    """行 = 三条臂，列 = 五指标 + 额外/耗时/token。"""
+    """行 = 三条臂，列 = 六指标（各带 k/n）+ 额外/耗时/token。"""
     for arm_name in ARM_NAMES:
         if arm_name not in arms:
             continue
         arm = arms[arm_name]
         counts = arm["counts"]
         metrics = arm["metrics"]
-        coverage = "-"
-        if counts["coverage_total"]:
-            coverage = f"{counts['coverage_hits']:g}/{counts['coverage_total']}"
+        sums = arm.get("sums") or {}
         cells = (
             LABELS[arm_name],
-            coverage,
+            f"{counts['coverage_hits']:g}/{counts['coverage_total']:g}" if counts["coverage_total"] else "-",
             f"{counts['false_a']:g}/{counts['false_a_total']:g}",
-            _fmt(metrics["citation_accuracy"]),
-            _fmt(metrics["span_rate"]),
-            _fmt(metrics["grade_exact"]),
-            _fmt(metrics["grade_tolerant"]),
+            _ratio_cell(metrics["citation_accuracy"], counts["citation_ok"], counts["citation_total"]),
+            _ratio_cell(metrics["span_rate"], counts["span_located"], counts["span_total"]),
+            _ratio_cell(metrics["grade_exact"], sums.get("grade_exact_hits"), counts["grade_covered"]),
+            _ratio_cell(metrics["grade_tolerant"], sums.get("grade_tolerant_score"), counts["grade_covered"]),
+            _ratio_cell(metrics["precision"], counts["precision_hits"], counts["precision_total"]),
             f"{counts['n_extra']:g}",
             _fmt(arm["elapsed_s"], "{:.1f}"),
             f"{arm['token_in']:g}/{arm['token_out']:g}",
@@ -745,6 +943,43 @@ def _print_arm_rows(arms: Mapping[str, Any]) -> None:
                 for index, (text, width) in enumerate(zip(cells, WIDTHS, strict=True))
             )
         )
+
+
+def _print_intervals(arms: Mapping[str, Any]) -> None:
+    """指标区间表：每行一个「臂 × 指标」，分母与 Wilson 95% 区间同列（规格 11.2）。"""
+    print("  ── 指标区间（Wilson 95%，z=1.959964；k/n 为分子/分母，取值与区间同源）")
+    header = ("臂", "指标", "k/n", "点估计", "下界", "上界")
+    print(
+        "".join(
+            _cell(text, width, "<" if index < 2 else ">")
+            for index, (text, width) in enumerate(zip(header, INTERVAL_WIDTHS, strict=True))
+        )
+    )
+    for arm_name in ARM_NAMES:
+        if arm_name not in arms:
+            continue
+        arm = arms[arm_name]
+        sums = arm.get("sums") or {}
+        intervals = arm.get("intervals") or {}
+        for key, label in INTERVAL_LABELS:
+            num_key, den_key = INTERVAL_PAIRS[key]
+            hits, total = int(sums.get(num_key) or 0), int(sums.get(den_key) or 0)
+            interval = intervals.get(key)
+            cells = (
+                LABELS[arm_name],
+                label,
+                f"{hits:g}/{total:g}",
+                _fmt(round(hits / total, 4) if total else None),
+                _fmt(interval[0]) if interval else "-",
+                _fmt(interval[1]) if interval else "-",
+            )
+            print(
+                "".join(
+                    _cell(text, width, "<" if index < 2 else ">")
+                    for index, (text, width) in enumerate(zip(cells, INTERVAL_WIDTHS, strict=True))
+                )
+            )
+    print("  （容忍一致率按半权统计（A↔B 记 0.5），不是二项比例，故只报 n、不报区间）")
 
 
 def print_table(payload: Mapping[str, Any]) -> None:
@@ -760,6 +995,7 @@ def print_table(payload: Mapping[str, Any]) -> None:
         print(f"\n── {name}：gold 正 {positives} / 负 {negatives}{note}")
         _print_table_header()
         _print_arm_rows(entry["arms"])
+        _print_intervals(entry["arms"])
 
         for arm_name in ARM_NAMES:
             arm = entry["arms"].get(arm_name)
@@ -789,9 +1025,10 @@ def print_table(payload: Mapping[str, Any]) -> None:
                 )
 
     if len(contracts) > 1:
-        print("\n── 汇总（各合同最后一轮的原始计数相加后重算比率）")
+        print("\n── 汇总（各合同最后一轮的原始计数相加后重算比率，区间同样按累加计数重算）")
         _print_table_header()
         _print_arm_rows(payload.get("pooled") or {})
+        _print_intervals(payload.get("pooled") or {})
     print("说明：覆盖/分级按 gold 条计，引用准确按引用条计；规则-only 不产出合同片段，span 类指标天然为 0。")
 
 
@@ -816,6 +1053,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     golds = load_gold(args.gold)
+    # 开发集声明放在输出开头：读数字前先知道这是哪套数据、代表什么（规格 11.3）
+    print(f"主指标基于 clause_gold {len(golds)} 条开发集；不是泛化结论")
     triggers = load_triggers(cfg.paths.clauses)
     rules = load_rules(cfg.paths.rules)
     library_ids = {row.statute_id for row in load_statutes(cfg.paths.statutes)}
@@ -826,12 +1065,30 @@ def main(argv: list[str] | None = None) -> int:
         f"触发器 {len(triggers)} 条；规则 {len(rules)} 条；法源库 {len(library_ids)} 条；gold {len(golds)} 条"
     )
 
+    # 规则下线后的 gold 处理：数据不改，运行时识别，剔除条数必须可见（规格 N6）
+    retired = retired_gold_audit({rule.rule_id for rule in rules})
+    print(
+        f"因规则下线剔除 {retired['retired_total']} 条（规则：{'、'.join(retired['retired_rules']) or '无'}）"
+    )
+    for item in retired["files"]:
+        case_ids = "、".join(row["case_id"] for row in item["retired"]) or "无"
+        print(
+            f"  · {item['source']}：{item['total']} 条 → 剔除 {len(item['retired'])} 条"
+            f"（{case_ids}），进入分母 {item['denominator']} 条；无 gold 标注 {len(item['no_gold'])} 条"
+        )
+
     payload: dict[str, Any] = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "contract_count": len(contract_paths),
         "runs": runs,
         "model": cfg.llm.model if llm else "",
         "gold_file": args.gold,
+        "main_metric": {
+            "source": "clause_gold",
+            "rows": len(golds),
+            "note": "开发集，不是泛化结论；比率统一报 Wilson 95% 区间与分母",
+        },
+        "retired_gold": retired,
     }
 
     per_contract: list[dict[str, Any]] = []
@@ -915,11 +1172,27 @@ def main(argv: list[str] | None = None) -> int:
         "generated_at": payload["generated_at"],
         "contracts": [str(path) for path in contract_paths],
         "runs": runs,
+        "main_metric": payload["main_metric"],
+        # 剔除条数进历史，事后对账时不用再读一遍用例文件
+        "retired_gold": {
+            "retired_total": retired["retired_total"],
+            "retired_rules": retired["retired_rules"],
+            "files": [
+                {
+                    "source": item["source"],
+                    "total": item["total"],
+                    "denominator": item["denominator"],
+                    "retired": [row["case_id"] for row in item["retired"]],
+                }
+                for item in retired["files"]
+            ],
+        },
         "gold_summary": payload["gold_summary"],
         "arms": {
             name: {
                 "metrics": arm["metrics"],
                 "counts": arm["counts"],
+                "intervals": arm.get("intervals"),
                 "elapsed_s": arm["elapsed_s"],
                 "token_in": arm["token_in"],
                 "token_out": arm["token_out"],
