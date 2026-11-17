@@ -10,8 +10,9 @@ import pytest
 
 from mla.domain.elements import Element, default_elements
 from mla.domain.grading import (
-    CERTAINTY_BODY,
-    CERTAINTY_FACTS,
+    CERTAINTY_CONFLICT,
+    CERTAINTY_PENDING,
+    RULE_CHECK_SOURCE,
     DisplayLevel,
     certainty_for,
     display_of,
@@ -45,6 +46,7 @@ def _item(
     impact: str = "",
     certainty: str = "",
     finding: str = "",
+    source: str = "",
 ) -> CheckItem:
     return CheckItem(
         item_id=item_id,
@@ -53,29 +55,49 @@ def _item(
         finding=finding or item_id,
         source_id="LCL-19",
         grade=grade,
+        source=source,
         element_id=element_id,
         impact=impact,
         certainty=certainty,
     )
 
 
-# ---------- 1. 确定性：A/B → 正文输出，C → 需补事实 ----------
+# ---------- 1. 确定性：A → 确定冲突，B / C / 未知 → 待确认，rule_check → 确定冲突 ----------
 
 
 def test_grade_maps_to_certainty() -> None:
-    assert certainty_for("A") == CERTAINTY_BODY
-    assert certainty_for("B") == CERTAINTY_BODY
-    assert certainty_for("C") == CERTAINTY_FACTS
-    # 未知等级宁可低估，也不能当成"正文输出"
-    assert certainty_for("") == CERTAINTY_FACTS
-    assert certainty_for("X") == CERTAINTY_FACTS
+    assert certainty_for("A") == CERTAINTY_CONFLICT
+    assert certainty_for("B") == CERTAINTY_PENDING
+    assert certainty_for("C") == CERTAINTY_PENDING
+    # 未知等级宁可低估，也不能当成"确定冲突"
+    assert certainty_for("") == CERTAINTY_PENDING
+    assert certainty_for("X") == CERTAINTY_PENDING
+
+
+def test_rule_check_c_is_conflict() -> None:
+    """守卫：规则数值校验条目（`source=rule_check`）即便内部等级是 C，也必须显示"确定冲突"。
+
+    这是"程序按法条数值算出的确定不一致"与"模型判不了"的区别：前者不能落进待确认层。
+    """
+    assert certainty_for("C", RULE_CHECK_SOURCE) == CERTAINTY_CONFLICT
+    assert certainty_for("c", "rule_check") == CERTAINTY_CONFLICT
+    # 其他来源不受影响：B / C 仍是待确认
+    assert certainty_for("C", "trigger") == CERTAINTY_PENDING
+    assert certainty_for("B", "model_extra") == CERTAINTY_PENDING
 
 
 def test_to_display_all_fields() -> None:
     level = to_display("A", "EL-3", 20, ELEMENTS)
     assert isinstance(level, DisplayLevel)
-    assert (level.impact, level.certainty) == ("高", CERTAINTY_BODY)
-    assert level.sort_key == (0, 0, 20)
+    assert (level.impact, level.certainty) == ("高", CERTAINTY_CONFLICT)
+    assert level.sort_key == (0, 0, 0, 20)
+
+
+def test_to_display_passes_source_through() -> None:
+    """`to_display` 必须把来源透传到确定性判定，否则共识层算出的 rule_check 条目会落错层。"""
+    level = to_display("C", "EL-12", 46, ELEMENTS, source=RULE_CHECK_SOURCE)
+    assert (level.impact, level.certainty) == ("中", CERTAINTY_CONFLICT)
+    assert level.sort_key == (1, 0, 1, 46)
 
 
 # ---------- 2. 影响度取要素值 ----------
@@ -131,10 +153,10 @@ def test_packaged_yaml_fallback_is_mid() -> None:
     assert impact_for("EL-13") == "中"
 
 
-# ---------- 4. 排序：影响度 → 确定性 → 段落号 ----------
+# ---------- 4. 排序：影响度 → 确定性 → 来源 → 段落号 ----------
 
 
-def test_same_impact_body_before_facts_then_paragraph() -> None:
+def test_same_impact_conflict_before_pending_then_paragraph() -> None:
     items = [
         _item("C-30", grade="C", paragraph=30, element_id="EL-3"),
         _item("A-24", grade="A", paragraph=24, element_id="EL-5"),
@@ -142,13 +164,37 @@ def test_same_impact_body_before_facts_then_paragraph() -> None:
         _item("B-20", grade="B", paragraph=20, element_id="EL-11"),
     ]
     ordered = sort_items(items, ELEMENTS)
-    assert [i.item_id for i in ordered] == ["B-20", "A-24", "C-12", "C-30"]
+    # 三条都是高影响：A 是确定冲突排最前，B 与 C 同为待确认，按段落号升序
+    assert [i.item_id for i in ordered] == ["A-24", "C-12", "B-20", "C-30"]
     assert [display_of(i, ELEMENTS).certainty for i in ordered] == [
-        CERTAINTY_BODY,
-        CERTAINTY_BODY,
-        CERTAINTY_FACTS,
-        CERTAINTY_FACTS,
+        CERTAINTY_CONFLICT,
+        CERTAINTY_PENDING,
+        CERTAINTY_PENDING,
+        CERTAINTY_PENDING,
     ]
+
+
+def test_same_impact_and_certainty_a_before_rule_check() -> None:
+    """同影响度、同确定冲突层内：有段落的 A 级排在无段落的规则数值校验条目前面。
+
+    rule_check 的段落键恒为 0，若不加"来源"这一键会插到 A 级前面（旧 bug）。
+    """
+    items = [
+        _item("RC-1", grade="C", paragraph=0, element_id="EL-3", source="rule_check"),
+        _item("A-20", grade="A", paragraph=20, element_id="EL-3"),
+    ]
+    ordered = sort_items(items, ELEMENTS)
+    assert [i.item_id for i in ordered] == ["A-20", "RC-1"]
+    assert [display_of(i, ELEMENTS).certainty for i in ordered] == [
+        CERTAINTY_CONFLICT,
+        CERTAINTY_CONFLICT,
+    ]
+    # 待确认层不受影响：来源键都是 0，仍按段落号排序
+    pending = [
+        _item("P-9", grade="C", paragraph=9, element_id="EL-3"),
+        _item("B-5", grade="B", paragraph=5, element_id="EL-3"),
+    ]
+    assert [i.item_id for i in sort_items(pending, ELEMENTS)] == ["B-5", "P-9"]
 
 
 def test_impact_group_order_high_mid_low() -> None:
@@ -162,29 +208,39 @@ def test_impact_group_order_high_mid_low() -> None:
 
 
 def test_sort_items_is_stable_and_does_not_mutate() -> None:
-    first = _item("first", grade="A", paragraph=0, element_id="EL-13")
-    second = _item("second", grade="B", paragraph=0, element_id="EL-13")
+    first = _item("first", grade="B", paragraph=0, element_id="EL-13")
+    second = _item("second", grade="C", paragraph=0, element_id="EL-13")
     items = [first, second]
     ordered = sort_items(items, ELEMENTS)
     assert items == [first, second]
-    assert [i.item_id for i in ordered] == ["first", "second"]  # 三键相同 → 保持输入顺序
+    # 四键完全相同（同影响度、同确定性、同来源、同段落）→ 保持输入顺序
+    assert [i.item_id for i in ordered] == ["first", "second"]
 
 
 def test_display_of_prefers_filled_fields() -> None:
     # 共识层已填好展示字段时不再重复求值（即使 element_id 为空也不回落）
-    filled = _item("filled", grade="C", paragraph=30, impact="高", certainty=CERTAINTY_BODY)
+    # 这里刻意让存值与等级不一致，只为验证"已填就用填的"这一优先级
+    filled = _item("filled", grade="B", paragraph=30, impact="高", certainty=CERTAINTY_CONFLICT)
     level = display_of(filled, ELEMENTS)
-    assert (level.impact, level.certainty) == ("高", CERTAINTY_BODY)
+    assert (level.impact, level.certainty) == ("高", CERTAINTY_CONFLICT)
     # 旧记录没填：按 grade 现算；无 element_id → 中
     legacy = _item("legacy", grade="A", paragraph=30)
     assert (display_of(legacy, ELEMENTS).impact, display_of(legacy, ELEMENTS).certainty) == (
         "中",
-        CERTAINTY_BODY,
+        CERTAINTY_CONFLICT,
     )
 
 
+def test_display_of_ignores_stale_rule_check_certainty() -> None:
+    """rule_check 条目落库值若是旧口径（待确认），展示层必须按来源重算成确定冲突。"""
+    stale = _item(
+        "RC-1", grade="C", paragraph=4, element_id="EL-3", certainty=CERTAINTY_PENDING, source="rule_check"
+    )
+    assert display_of(stale, ELEMENTS).certainty == CERTAINTY_CONFLICT
+
+
 def test_full_demo_order() -> None:
-    """规格验收样例：高影响两条正文 + 一条补事实，中影响一条正文 + 兜底条目（EL-13 落中影响）。"""
+    """规格验收样例：高影响两条确定冲突 + 一条待确认，中影响一条确定冲突 + 兜底条目（EL-13 落中影响）。"""
     items = [
         _item("p47", grade="C", paragraph=47, element_id="EL-13"),  # 兜底 → 中影响
         _item("p30", grade="C", paragraph=30, element_id="EL-3"),
@@ -196,9 +252,9 @@ def test_full_demo_order() -> None:
     assert [
         (display_of(i, ELEMENTS).impact, display_of(i, ELEMENTS).certainty, i.item_id) for i in ordered
     ] == [
-        ("高", CERTAINTY_BODY, "p20"),
-        ("高", CERTAINTY_BODY, "p24"),
-        ("高", CERTAINTY_FACTS, "p30"),
-        ("中", CERTAINTY_BODY, "p46"),
-        ("中", CERTAINTY_FACTS, "p47"),
+        ("高", CERTAINTY_CONFLICT, "p20"),
+        ("高", CERTAINTY_CONFLICT, "p24"),
+        ("高", CERTAINTY_PENDING, "p30"),
+        ("中", CERTAINTY_CONFLICT, "p46"),
+        ("中", CERTAINTY_PENDING, "p47"),
     ]

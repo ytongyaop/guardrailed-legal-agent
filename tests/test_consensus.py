@@ -131,11 +131,11 @@ def test_mismatch_without_any_finding_appends_review_entry() -> None:
     assert entry.source == "rule_check"
     assert entry.statute_ids == ("LCL-19",)
     assert "第 19 条" in entry.reason
-    assert "需人工复核" in entry.reason
+    assert "请核对合同约定" in entry.reason
     assert "风险" not in entry.reason  # 不写"这是风险"的定性
     assert entry.paragraph == 0  # 程序追加条目没有合同段落（哨兵值）
     assert entry.span == ""  # 不拿法条原文冒充合同原文子串
-    assert "第 19 条" in row.note and "需人工复核" in row.note
+    assert "第 19 条" in row.note and "请核对合同约定" in row.note
 
 
 def test_mismatch_unrelated_to_other_findings_still_appends_review_entry() -> None:

@@ -241,11 +241,11 @@ def test_no_findings_with_full_coverage_still_clean() -> None:
     assert verdict.headline == "未发现风险"
 
 
-# ---------- 模型主导路径（P1-3）：冲突与待复核分开计数 ----------
+# ---------- 模型主导路径（P1-3）：确定冲突与待确认分开计数 ----------
 
 
 def _consensus_item(item_id: str, grade: str, *, source: str = "trigger") -> CheckItem:
-    """共识层产出的条目：`grade` 是模型结论等级，`source=rule_check` 为程序追加的复核条目。"""
+    """共识层产出的条目：`grade` 是模型结论等级，`source=rule_check` 为程序追加的校验条目。"""
     return CheckItem(
         item_id=item_id,
         kind=ItemKind.RISK if grade in ("A", "B") else ItemKind.UNKNOWN,
@@ -264,8 +264,8 @@ def test_verdict_review_count_defaults_to_zero() -> None:
     assert verdict.review_count == 0
 
 
-def test_new_path_a_b_count_as_conflict_c_stays_review() -> None:
-    """新路径 2 条 A（模型结论）+ 3 条 C（程序复核）：headline 只说 2 条冲突，另报 3 条需人工复核。"""
+def test_new_path_a_and_rule_check_are_conflict_b_c_are_review() -> None:
+    """新路径：A 级 + rule_check 条目计冲突（2 + 1），B 级 + C 级计待确认（1 + 1）。"""
     task = _task(
         model_first=True,
         clause_review=True,
@@ -273,30 +273,62 @@ def test_new_path_a_b_count_as_conflict_c_stays_review() -> None:
             _consensus_item("CF-1", "A"),
             _consensus_item("CF-2", "A"),
             _consensus_item("RC-1", "C", source="rule_check"),
-            _consensus_item("RC-2", "C", source="rule_check"),
-            _consensus_item("RC-3", "C", source="rule_check"),
+            _consensus_item("CF-3", "B"),
+            _consensus_item("CF-4", "C"),
         ],
         rule_coverage=COVERAGE,
     )
     verdict = summarize_verdict(task)
 
     assert verdict.status == "risk"
-    assert verdict.risk_count == 2
-    assert verdict.review_count == 3
-    assert verdict.headline == "发现 2 条与法条存在冲突的事项"
+    assert verdict.risk_count == 3
+    assert verdict.review_count == 2
+    assert verdict.risk_count + verdict.review_count == len(task.items)
+    assert verdict.headline == "发现 3 条与法条存在冲突的事项"
     assert "5 条" not in verdict.headline
-    assert "3 条需人工复核" in verdict.details
+    assert "2 条待确认" in verdict.details
 
 
-def test_new_path_only_c_entries_is_partial_never_clean() -> None:
-    """只有 C 级条目（哪怕三个通道都跑齐）：不能说“未发现风险”，也不能说成冲突。"""
+def test_new_path_b_is_review_not_conflict() -> None:
+    """B 级（需补事实 / 含裁量）只算待确认：headline 不能说成冲突。"""
+    task = _task(model_first=True, clause_review=True, items=[_consensus_item("CF-1", "B")])
+    verdict = summarize_verdict(task)
+
+    assert verdict.status == "partial"
+    assert verdict.risk_count == 0
+    assert verdict.review_count == 1
+    assert verdict.headline == "未发现明确冲突，但有 1 条待确认"
+
+
+def test_new_path_rule_check_c_counts_as_conflict_alone() -> None:
+    """程序追加的数值校验条目（grade=C）单独出现时也算确定冲突，不落进部分覆盖。"""
     task = _task(
         model_first=True,
         clause_review=True,
         items=[
             _consensus_item("RC-1", "C", source="rule_check"),
             _consensus_item("RC-2", "C", source="rule_check"),
-            _consensus_item("RC-3", "C", source="rule_check"),
+        ],
+        rule_coverage=RuleCoverage(total=20, violated=0, compliant=12, not_applicable=8, unknown=0),
+        missing_terms=_all_written(),
+    )
+    verdict = summarize_verdict(task)
+
+    assert verdict.status == "risk"
+    assert verdict.risk_count == 2
+    assert verdict.review_count == 0
+    assert verdict.headline == "发现 2 条与法条存在冲突的事项"
+
+
+def test_new_path_only_pending_entries_is_partial_never_clean() -> None:
+    """只有待确认条目（哪怕三个通道都跑齐）：不能说“未发现风险”，也不能说成冲突。"""
+    task = _task(
+        model_first=True,
+        clause_review=True,
+        items=[
+            _consensus_item("CF-1", "B"),
+            _consensus_item("CF-2", "C"),
+            _consensus_item("CF-3", "C"),
         ],
         rule_coverage=RuleCoverage(total=20, violated=0, compliant=12, not_applicable=8, unknown=0),
         missing_terms=_all_written(),
@@ -306,8 +338,8 @@ def test_new_path_only_c_entries_is_partial_never_clean() -> None:
     assert verdict.status == "partial"
     assert verdict.risk_count == 0
     assert verdict.review_count == 3
-    assert verdict.headline == "未发现明确冲突，但有 3 条需人工复核"
-    assert "3 条需人工复核" in verdict.details
+    assert verdict.headline == "未发现明确冲突，但有 3 条待确认"
+    assert "3 条待确认" in verdict.details
 
 
 def test_new_path_c_clause_finding_not_reported_twice() -> None:
@@ -321,7 +353,7 @@ def test_new_path_c_clause_finding_not_reported_twice() -> None:
     verdict = summarize_verdict(task)
 
     assert verdict.review_count == 1
-    assert verdict.details == ["条款审查已运行", "1 条需人工复核"]
+    assert verdict.details == ["条款审查已运行", "1 条待确认"]
     assert [row for row in verdict.details if "条款待人工确认" in row] == []
 
 

@@ -184,7 +184,7 @@ class CheckItem:
     statute_ids: tuple[str, ...] = ()
     element_id: str = ""  # 段落归类到的合同要素，如 EL-3
     impact: str = ""  # 高 / 中 / 低（由要素决定）
-    certainty: str = ""  # 正文输出 / 需补事实（A/B → 正文输出，C → 需补事实）
+    certainty: str = ""  # 确定冲突 / 待确认（A 与规则数值校验 → 确定冲突，B / C → 待确认）
 
 
 @dataclass
@@ -209,7 +209,7 @@ class CaseRef:
 class ClauseFinding:
     """条款级审查结论（存在性域）：模型判定 + 程序核验后才允许出现。
 
-    - `grade`：A 明确冲突（法条明文禁止、无需补事实）/ B 显著失衡（需补事实或含裁量）/ C 待确认；
+    - `grade`：A 明确冲突（法条明文禁止、无需补充事实）/ B 显著失衡（需补充事实或含裁量）/ C 待确认；
     - `span` 一律取自触发器候选片段（不采信模型改写的定位），保证是合同原文子串；
     - `trigger_id` 为空串表示模型自提（`source="model_extra"`），自提一律封顶 C 级；
     - `statute_ids` 已通过闭集核验：全部存在于法源库，触发器条目还需落在该候选的候选集内；

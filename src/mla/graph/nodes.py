@@ -226,7 +226,7 @@ def rule_check(state: CheckState, deps: Deps) -> CheckState:
     `rule_checks` 是规格 003 P1-1 的双写字段：全部规则的四态都转成三态校验信号（供共识层），
     同样不进 `items`；P1-3 关闭双写前，两套字段同时存在。
     缺字段的规则按 `FIELD_ABSENCE` 分三路：required 进 `unmet`（合同未约定）、
-    statutory/optional 计入不适用（按法定标准或无此项）、其余留在 `undetermined`（需补事实）。
+    statutory/optional 计入不适用（按法定标准或无此项）、其余留在 `undetermined`（缺事实）。
     `unknown` 仍按判定原状态计数（含转列到 `unmet` 的那几条），四态之和恒等于 total。
     llm_only 档整层不跑，分布返回全零而非 None：下游统计不必再区分"没跑"与"跑了但全空"。
     """
@@ -372,6 +372,7 @@ def _consensus_item(row: ConsensusRow, used: set[str], diagnostics: list[str]) -
         paragraph,
         impact_suggest=finding.impact_suggest,
         diagnostics=diagnostics,
+        source=str(finding.source or ""),
     )
     return CheckItem(
         item_id=_unique_item_id(base_id, used),

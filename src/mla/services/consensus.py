@@ -142,11 +142,11 @@ def _article_no(statute_id: str) -> str:
 
 
 def _review_text(statute_id: str) -> str:
-    """表 2 的追加文案：只写"与第 X 条不一致，需人工复核"，不写"这是风险"。"""
+    """表 2 的追加文案：只写"与第 X 条不一致，请核对合同约定"，不写"这是风险"。"""
     article = _article_no(statute_id)
     if article:
-        return f"数值与第 {article} 条不一致，需人工复核"
-    return "数值与法条要求不一致，需人工复核"
+        return f"数值与第 {article} 条不一致，请核对合同约定"
+    return "数值与法条要求不一致，请核对合同约定"
 
 
 def _review_entry(check: RuleCheck) -> ClauseFinding:

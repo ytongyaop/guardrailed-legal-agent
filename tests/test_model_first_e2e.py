@@ -28,8 +28,8 @@ from mla.adapters.persist import SqliteRepository
 from mla.config import LLMConfig, Paths, data_path
 from mla.domain.elements import IMPACTS
 from mla.domain.grading import (
-    CERTAINTY_BODY,
-    CERTAINTY_FACTS,
+    CERTAINTY_CONFLICT,
+    CERTAINTY_PENDING,
     certainty_for,
     display_of,
     impact_for,
@@ -196,16 +196,16 @@ def test_full_chain_produces_graded_items(monkeypatch: pytest.MonkeyPatch) -> No
     for item in task.items:
         assert item.element_id, f"{item.item_id} 缺 element_id，展示层无从取影响度"
         assert item.impact in IMPACTS
-        # 影响度只认要素、确定性只认等级：两者都必须能由纯函数复算出来
+        # 影响度只认要素、确定性只认等级 + 来源：两者都必须能由纯函数复算出来
         assert item.impact == impact_for(item.element_id)
-        assert item.certainty == certainty_for(item.grade)
+        assert item.certainty == certainty_for(item.grade, item.source)
 
     # 段落 → 要素 → 影响度这条链的完整落点（分类与分级同源，改数据会在这条断言上现形）
     assert {(item.clause_ref, item.element_id, item.impact, item.certainty) for item in task.items} == {
-        ("3", "EL-3", "高", CERTAINTY_BODY),  # 试用期
-        ("4", "EL-12", "中", CERTAINTY_BODY),  # 争议解决（程序义务 → 中）
-        ("6", "EL-13", "中", CERTAINTY_FACTS),  # 自提的兜底要素 + C 级
-        ("5", "EL-1", "低", CERTAINTY_BODY),  # 文本持有（形式瑕疵 → 低）
+        ("3", "EL-3", "高", CERTAINTY_CONFLICT),  # 试用期 A 级
+        ("4", "EL-12", "中", CERTAINTY_PENDING),  # 争议解决 B 级（需补事实 → 待确认）
+        ("6", "EL-13", "中", CERTAINTY_PENDING),  # 自提的兜底要素 + C 级
+        ("5", "EL-1", "低", CERTAINTY_CONFLICT),  # 文本持有 A 级（形式瑕疵 → 低）
     }
 
     # 送进模型的 payload：只发候选 ±2 行，要素骨架只发本批命中的那几个，数值校验信号随包下发
@@ -231,15 +231,15 @@ def test_full_chain_produces_graded_items(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_display_order_is_impact_then_certainty(monkeypatch: pytest.MonkeyPatch) -> None:
-    """展示顺序是纯函数的输出：高 → 中 → 低；同影响度内正文输出先于需补事实，再按段落号升序。"""
+    """展示顺序是纯函数的输出：高 → 中 → 低；同影响度内确定冲突先于待确认，再按段落号升序。"""
     task, _ = _run(monkeypatch)
     ordered = sort_items(task.items)
 
     assert [(item.impact, item.certainty) for item in ordered] == [
-        ("高", CERTAINTY_BODY),
-        ("中", CERTAINTY_BODY),
-        ("中", CERTAINTY_FACTS),
-        ("低", CERTAINTY_BODY),
+        ("高", CERTAINTY_CONFLICT),
+        ("中", CERTAINTY_PENDING),
+        ("中", CERTAINTY_PENDING),
+        ("低", CERTAINTY_CONFLICT),
     ]
     # 同影响度、同确定性时按段落号升序；排序键整体单调不减（高 > 中 > 低 的口径）
     assert [int(item.clause_ref) for item in ordered if item.impact == "中"] == [4, 6]
@@ -251,18 +251,18 @@ def test_display_order_is_impact_then_certainty(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_verdict_counts_match_items(monkeypatch: pytest.MonkeyPatch) -> None:
-    """冲突条数只数 A/B，复核条数只数 C；两级不混用、不叠加条款 A/B、合起来等于条目数。"""
+    """冲突层只数确定冲突（2 条 A），待确认层只数 B / C（1 条 B + 1 条自提 C），合起来等于条目数。"""
     task, _ = _run(monkeypatch)
     verdict = summarize_verdict(task)
 
-    conflict = sum(1 for item in task.items if item.grade in ("A", "B"))
-    pending = sum(1 for item in task.items if item.grade == "C")
-    assert (conflict, pending) == (3, 1)
+    conflict = sum(1 for item in task.items if item.certainty == CERTAINTY_CONFLICT)
+    pending = sum(1 for item in task.items if item.certainty == CERTAINTY_PENDING)
+    assert (conflict, pending) == (2, 2)
     assert (verdict.risk_count, verdict.review_count) == (conflict, pending)
     assert verdict.risk_count + verdict.review_count == len(task.items)
     assert verdict.status == "risk"
-    assert verdict.headline == "发现 3 条与法条存在冲突的事项"
-    assert "1 条需人工复核" in verdict.details
+    assert verdict.headline == "发现 2 条与法条存在冲突的事项"
+    assert "2 条待确认" in verdict.details
 
 
 # ---------- 4. L4 返工：一次可修正失败 → 回喂一次即修好 ----------

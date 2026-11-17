@@ -29,7 +29,7 @@ from mla.adapters.persist import SqliteRepository
 from mla.config import LLMConfig, data_path, load_config
 from mla.domain.asking import candidate_fields
 from mla.domain.field_catalog import field_hint, field_name, field_question
-from mla.domain.grading import CERTAINTY_BODY, CERTAINTY_FACTS, display_of, sort_items
+from mla.domain.grading import CERTAINTY_CONFLICT, CERTAINTY_PENDING, display_of, sort_items
 from mla.domain.models import (
     MISSING_TERM_UNJUDGED_ID,
     ContractRecord,
@@ -88,11 +88,15 @@ FINDING_SOURCE_BADGES: tuple[str, ...] = (
 )
 FINDING_SOURCE_COLORS: tuple[str, ...] = ("blue", "red", "orange", "gray")
 # 模型主导路径（规格 003 P1-3）里程序追加的数值复核条目：它不是模型结论，徽标必须能区分出来。
-CONSENSUS_RULE_BADGE = "数值复核·需人工"
+# 数值校验条目在外层显示"确定冲突"（程序算出的不一致），所以徽标只标来源、不再说"需人工"。
+CONSENSUS_RULE_BADGE = "程序数值校验"
 # 分级两层（规格 003 第 3.4 节 / P2-5）：主分层按影响度分组，次分层只标确定性；
-# 内部 A/B/C 不再对外出现（A/B 合并为"正文输出"，C 为"需补事实"）。
+# 内部 A/B/C 不再对外出现——A 级与规则数值校验条目为"确定冲突"，B / C 级为"待确认"。
 IMPACT_TITLES: tuple[tuple[str, str], ...] = (("高", "高影响"), ("中", "中影响"), ("低", "低影响"))
-CONSENSUS_HELP = "按影响度分组：高 / 中 / 低（影响度由合同要素决定）；每组内先列正文输出，再列需补事实。"
+CONSENSUS_HELP = (
+    "按影响度分组：高 / 中 / 低（影响度由合同要素决定）。每组内先列确定冲突，再列待确认。"
+    "确定冲突：与法条明文冲突，或数值校验与法条不一致；待确认：需补充事实或含裁量，需人工判断。"
+)
 # **旧路径专用（`model_first=False`，回滚兼容）**：新路径用上面的 CONSENSUS_HELP，不出 A/B/C。
 CLAUSE_HELP = "等级含义：A 与法条明文冲突，B 显著失衡，C 待确认；只表示与法条存在冲突的风险。"
 CLAUSE_NOT_REVIEWED_NOTE = "本次未做条款级审查，条款级风险未覆盖。"
@@ -994,10 +998,10 @@ def _render_clause_finding(finding, repo: SqliteRepository, *, badge: str = "") 
 
 
 def _certainty_mark(certainty: str) -> str:
-    """确定性标记：正文输出用普通样式；需补事实用灰色徽标弱化（不再用 A/B/C 字母）。"""
-    if certainty == CERTAINTY_BODY:
-        return "**正文输出**"
-    return f":gray-badge[{CERTAINTY_FACTS}]"
+    """确定性标记：确定冲突用红色徽标，待确认用灰色徽标弱化（不出现 A/B/C 字母）。"""
+    if certainty == CERTAINTY_CONFLICT:
+        return f":red-badge[{CERTAINTY_CONFLICT}]"
+    return f":gray-badge[{CERTAINTY_PENDING}]"
 
 
 def _render_consensus_item(item, repo: SqliteRepository) -> None:

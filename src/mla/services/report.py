@@ -42,9 +42,10 @@ CASE_NOTE = "同类情形通常如何认定，不构成本次结论；以裁判�
 FINDING_SOURCES = ("规则判定", "模型审查 A 级", "模型审查 B 级", "模型审查 C 级")
 CLAUSE_GRADE_RANK = {"A": 1, "B": 2, "C": 3}
 # 模型主导路径（规格 003 P1-3）：条目由共识层产出，程序追加的数值复核条目要单独标注来源。
-# 分级两层（第 3.4 节 / P2-5）：导出与界面同口径——按影响度分组、只标确定性，不出现 A/B/C。
-CONSENSUS_INTRO = "以下按影响度分组（高 → 中 → 低）：影响度由合同要素决定；同组内先列正文输出，再列需补事实。"
-CONSENSUS_RULE_SOURCE = "数值复核（需人工确认）"
+# 分级两层（第 3.4 节 / P2-5）：导出与界面同口径——按影响度分组、只标确定性（确定冲突 / 待确认），
+# 不出现 A/B/C；数值校验条目本身已是"确定冲突"，来源标注不再写"需人工"。
+CONSENSUS_INTRO = "以下按影响度分组（高 → 中 → 低）：影响度由合同要素决定；同组内先列确定冲突，再列待确认。"
+CONSENSUS_RULE_SOURCE = "程序数值校验"
 IMPACT_TITLES: tuple[tuple[str, str], ...] = (("高", "高影响"), ("中", "中影响"), ("低", "低影响"))
 
 
@@ -97,7 +98,7 @@ def _merged_paragraphs(doc: DocxDocument, task: CheckTask, repo: Repository, fin
 def _consensus_paragraphs(doc: DocxDocument, task: CheckTask, repo: Repository) -> bool:
     """模型主导路径的结论区：按影响度分组、逐条排版 `items`（不再调用 `merge_findings`，否则会重复）。
 
-    与界面同一口径（规格 003 第 3.4 节）：分组高 → 中 → 低，组内"正文输出 → 需补事实 → 段落号"，
+    与界面同一口径（规格 003 第 3.4 节）：分组高 → 中 → 低，组内"确定冲突 → 待确认 → 段落号"，
     每条只标确定性，不出现内部 A/B/C。
     """
     if not task.items:

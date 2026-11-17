@@ -1030,9 +1030,9 @@ def test_result_groups_by_impact_without_grade_letters(tmp_path) -> None:
     for banned in ("A 级", "B 级", "C 级", "A 与法条明文冲突"):
         assert banned not in texts, f"新路径仍出现内部分级字样：{banned}"
 
-    # 正文输出用普通样式；需补事实用灰色徽标弱化（两者都要出现，且分属不同影响度）
-    assert any("**正文输出**" in m for m in markdowns)
-    assert any(":gray-badge[需补事实]" in m for m in markdowns)
+    # 确定冲突用红色徽标、待确认用灰色徽标弱化（两者都要出现，且分属不同影响度）
+    assert any(":red-badge[确定冲突]" in m for m in markdowns)
+    assert any(":gray-badge[待确认]" in m for m in markdowns)
     # 兜底要素 EL-1（低影响）的条目落在最后一组：分组标题之后才轮得到它
     low_items = markdowns[indices["低影响"] :]
     assert any("称谓前后不一致" in m for m in low_items)

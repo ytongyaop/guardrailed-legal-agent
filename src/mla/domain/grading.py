@@ -5,8 +5,9 @@
 - **影响度**（主）：`高` / `中` / `低`，决定分组与排序。唯一权威是候选段落归类到的合同要素
   （`elements.yaml` 的 `impact`），**不采信模型自由判断**；模型可给 `impact_suggest` 作建议，
   与要素值不一致时以要素值为准并记诊断。
-- **确定性**（次）：`正文输出` / `需补事实`，由内部 `grade` 机械映射：
-  `A` / `B` → `正文输出`（两者下一步动作相同，不再分开展示），`C` → `需补事实`。
+- **确定性**（次）：`确定冲突` / `待确认`，由内部 `grade` 与条目来源机械映射：
+  `A`（法条明文 + 三件套齐全）与规则数值校验条目（`source="rule_check"`，程序算出的确定
+  不一致）→ `确定冲突`；`B`（需补充事实 / 含裁量）、`C`、未知等级 → `待确认`。
 
 内部 A/B/C 继续服务六道核验与降级链，**不再对外展示**。本模块是纯函数：不读环境、不写库、
 不做分支决策；要素骨架可注入（测试给固定骨架），缺省时读包内文件一次（`default_elements` 已缓存）。
@@ -25,14 +26,25 @@ IMPACT_LOW = "低"
 # 排序序号：越小越靠前（规格 3.4：高 > 中 > 低）
 IMPACT_RANK: dict[str, int] = {IMPACT_HIGH: 0, IMPACT_MID: 1, IMPACT_LOW: 2}
 
-CERTAINTY_BODY = "正文输出"
-CERTAINTY_FACTS = "需补事实"
-# 排序序号：同影响度内先列"直接给结论"的，再列"需补事实"的
-CERTAINTY_RANK: dict[str, int] = {CERTAINTY_BODY: 0, CERTAINTY_FACTS: 1}
+CERTAINTY_CONFLICT = "确定冲突"
+CERTAINTY_PENDING = "待确认"
+# 排序序号：同影响度内先列确定冲突，再列待确认
+CERTAINTY_RANK: dict[str, int] = {CERTAINTY_CONFLICT: 0, CERTAINTY_PENDING: 1}
 
-# A/B 都属"正文输出"：A 要求法条三件套齐全，B 是"需补事实或含裁量"，但两者对用户的
-# 下一步动作相同（改，或把事实问清后改），因此对外合并；区分只留在内部降级链与指标里。
-BODY_GRADES = ("A", "B")
+# 确定性只有"确定冲突"这一档的等级：A（法条明文禁止 + 法条编号、合同原文、法条摘抄三件套齐全）。
+# B 是"需补充事实或含裁量"，与 C 同属"待确认"——把 B 放进冲突层等于把待核实说成确定结论。
+CONFLICT_GRADES = ("A",)
+
+# 程序追加的数值校验条目来源：等级虽然是 C（模型没提这条），但它是规则算出来的确定不一致，
+# 对外必须与 A 级同列"确定冲突"。与 `services.consensus.SOURCE_RULE_CHECK` 同一取值
+# （domain 不依赖 services，故在此重写一次字面量）。
+RULE_CHECK_SOURCE = "rule_check"
+
+# 来源排序序号：同影响度、同确定性内，"有段落定位的法条明文冲突"先于"程序数值校验"。
+# 后者没有合同段落，段落键恒为 0；不加这一键它会插到有段落的 A 级前面。
+# 只影响"确定冲突"层内部：待确认条目一律取默认值 0，排序仍按段落号，行为不变。
+SOURCE_RANK_DEFAULT = 0
+SOURCE_RANK_RULE_CHECK = 1
 
 # 未知要素的影响度：按"中"。
 #
@@ -46,11 +58,15 @@ FALLBACK_IMPACT = IMPACT_MID
 
 @dataclass(frozen=True)
 class DisplayLevel:
-    """一条结论的对外展示层级：影响度 + 确定性 + 全序排序键（高→中→低、正文→补事实、段落号）。"""
+    """一条结论的对外展示层级：影响度 + 确定性 + 全序排序键。
+
+    排序键四键全序：影响度（高→中→低）、确定性（确定冲突→待确认）、来源
+    （法条明文冲突→程序数值校验）、合同段落号。
+    """
 
     impact: str
     certainty: str
-    sort_key: tuple[int, int, int]
+    sort_key: tuple[int, int, int, int]
 
 
 def _text(value: object) -> str:
@@ -63,9 +79,22 @@ def paragraph_of(clause_ref: object) -> int:
     return int(raw) if raw.isdigit() else 0
 
 
-def certainty_for(grade: object) -> str:
-    """内部等级 → 对外确定性：A/B → 正文输出；C 与未知等级 → 需补事实（宁可低估）。"""
-    return CERTAINTY_BODY if _text(grade).upper() in BODY_GRADES else CERTAINTY_FACTS
+def source_rank(source: object) -> int:
+    """来源优先级：规则数值校验条目（无段落定位）排在有段落的 A 级之后；其余来源同一档。"""
+    return SOURCE_RANK_RULE_CHECK if _text(source) == RULE_CHECK_SOURCE else SOURCE_RANK_DEFAULT
+
+
+def certainty_for(grade: object, source: str = "") -> str:
+    """内部等级 + 来源 → 对外确定性：确定冲突 / 待确认（宁可低估）。
+
+    - 规则数值校验条目（`source=rule_check`）：内部等级是 C，但它是程序按法条数值算出的
+      确定不一致，对外必须与 A 级同列"确定冲突"；
+    - A：法条明文禁止且三件套齐全 → 确定冲突；
+    - B（需补充事实或含裁量）/ C / 未知等级 → 待确认。
+    """
+    if _text(source) == RULE_CHECK_SOURCE:
+        return CERTAINTY_CONFLICT
+    return CERTAINTY_CONFLICT if _text(grade).upper() in CONFLICT_GRADES else CERTAINTY_PENDING
 
 
 def impact_for(element_id: object, elements: Sequence[Element] | None = None) -> str:
@@ -96,11 +125,15 @@ def to_display(
     *,
     impact_suggest: str = "",
     diagnostics: list[str] | None = None,
+    source: str = "",
 ) -> DisplayLevel:
     """单条结论 → `DisplayLevel`。
 
     影响度只认要素值；模型建议（`impact_suggest`）越域或与要素不一致时**不改变**结果，
     只往 `diagnostics` 追加一句可审计的说明（规格 3.4 / 6.2）。
+
+    `source` 参与确定性判定与排序：规则数值校验条目（`rule_check`）即便等级是 C，也
+    算"确定冲突"，且同层内排在有段落的 A 级之后。
     """
     impact = impact_for(element_id, elements)
     suggest = _text(impact_suggest)
@@ -116,8 +149,13 @@ def to_display(
                 f"第 {int(paragraph or 0)} 段：模型建议影响度「{suggest}」与要素"
                 f"「{_text(element_id)}」的「{impact}」不一致，按要素值处理",
             )
-    certainty = certainty_for(grade)
-    sort_key = (IMPACT_RANK[impact], CERTAINTY_RANK[certainty], int(paragraph or 0))
+    certainty = certainty_for(grade, source)
+    sort_key = (
+        IMPACT_RANK[impact],
+        CERTAINTY_RANK[certainty],
+        source_rank(source),
+        int(paragraph or 0),
+    )
     return DisplayLevel(impact=impact, certainty=certainty, sort_key=sort_key)
 
 
@@ -125,25 +163,33 @@ def display_of(item: object, elements: Sequence[Element] | None = None) -> Displ
     """`CheckItem` 形态的条目 → `DisplayLevel`。
 
     条目上已填好 `impact` / `certainty`（共识层产出时填）就直接用，避免展示层二次求值；
-    旧记录 / 旧路径没这两项时按 `grade` 现算（`element_id` 为空则落"中"，与兜底同口径）。
+    旧记录 / 旧路径没这两项时按 `grade` + `source` 现算（`element_id` 为空则落"中"，与兜底同口径）。
+
+    规则数值校验条目例外：历史记录里可能存着旧口径（`待确认`，甚至更早的旧层名），
+    与"程序算出的确定不一致"矛盾，一律按来源重算，不信落库值。
     """
     impact = _text(getattr(item, "impact", ""))
     certainty = _text(getattr(item, "certainty", ""))
+    grade = _text(getattr(item, "grade", ""))
+    source = _text(getattr(item, "source", ""))
     paragraph = paragraph_of(getattr(item, "clause_ref", ""))
+    if source == RULE_CHECK_SOURCE and grade.upper() not in CONFLICT_GRADES:
+        certainty = ""  # 旧口径的存值不可信，走重算
     if impact in IMPACT_RANK and certainty in CERTAINTY_RANK:
         return DisplayLevel(
             impact=impact,
             certainty=certainty,
-            sort_key=(IMPACT_RANK[impact], CERTAINTY_RANK[certainty], paragraph),
+            sort_key=(IMPACT_RANK[impact], CERTAINTY_RANK[certainty], source_rank(source), paragraph),
         )
     return to_display(
-        _text(getattr(item, "grade", "")),
+        grade,
         _text(getattr(item, "element_id", "")),
         paragraph,
         elements,
+        source=source,
     )
 
 
 def sort_items(items: Sequence[object], elements: Sequence[Element] | None = None) -> list:
-    """按"影响度 → 确定性 → 段落号"稳定排序；不改入参，同输入必然同输出。"""
+    """按"影响度 → 确定性 → 来源 → 段落号"稳定排序；不改入参，同输入必然同输出。"""
     return sorted(list(items), key=lambda item: display_of(item, elements).sort_key)

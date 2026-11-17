@@ -5,7 +5,8 @@
 - 旧路径（`MLA_ALLOW_NO_LLM=1` 的离线场景，或显式 `MLA_MODEL_FIRST=off`）：
   `items` = 规则条目，`verdict.risk_count` = 规则条目 + 条款审查 A/B（现状不动）；
 - 新路径（有模型 + `MLA_MODEL_FIRST=on`，默认）：`items` = 共识层结果
-  （模型结论 + `source=rule_check` 的数值复核条目），`verdict.risk_count` 只取 `items`。
+  （模型结论 + `source=rule_check` 的数值校验条目），`verdict` 按"确定冲突 / 待确认"两层
+  在 `items` 内计数（A 级与 rule_check 计冲突，B / C 计待确认）。
 
 假模型只回条款判定（1 条与某条数值校验同条号、1 条无关），其余调用不给结论；
 数据库一律落 `tmp_path`，不碰仓库里的 `mla.sqlite3`。
@@ -235,11 +236,11 @@ def test_new_path_items_come_from_consensus(monkeypatch: pytest.MonkeyPatch) -> 
     assert [i for i in task.items if i.rule_id == "R-PROBATION-WAGE-80"] == []
 
 
-# ---------- 5. verdict 只数“冲突”，C 级单列“需人工复核” ----------
+# ---------- 5. verdict 按“确定冲突 / 待确认”两层计数 ----------
 
 
 def test_new_path_verdict_does_not_double_count(monkeypatch: pytest.MonkeyPatch) -> None:
-    """新路径：A/B 计冲突、C（含程序复核条目）只计“需人工复核”，两级不混用、不叠加条款 A/B。"""
+    """新路径：A 级与 rule_check 条目计确定冲突，B / C 计待确认；不叠加条款 A/B。"""
     _enable_model_path(monkeypatch)
     task = _run(llm=LLMConfig(api_key="test-key"))
     verdict = summarize_verdict(task)
@@ -247,12 +248,13 @@ def test_new_path_verdict_does_not_double_count(monkeypatch: pytest.MonkeyPatch)
     clause_risk = sum(1 for f in task.clause_findings if f.grade in ("A", "B"))
     assert clause_risk == 2  # 确实存在会被旧算法再叠加一遍的 A 级结论
     assert [i.grade for i in task.items] == ["A", "A", "C", "C"]
-    assert verdict.risk_count == 2
-    assert verdict.review_count == 2
+    # items 里两条 rule_check 的 C 级属“程序算出的确定不一致”，与 A 级同列冲突层
+    assert verdict.risk_count == 4
+    assert verdict.review_count == 0
     assert verdict.status == "risk"
-    assert verdict.headline == "发现 2 条与法条存在冲突的事项"
-    assert "4 条" not in verdict.headline  # C 级不能说成“冲突”
-    assert "2 条需人工复核" in verdict.details
+    assert verdict.headline == "发现 4 条与法条存在冲突的事项"
+    assert verdict.risk_count + verdict.review_count == len(task.items)
+    assert "2 条与法条存在冲突" not in verdict.headline  # 不能把 rule_check 漏掉
     # 同一 statute 只算一次：LCL-19 在 items 里只出现一次，不再因为条款 A 级重复计入
     item_statutes = [sid for item in task.items for sid in item.statute_ids]
     assert item_statutes.count("LCL-19") == 1
@@ -278,7 +280,7 @@ def test_two_paths_differ_and_are_self_consistent(monkeypatch: pytest.MonkeyPatc
     new_verdict = summarize_verdict(new)
     assert old_verdict.risk_count == 5  # 旧路径照旧：3 条规则条目 + 2 条条款 A
     assert (old_verdict.review_count, old_verdict.status) == (0, "risk")
-    assert (new_verdict.risk_count, new_verdict.review_count, new_verdict.status) == (2, 2, "risk")
+    assert (new_verdict.risk_count, new_verdict.review_count, new_verdict.status) == (4, 0, "risk")
 
 
 # ---------- 7. 落库与回读 ----------
@@ -413,13 +415,13 @@ task = CheckTask(
             item_id="RC-R-OT-MONTH-36H",
             kind=ItemKind.UNKNOWN,
             clause_ref="",
-            finding="数值与第 41 条不一致，需人工复核",
+            finding="数值与第 41 条不一致，请核对合同约定",
             source_id="LL-41",
             severity=Severity.SOFT,
             rule_id="R-OT-MONTH-36H",
             grade="C",
             source="rule_check",
-            note="数值与第 41 条不一致，需人工复核",
+            note="数值与第 41 条不一致，请核对合同约定",
             statute_ids=("LL-41",),
         ),
     ],
@@ -448,8 +450,8 @@ def test_new_path_renders_each_conclusion_once(tmp_path: Path) -> None:
     text = _markdown_text(at)
     reason = "该约定与第十九条关于试用期期限的规定不符"
     assert text.count(reason) == 1  # 二次合并会让它出现两次
-    assert "数值复核·需人工" in text
-    assert "数值与第 41 条不一致，需人工复核" in text
+    assert "程序数值校验" in text
+    assert "数值与第 41 条不一致，请核对合同约定" in text
 
 
 def test_old_path_still_merges_clause_findings(tmp_path: Path) -> None:
@@ -458,7 +460,7 @@ def test_old_path_still_merges_clause_findings(tmp_path: Path) -> None:
     assert not at.exception
     text = _markdown_text(at)
     assert "规则判定·确定性" in text  # 旧路径仍按规则条目渲染 items
-    assert text.count("数值与第 41 条不一致，需人工复核") == 1
+    assert text.count("数值与第 41 条不一致，请核对合同约定") == 1
 
 
 def test_report_new_path_lists_items_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -475,5 +477,5 @@ def test_report_new_path_lists_items_once(monkeypatch: pytest.MonkeyPatch, tmp_p
     data = build_report_docx(task, repo)
     text = "\n".join(p.text for p in Document(io.BytesIO(data)).paragraphs)
     assert text.count("该约定与第十九条关于试用期期限的规定不符") == 1
-    assert "数值复核（需人工确认）" in text
+    assert "程序数值校验" in text
     assert "规则判定" not in text  # 新路径不应再出现规则通道的条目行

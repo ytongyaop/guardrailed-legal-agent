@@ -5,12 +5,13 @@
 完的任务，输出 status / headline / details，不改规则判定、条款审查与必备条款的任何结论。
 
 三态口径：
-- `risk`：存在“与法条存在冲突的事项”（规则命中、或条款/模型结论的 A/B 级），条数照实报；
-  模型主导路径（规格 003 P1-3）下 `items` 已含模型结论，只取其中 A/B 条目，不再叠加条款 A/B；
-- `partial`：没有明确冲突，但还有“需人工复核”的 C 级条目，或覆盖不完整（条款审查没跑完、
-  有缺事实判不了的规则、有“需人工确认”的必备条款类）；C 级条目只进 `review_count`，
-  **绝不说成“冲突”**（把“待确认”当“确定冲突”是 A1 阶段修掉的那类误导）；
-- `clean`：没有冲突、没有待复核，**且**三个通道都真跑过、都判得动，这时才敢说“未发现风险”。
+- `risk`：存在"确定冲突"的事项（规则命中、A 级、或规则数值校验不一致的条目），条数照实报；
+  模型主导路径（规格 003 P1-3）下 `items` 已含模型结论，冲突层按"确定性 = 确定冲突"计数，
+  不再叠加条款 A/B；
+- `partial`：没有确定冲突，但还有"待确认"（B / C 级）的条目，或覆盖不完整（条款审查没跑完、
+  有缺事实判不了的规则、有"需人工确认"的必备条款类）；这些条目只进 `review_count`，
+  **绝不说成"冲突"**（把"待确认"当"确定冲突"是 A1 阶段修掉的那类误导）；
+- `clean`：没有冲突、没有待确认，**且**三个通道都真跑过、都判得动，这时才敢说"未发现风险"。
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from .grading import CERTAINTY_CONFLICT, certainty_for
 from .models import MISSING_TERM_BASE, MISSING_TERM_UNJUDGED_ID, CheckTask, MissingStatus
 
 SHORT_CONTRACT_CHARS = 400
@@ -31,8 +33,8 @@ _REVIEW_ERROR_HINTS: tuple[str, ...] = ("条款审查", "条款判定")
 class Verdict:
     """一次核对的结论形态；`details` 是逐条覆盖明细，界面与 Word 报告共用。
 
-    `risk_count` 只数“与法条存在冲突的事项”（A/B 级与规则命中）；`review_count` 只数
-    “需人工复核 / 待确认”（C 级）。两者不混用：C 级不能进 headline 里的“冲突”条数。
+    `risk_count` 只数"确定冲突"（A 级与 `source="rule_check"` 的数值校验条目）；`review_count`
+    只数"待确认"（B 级与 C 级）。两者不混用：待确认不能进 headline 里的"冲突"条数。
     新增字段带默认值，旧调用方（只读 risk_count / status / headline / details）不受影响。
     """
 
@@ -75,34 +77,32 @@ def _clause_pending_count(task: CheckTask) -> int:
     return sum(1 for f in (task.clause_findings or []) if str(f.grade) == "C")
 
 
-# 算“冲突”的等级：A 明文冲突 / B 显著失衡；C 只是待确认。
-_CONFLICT_GRADES = ("A", "B")
-
-
-def _item_grade(item) -> str:
-    return str(getattr(item, "grade", "") or "").strip().upper()
+def _item_certainty(item) -> str:
+    """条目 → 对外确定性：与 `domain/grading.py` 同一口径，不在这里另立一套判断。"""
+    return certainty_for(getattr(item, "grade", ""), str(getattr(item, "source", "") or ""))
 
 
 def _conflict_review_counts(task: CheckTask) -> tuple[int, int]:
-    """(冲突条数, 需人工复核条数)：两条路径算法不同，靠任务标志区分（不读环境变量）。
+    """(确定冲突条数, 待确认条数)：两条路径算法不同，靠任务标志区分（不读环境变量）。
 
     - 模型主导路径（`task.model_first=True`）：`items` 已由共识层合并模型结论与程序复核条目，
-      A/B 计冲突、其余（C 级与无法定级）计“需人工复核”，两级不混用、也不叠加条款 A/B；
+      "确定性 = 确定冲突"的（A 级 + `source="rule_check"` 的数值校验条目）计冲突，其余
+      （B / C / 无法定级）计"待确认"，两级不混用、也不叠加条款 A/B；
     - 旧路径：`items` 只有规则条目（一律算冲突），条款审查的 A/B 照旧叠加；
       条款 C 级仍由 `_details` 的“N 条条款待人工确认”那一行体现，`review_count` 保持 0，
       旧路径的 headline / status / details 一个字都不变。
     """
     items = list(task.items or [])
     if bool(task.model_first):
-        # A/B 即对外"正文输出"（规格 3.4：A 与 B 合并展示，只服务六道核验与降级链），
-        # 其余（C 与无法定级）即"需补事实"；两级不混用、也不叠加条款 A/B。
-        conflict = sum(1 for item in items if _item_grade(item) in _CONFLICT_GRADES)
+        # 确定冲突口径见 `domain/grading.py`：A 与规则数值校验条目同层，B 与 C 归"待确认"；
+        # 两级不混用、也不叠加条款 A/B（模型结论已随 items 计过）。
+        conflict = sum(1 for item in items if _item_certainty(item) == CERTAINTY_CONFLICT)
         return conflict, len(items) - conflict
     return len(items) + _clause_risk_count(task), 0
 
 
 def _details(task: CheckTask) -> list[str]:
-    """覆盖明细：有数据才输出该行，顺序固定（规则 → 条款审查 → 需人工复核 → 缺事实 → 必备条款 → 长度）。"""
+    """覆盖明细：有数据才输出该行，顺序固定（规则 → 条款审查 → 待确认 → 缺事实 → 必备条款 → 长度）。"""
     rows: list[str] = []
     coverage = task.rule_coverage
     if coverage is not None and coverage.total:
@@ -118,12 +118,12 @@ def _details(task: CheckTask) -> list[str]:
     if clause_risk:
         rows.append(f"条款审查发现 {clause_risk} 条明确冲突或显著失衡")
     clause_pending = _clause_pending_count(task)
-    # 新路径的 C 级已随 items 计入下面“N 条需人工复核”，这里不再重复报一次同一个数。
+    # 新路径的 C 级已随 items 计入下面“N 条待确认”，这里不再重复报一次同一个数。
     if clause_pending and not bool(task.model_first):
         rows.append(f"{clause_pending} 条条款待人工确认")
     review_count = _conflict_review_counts(task)[1]
     if review_count:
-        rows.append(f"{review_count} 条需人工复核")
+        rows.append(f"{review_count} 条待确认")
     undetermined = list(task.undetermined or [])
     if undetermined:
         rows.append(f"{len(undetermined)} 条规则因缺少事实无法判定")
@@ -162,8 +162,8 @@ def _fully_covered(task: CheckTask) -> bool:
 def summarize_verdict(task: CheckTask) -> Verdict:
     """把任务变成三态结论；同一个任务必然得到同一份输出（纯函数，不改入参）。
 
-    headline 只承诺它数得清的东西：冲突条数只含 A/B 与规则命中；C 级（含程序追加的
-    数值复核条目）单独报“需人工复核”，宁可说“要人看”，也不把待确认说成确定冲突。
+    headline 只承诺它数得清的东西：冲突条数只含确定冲突（A 级与规则数值校验条目）；
+    待确认（B / C 级）单独报“N 条待确认”，宁可说“要人看”，也不把待确认说成确定冲突。
     """
     conflict, review = _conflict_review_counts(task)
     details = _details(task)
@@ -179,7 +179,7 @@ def summarize_verdict(task: CheckTask) -> Verdict:
         return Verdict(
             status="partial",
             risk_count=0,
-            headline=f"未发现明确冲突，但有 {review} 条需人工复核",
+            headline=f"未发现明确冲突，但有 {review} 条待确认",
             details=details,
             review_count=review,
         )
