@@ -67,11 +67,6 @@ def data_path(relative: str) -> str:
     return str(PACKAGE_DATA_DIR / relative)
 
 
-def _cwd_path(name: str) -> str:
-    """运行期可写文件（数据库 / 向量缓存）默认放在工作目录，不写进只读的包目录。"""
-    return str(Path.cwd() / name)
-
-
 def _env(env: Mapping[str, str] | None) -> Mapping[str, str]:
     return os.environ if env is None else env
 
@@ -101,8 +96,8 @@ class RetrievalConfig:
     top_k: int = 8
     rrf_k: int = 60
     embed_model: str = "qwen3.7-text-embedding-flash"
-    # 向量缓存是可写的运行期产物，默认落在工作目录（安装后包目录可能只读）
-    index_dir: str = field(default_factory=lambda: str(Path.cwd() / "data" / "index"))
+    # 向量缓存是可写的运行期产物，默认落在用户级运行目录（安装后包目录可能只读）
+    index_dir: str = field(default_factory=lambda: str(mla_home() / "index"))
 
 
 @dataclass(frozen=True)
@@ -145,8 +140,8 @@ class Paths:
     clauses: str = data_path("clauses/triggers.yaml")
     missing_terms: str = data_path("clauses/missing_terms.yaml")
     evalsets: str = data_path("evalsets")
-    # 数据库是运行期可写文件：默认落在工作目录，不进包目录（site-packages 可能只读）
-    db: str = field(default_factory=lambda: _cwd_path("mla.sqlite3"))
+    # 数据库是运行期可写文件：默认落在用户级运行目录，不进包目录（site-packages 可能只读）
+    db: str = field(default_factory=lambda: str(mla_home() / "mla.sqlite3"))
 
 
 @dataclass(frozen=True)
@@ -212,7 +207,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
             dimension=int(e.get("MLA_EMBED_DIM", "1024")),
             timeout_s=int(e.get("MLA_EMBED_TIMEOUT", "30")),
         ),
-        retrieval=RetrievalConfig(index_dir=e.get("MLA_INDEX_DIR", str(Path.cwd() / "data" / "index"))),
+        retrieval=RetrievalConfig(index_dir=e.get("MLA_INDEX_DIR", str(mla_home(e) / "index"))),
         policy=PolicyConfig(),
         extraction=ExtractionConfig(
             mode=e.get("MLA_EXTRACT_MODE", "auto").strip().lower(),
@@ -234,6 +229,6 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
             clauses=e.get("MLA_CLAUSES", data_path("clauses/triggers.yaml")),
             missing_terms=e.get("MLA_MISSING_TERMS", data_path("clauses/missing_terms.yaml")),
             evalsets=e.get("MLA_EVALSETS", data_path("evalsets")),
-            db=e.get("MLA_DB", _cwd_path("mla.sqlite3")),
+            db=e.get("MLA_DB", str(mla_home(e) / "mla.sqlite3")),
         ),
     )

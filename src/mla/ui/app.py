@@ -54,6 +54,7 @@ from mla.services.auth import (
     register,
     require_admin,
 )
+from mla.services.bootstrap import BootstrapReport, ensure_runtime_ready
 from mla.services.consensus import SOURCE_RULE_CHECK
 from mla.services.report import build_report_docx, merge_findings
 from mla.services.tasks import persist, run_check, run_qa
@@ -118,6 +119,20 @@ def get_repo(db_path: str) -> SqliteRepository:
 @st.cache_resource
 def get_config():
     return load_config()
+
+
+def _show_runtime_notice(report: BootstrapReport) -> None:
+    """把运行目录引导结果提示出来（不静默吞掉），同一会话同一条只提示一次；不含任何 Key。"""
+    messages: list[str] = []
+    if report.copied_from:
+        messages.append(f"已从旧数据库复制业务数据到 {report.db_path}；旧库保留在 {report.copied_from}")
+    messages.extend(report.warnings)
+    shown: list[str] = st.session_state.setdefault("runtime_notice_shown", [])
+    for text in messages:
+        if text in shown:
+            continue
+        st.info(text)
+        shown.append(text)
 
 
 # 模型 Key 的三处来源，顺序即优先级。三处都读原始值，不经过 load_config：
@@ -2015,8 +2030,11 @@ def _render_eval() -> None:
 
 
 def main() -> None:
-    cfg = get_config()
-    repo = get_repo(cfg.paths.db)
+    # 先引导运行目录（必要时一次性复制旧库），再用引导结果建 repository：
+    # 默认库与缓存都在 MLA_HOME 下，换启动目录不再读到另一份数据（规格 002 第 5 章）。
+    report = ensure_runtime_ready()
+    _show_runtime_notice(report)
+    repo = get_repo(report.db_path)
     user = st.session_state.get("user")
     if user is None:
         # 库里还没有管理员就是首次使用：先建号，不显示登录表单。

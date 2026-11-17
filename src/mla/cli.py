@@ -27,6 +27,7 @@ from .domain.rules import load_rules
 from .graph.build import build_graph
 from .graph.nodes import Deps
 from .graph.state import CheckState
+from .services.bootstrap import ensure_runtime_ready
 from .services.retrieval import build_retriever
 from .services.tasks import NO_MODEL_MESSAGE, allow_no_model
 
@@ -50,20 +51,29 @@ def _load_contract(path: str | None) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
-def _sqlite_api_key() -> str:
+def _runtime_db_path(args: argparse.Namespace) -> str | None:
+    """`main()` 引导运行目录后写入 `args.runtime_db_path`，让各命令用同一个库。
+
+    直接调用命令函数（不带 `main()`）时返回 `None`，`SqliteRepository` 回落到配置默认路径。
+    """
+    return getattr(args, "runtime_db_path", None)
+
+
+def _sqlite_api_key(db_path: str | None = None) -> str:
     """从数据库 settings 表读界面设置页保存的 Key（键 llm_api_key）。
 
     解析顺序在 `cmd_check` 里体现：环境变量 / secrets.toml（`load_config` 已合并）优先，
     这里只做兜底，让命令行与界面看到同一份配置。
+    `db_path` 由 `main()` 的引导结果传入，保证与仓库实例用的是同一个库。
     库文件不存在时直接返回空串：读配置不该顺手创建数据库。
     """
     from .adapters.persist import SqliteRepository
 
-    db = Path(load_config().paths.db)
+    db = Path(db_path or load_config().paths.db)
     if not db.is_file():
         return ""
     try:
-        return SqliteRepository().get_setting(LLM_KEY_SETTING)
+        return SqliteRepository(db_path=db_path).get_setting(LLM_KEY_SETTING)
     except (OSError, sqlite3.Error):
         # 读配置失败不该让核对主流程崩掉，按未配置处理（与界面读不到 Key 同口径）
         return ""
@@ -117,7 +127,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     # 门禁（规格 003 第 8 章「无模型时可看不可新算」）：模型是核对的大脑。
     # 放在读规则 / 建检索器之前，保证被拒时不建库、不落任务、不产生任何记录。
     # 环境变量 / secrets.toml 为空时，回落到界面设置页写进 settings 表的 Key。
-    api_key = cfg.llm.api_key or _sqlite_api_key()
+    api_key = cfg.llm.api_key or _sqlite_api_key(_runtime_db_path(args))
     offline = allow_no_model()
     if not api_key and not offline:
         print(NO_MODEL_MESSAGE, file=sys.stderr)
@@ -204,7 +214,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     from .domain.models import Enterprise, Role
     from .services.auth import MIN_PASSWORD_LEN, register
 
-    repo = SqliteRepository()
+    repo = SqliteRepository(db_path=_runtime_db_path(args))
     if repo.get_user_by_name(args.admin_username):
         print(f"账号已存在：{args.admin_username}")
         return 1
@@ -235,7 +245,7 @@ def cmd_admin(args: argparse.Namespace) -> int:
     from .domain.models import Role
     from .services.auth import MIN_PASSWORD_LEN, hash_password
 
-    repo = SqliteRepository()
+    repo = SqliteRepository(db_path=_runtime_db_path(args))
 
     if args.admin_cmd == "list":
         users = repo.list_users()
@@ -274,6 +284,23 @@ def cmd_admin(args: argparse.Namespace) -> int:
     repo.set_user_role(user.user_id, str(Role.ADMIN))
     print(f"已提升为管理员：{username}")
     return 0
+
+
+def _bootstrap_runtime(args: argparse.Namespace) -> None:
+    """解析出命令后、执行前引导运行目录：旧库复制，并把结果路径写回 `args`。
+
+    `--version` 由 argparse 在解析阶段直接退出，因此这类不碰数据库的命令不会触发复制。
+    诊断只打到 stderr，不含任何 Key。
+    """
+    report = ensure_runtime_ready()
+    args.runtime_db_path = report.db_path
+    if report.copied_from:
+        print(
+            f"已从旧数据库复制业务数据到 {report.db_path}；旧库保留在 {report.copied_from}",
+            file=sys.stderr,
+        )
+    for warning in report.warnings:
+        print(f"警告：{warning}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -323,6 +350,7 @@ def main(argv: list[str] | None = None) -> int:
     p_admin_promote.set_defaults(func=cmd_admin)
 
     args = parser.parse_args(argv)
+    _bootstrap_runtime(args)
     return int(args.func(args))
 
 
