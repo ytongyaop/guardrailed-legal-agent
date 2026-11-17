@@ -99,9 +99,9 @@ def _deps(
 ) -> Deps:
     cfg = load_config()
     policy = cfg.policy if max_ask_rounds is None else replace(cfg.policy, max_ask_rounds=max_ask_rounds)
-    # 未显式传入就交给统一 resolver（环境变量 > auth.json > 阶段三旧库兜底）；
+    # 未显式传入就交给统一 resolver（环境变量 > auth.json > 未配置）；旧库 Key 已由引导阶段迁移。
     # 显式传入的路径保持原语义：只有 api_key 非空才构造生成器。
-    llm_cfg = llm if llm is not None else resolve_llm_config(legacy_db=cfg.paths.db)[0]
+    llm_cfg = llm if llm is not None else resolve_llm_config()[0]
     generator = DeepSeekLLM(llm_cfg) if llm_cfg is not None and llm_cfg.api_key else None
     extractor: Extractor
     mode = cfg.extraction.mode

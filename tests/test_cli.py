@@ -15,8 +15,7 @@ import pytest
 
 from mla import __version__
 from mla.cli import cmd_check, main
-from mla.config import data_path, load_config, mla_home
-from mla.services.credentials import ResolvedKey
+from mla.config import data_path, mla_home
 from mla.services.tasks import NO_MODEL_MESSAGE
 
 DUMMY_KEY = "sk-dummy-" + "0" * 26
@@ -126,48 +125,12 @@ def test_cmd_check_reads_auth_file_via_resolver(
     assert DUMMY_KEY not in captured.out + captured.err
 
 
-def test_cmd_check_passes_legacy_db_to_resolver(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """旧库兜底由 resolver 负责：cmd_check 传的是配置里那个库路径，自己不读表。"""
-    seen: dict[str, object] = {}
-
-    def fake_resolve(cfg=None, *, env=None, home=None, legacy_db=None):
-        seen["legacy_db"] = legacy_db
-        return None, ResolvedKey(source="none")
-
-    monkeypatch.setattr("mla.cli.resolve_llm_config", fake_resolve)
-    monkeypatch.delenv("MLA_ALLOW_NO_LLM", raising=False)
-
-    assert main(["check", "--question", OUT_OF_SCOPE]) == 2
-    assert seen["legacy_db"] == load_config().paths.db
-    capsys.readouterr()
-
-
-def test_cmd_check_legacy_db_uses_runtime_db_path(
+def test_cmd_check_no_longer_reads_key_from_database(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """bootstrap 回退到旧库时，旧库兜底读 `runtime_db_path`，不读尚不存在的新库。
-
-    覆盖到 `cmd_check` 内部：`_runtime_db_path(args) or cfg.paths.db` 的取值 + resolver
-    的 `legacy_database` 分支 + 门禁放行。越界问题不调用模型，全程不联网。
-    """
+    """阶段四删除旧库兜底：库里有 Key 也不再让门禁放行（Key 只能来自 env / auth.json）。"""
     legacy = _legacy_db(tmp_path / "cwd-old.sqlite3")
-    configured = Path(load_config().paths.db)
-    assert not configured.exists()  # 配置里的默认库还没建：读它拿不到旧 Key
-
     monkeypatch.delenv("MLA_ALLOW_NO_LLM", raising=False)
 
-    # 对照：没有 runtime 库时读的是不存在的 cfg.paths.db → 无 Key，被门禁拦下
-    assert cmd_check(_check_args()) == 2
+    assert cmd_check(_check_args(runtime_db_path=str(legacy))) == 2
     assert NO_MODEL_MESSAGE in capsys.readouterr().err
-
-    # runtime_db_path 指向旧库 → resolver 走 legacy_database，门禁放行
-    assert cmd_check(_check_args(runtime_db_path=str(legacy))) == 0
-    captured = capsys.readouterr()
-    assert NO_MODEL_MESSAGE not in captured.err
-    assert "离线诊断模式" not in captured.err
-    assert json.loads(captured.out)["boundary"]["in_scope"] is False
-    assert DUMMY_KEY not in captured.out + captured.err
-    # 兜底只读：不创建新库、不创建用户目录
-    assert not configured.exists()

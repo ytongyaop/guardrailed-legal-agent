@@ -157,6 +157,11 @@ def test_legacy_db_copy_keeps_accounts_and_contracts(tmp_path: Path) -> None:
     assert report.copied_from == str(old_cwd / "mla.sqlite3")
     assert report.created_dir is True
     assert report.warnings == []
+    # 哑库没有 settings 表：凭据迁移如实给 no_candidate，不建空凭据、不写标记
+    assert report.migration.status == "no_candidate"
+    assert report.migration.messages == []
+    assert not (home / "auth.json").exists()
+    assert not (home / "auth-migration.json").exists()
     assert _count(Path(report.db_path), "users") == 2
     assert _count(Path(report.db_path), "contracts") == 1
     assert (old_cwd / "mla.sqlite3").is_file()
@@ -191,6 +196,7 @@ def test_explicit_mla_db_is_used_without_copy(tmp_path: Path) -> None:
     assert report.copied_from is None
     assert report.created_dir is False
     assert report.warnings == []
+    assert report.migration.status == "no_candidate"
     assert not explicit.exists()
     assert not (home / "mla.sqlite3").exists()
 
@@ -221,6 +227,7 @@ def test_missing_legacy_db_creates_nothing(tmp_path: Path) -> None:
     assert report.db_path == str(home / "mla.sqlite3")
     assert report.copied_from is None
     assert report.created_dir is False
+    assert report.migration.status == "no_candidate"
     assert not home.exists()
     assert not (home / "mla.sqlite3").exists()
 

@@ -53,7 +53,7 @@ from mla.services.auth import (
     register,
     require_admin,
 )
-from mla.services.bootstrap import BootstrapReport, ensure_runtime_ready
+from mla.services.bootstrap import STATUS_FAILED, BootstrapReport, ensure_runtime_ready
 from mla.services.consensus import SOURCE_RULE_CHECK
 from mla.services.credentials import (
     DEFAULT_PROVIDER,
@@ -134,7 +134,10 @@ def get_config():
 
 
 def _show_runtime_notice(report: BootstrapReport) -> None:
-    """把运行目录引导结果提示出来（不静默吞掉），同一会话同一条只提示一次；不含任何 Key。"""
+    """把运行目录引导与首次凭据迁移的结果提示出来（不静默吞掉），不含任何 Key。
+
+    成功类提示同一会话只显示一次；迁移失败的消息每次都以警告呈现，避免"看起来迁移成功"。
+    """
     messages: list[str] = []
     if report.copied_from:
         messages.append(f"已从旧数据库复制业务数据到 {report.db_path}；旧库保留在 {report.copied_from}")
@@ -146,13 +149,24 @@ def _show_runtime_notice(report: BootstrapReport) -> None:
         st.info(text)
         shown.append(text)
 
+    migration = report.migration
+    if migration.status == STATUS_FAILED:
+        for text in migration.messages:
+            st.warning(text)
+        return
+    for text in migration.messages:
+        if text in shown:
+            continue
+        st.info(text)
+        shown.append(text)
+
 
 # ---------------- 模型 Key 的解析与设置页 ----------------
-# 解析只有一处：`services.credentials`（环境变量 > auth.json > 阶段三旧库兜底）。
+# 解析只有一处：`services.credentials`（环境变量 > auth.json > 未配置）。
 # 界面不缓存解析结果（规格 002 第 4 章）：保存、清除或外部改文件后，下一次调用重新读盘。
 def _resolve_llm(cfg) -> LLMConfig | None:
     """当前生效的模型配置；未配置返回 `None`（界面按缺 Key 处理，不降级成模板回答）。"""
-    llm, _resolved = resolve_llm_config(cfg, legacy_db=cfg.paths.db)
+    llm, _resolved = resolve_llm_config(cfg)
     return llm
 
 
@@ -1707,7 +1721,7 @@ def _model_providers() -> list[str]:
 
     取值不硬编码显示名：加第二家服务商时这里自动多一项（规格 002 第 10.6 节）。
     """
-    return [s.provider for s in list_key_status(legacy_db=get_config().paths.db)]
+    return [s.provider for s in list_key_status()]
 
 
 def _provider_display(provider: str) -> str:
@@ -1799,7 +1813,7 @@ def _save_key(provider: str, raw: str, *, replacing: bool) -> None:
 
 def _test_connection(provider: str) -> None:
     """手动复验**当前生效**的 Key：只发 `GET /models`，写校验历史，不改 `auth.json`。"""
-    resolved = resolve_key(provider, legacy_db=get_config().paths.db)
+    resolved = resolve_key(provider)
     if resolved.source == "none":
         return
     probe = _probe(resolved.key)
@@ -1901,7 +1915,7 @@ def _render_model_settings() -> None:
     cfg = get_config()
     providers = _model_providers()
     provider = providers[0] if providers else DEFAULT_PROVIDER
-    status = next((s for s in list_key_status(legacy_db=cfg.paths.db) if s.provider == provider), None)
+    status = next((s for s in list_key_status() if s.provider == provider), None)
     check = read_check_status(provider)  # None = 从未校验 / 记录损坏
     st.caption(_key_status_line(status, check, cfg.llm.model))
     configured = status is not None and status.source != "none"

@@ -55,7 +55,7 @@ OTHER_KEY = "sk-dummy-" + "9" * 26
 LEGACY_KEY = "sk-dummy-" + "5" * 26
 KEY_PREFIX = "sk-dummy-"
 
-# 旧库里 Key 的键名（阶段三只读兜底仍读它）
+# 旧库里 Key 的键名（阶段四：只作为迁移候选，不再是解析来源）
 LEGACY_SETTING_KEY = "llm_api_key"
 
 
@@ -306,23 +306,37 @@ def test_resolve_llm_prefers_env_over_auth_file(tmp_path, monkeypatch) -> None:
     assert _resolve_llm(load_config()).api_key == DUMMY_KEY
 
 
-def test_resolve_llm_falls_back_to_legacy_database(tmp_path, monkeypatch) -> None:
-    """阶段三兜底：文件没有、环境变量也没有时，只读旧库 `settings.llm_api_key`。"""
+def test_resolve_llm_ignores_legacy_database(tmp_path, monkeypatch) -> None:
+    """阶段四：旧库 Key 不再是解析来源；未迁移的用户只能重新保存 Key 或等迁移提示。"""
     repo = _repo(tmp_path)
     repo.set_setting(LEGACY_SETTING_KEY, LEGACY_KEY)
     monkeypatch.setenv("MLA_DB", str(tmp_path / "setup.sqlite3"))
     monkeypatch.delenv("MLA_LLM_API_KEY", raising=False)
 
-    llm = _resolve_llm(load_config())
-    assert llm is not None
-    assert llm.api_key == LEGACY_KEY
+    assert _resolve_llm(load_config()) is None
+
+
+def test_runtime_notice_reports_legacy_key_migration(tmp_path, monkeypatch) -> None:
+    """首次迁移的结果在界面上可见一次：含结论与凭据文件路径，不含 Key；旧行已清理。"""
+    repo = _repo(tmp_path)
+    repo.set_setting(LEGACY_SETTING_KEY, LEGACY_KEY)
+
+    at = _app(tmp_path, monkeypatch).run()
+
+    assert not at.exception
+    text = _all_text(at)
+    assert "已从旧配置迁移到用户凭据文件" in text
+    assert str(_home(tmp_path) / "auth.json") in text
+    assert KEY_PREFIX not in text and LEGACY_KEY not in text
+    assert _repo(tmp_path).get_setting(LEGACY_SETTING_KEY) == ""
+    assert resolve_key("deepseek").source == "auth_file"
 
 
 def test_resolve_llm_unconfigured_returns_none(tmp_path, monkeypatch) -> None:
-    """三处都没有 → 未配置（界面按缺 Key 处理，不降级成模板回答）。"""
+    """两处来源都空 → 未配置（界面按缺 Key 处理，不降级成模板回答）。"""
     monkeypatch.delenv("MLA_LLM_API_KEY", raising=False)
     assert _resolve_llm(load_config()) is None
-    assert resolve_key("deepseek", legacy_db=load_config().paths.db).source == "none"
+    assert resolve_key("deepseek").source == "none"
 
 
 # ---------------- 设置页 ----------------

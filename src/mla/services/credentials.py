@@ -1,19 +1,18 @@
 """凭据服务：全项目唯一的 Key 解析入口。
 
 优先级（规格 002 第 4 章）：环境变量 > `<MLA_HOME>/auth.json` 的 provider 条目 > 未配置。
-**阶段三临时兜底**：旧数据库 `settings.llm_api_key` 作为最低优先级只读来源
-（`legacy_database` / `兼容来源（旧数据库）`），排在 `auth_file` 之后；阶段四随迁移删除。
+只有这两级：旧数据库 `settings.llm_api_key` 不再是解析来源（阶段四起由
+`services.bootstrap.migrate_legacy_key()` 一次性导入并清理，见规格 002 第 7 章）。
 
 本模块只做「取值 + 来源标签 + 面向调用方的读写 API」：不读 `.streamlit/secrets.toml`、
-不做网络探测；UI、CLI、服务层与脚本都只能走这里。
+不做网络探测、不读数据库；UI、CLI、服务层与脚本都只能走这里。
 """
 
 from __future__ import annotations
 
 import os
-import sqlite3
 from collections.abc import Iterator, Mapping
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -38,9 +37,11 @@ __all__ = [
     "CheckStatus",
     "CredentialError",
     "DEFAULT_PROVIDER",
+    "KeySource",
     "KeyStatus",
     "ResolvedKey",
     "clear_key",
+    "home_lock",
     "list_key_status",
     "read_check_status",
     "record_check_status",
@@ -51,20 +52,15 @@ __all__ = [
 
 SOURCE_ENVIRONMENT = "environment"
 SOURCE_AUTH_FILE = "auth_file"
-SOURCE_LEGACY_DATABASE = "legacy_database"
 SOURCE_NONE = "none"
 
-# 来源标识的合法取值：阶段三是四种，阶段四删掉 legacy_database 后回到三种
-KeySource = Literal["environment", "auth_file", "legacy_database", "none"]
+# 来源标识的合法取值（规格 002 第 4 章）：只有两级来源 + 未配置
+KeySource = Literal["environment", "auth_file", "none"]
 
 # 服务商 → 环境变量名。本版只有 DeepSeek；加第二家只需在这里多一行。
 _ENV_VARS: dict[str, str] = {"deepseek": "MLA_LLM_API_KEY"}
 
-# 旧数据库里的 Key 键名（与旧 UI 写入 settings 表的键一致）
-LEGACY_SETTING_KEY = "llm_api_key"
-
 _LABEL_AUTH_FILE = "用户凭据文件（auth.json）"
-_LABEL_LEGACY_DATABASE = "兼容来源（旧数据库）"
 _LABEL_NONE = "未配置"
 
 
@@ -112,12 +108,10 @@ def resolve_key(
     *,
     env: Mapping[str, str] | None = None,
     home: Path | None = None,
-    legacy_db: str | Path | None = None,
 ) -> ResolvedKey:
-    """按 env > auth_file > legacy_database > none 返回第一个非空值；损坏的凭据文件显式报错。
+    """按 env > auth_file > none 返回第一个非空值；损坏的凭据文件显式报错。
 
-    `legacy_db` 是**阶段三临时兜底**的旧数据库路径（通常传 `cfg.paths.db`）：只在文件
-    已存在时以只读方式读 `settings.llm_api_key`，缺失或读失败一律当空，绝不创建数据库。
+    只读：不创建 `auth.json`、不建 `MLA_HOME` 目录、不碰任何数据库。
     """
     e = os.environ if env is None else env
     variable = _ENV_VARS.get(provider, "")
@@ -136,37 +130,7 @@ def resolve_key(
             label=_LABEL_AUTH_FILE,
             origin=str(auth_path(root)),
         )
-    legacy = _legacy_database_key(legacy_db, provider)
-    if legacy:
-        return ResolvedKey(
-            key=legacy,
-            source=SOURCE_LEGACY_DATABASE,
-            label=_LABEL_LEGACY_DATABASE,
-            origin=str(Path(legacy_db)) if legacy_db is not None else "",
-        )
     return ResolvedKey(source=SOURCE_NONE, label=_LABEL_NONE)
-
-
-def _legacy_database_key(db: str | Path | None, provider: str) -> str:
-    """阶段三兜底：只读打开**已存在**的旧库取 `settings.llm_api_key`。
-
-    规格 002 第 4 章：文件不存在、表 / 键缺失、读取失败都当作空（继续下探到 none），
-    不报错、不创建数据库；阶段四删除本函数与 `legacy_database` 来源。只有默认的
-    `deepseek` 有这段历史（其他 provider 从来没有写进过旧库）。
-    """
-    if db is None or provider != DEFAULT_PROVIDER:
-        return ""
-    path = Path(db)
-    if not path.is_file():
-        return ""
-    try:
-        uri = path.absolute().as_uri() + "?mode=ro"
-        with closing(sqlite3.connect(uri, uri=True)) as conn:
-            row = conn.execute("SELECT value FROM settings WHERE key = ?", (LEGACY_SETTING_KEY,)).fetchone()
-    except (OSError, sqlite3.Error):
-        # 旧库不是合法 SQLite、缺表、被占用：按「没有旧 Key」处理，不阻断解析
-        return ""
-    return "" if row is None else str(row[0] or "").strip()
 
 
 def resolve_llm_config(
@@ -174,27 +138,35 @@ def resolve_llm_config(
     *,
     env: Mapping[str, str] | None = None,
     home: Path | None = None,
-    legacy_db: str | Path | None = None,
 ) -> tuple[LLMConfig | None, ResolvedKey]:
     """无 Key 返回 `(None, ResolvedKey.none)`；有 Key 返回已注入 Key 的 `LLMConfig`。"""
-    resolved = resolve_key(DEFAULT_PROVIDER, env=env, home=home, legacy_db=legacy_db)
+    resolved = resolve_key(DEFAULT_PROVIDER, env=env, home=home)
     if resolved.source == SOURCE_NONE:
         return None, resolved
     base = cfg if cfg is not None else load_config(env)
     return replace(base.llm, api_key=resolved.key), resolved
 
 
+def _set_key_unlocked(provider: str, key: str, *, home: Path) -> None:
+    """`set_key()` 的无锁内核：**调用方必须已持有 `home_lock(home)`**。
+
+    仅供 `set_key()` 与首次迁移（`services.bootstrap`）使用：迁移要在同一把锁里完成
+    「写入 → 重读校验 → 删旧行 → 写标记」，再调会自己抢锁的 `set_key()` 会自锁。
+    """
+    set_entry(home, provider, key)
+
+
 def set_key(provider: str, key: str, *, home: Path | None = None) -> None:
     """保存 Key：返回前必须已完成落盘、权限收紧与重读校验，否则抛 `CredentialError`。"""
     root = _home(home)
-    with _home_lock(root):
-        set_entry(root, provider, key)
+    with home_lock(root):
+        _set_key_unlocked(provider, key, home=root)
 
 
 def clear_key(provider: str, *, home: Path | None = None) -> None:
     """清除某个 provider 的 Key；不存在时静默返回（幂等），不动其他 provider。"""
     root = _home(home)
-    with _home_lock(root):
+    with home_lock(root):
         remove_entry(root, provider)
 
 
@@ -202,18 +174,13 @@ def list_key_status(
     *,
     env: Mapping[str, str] | None = None,
     home: Path | None = None,
-    legacy_db: str | Path | None = None,
 ) -> list[KeyStatus]:
-    """列出各 provider 的来源概况；结果里没有 Key，也没有 Key 长度。
-
-    `legacy_db` 与 `resolve_key()` 同义：阶段三界面可能显示「兼容来源（旧数据库）」标签，
-    但本批不改 `ui/app.py`，这里只是把接口备好；阶段四随兜底一起删掉这个参数。
-    """
+    """列出各 provider 的来源概况；结果里没有 Key，也没有 Key 长度。"""
     root = _home(home)
     path = str(auth_path(root))
     statuses: list[KeyStatus] = []
     for provider in sorted(_ENV_VARS):
-        resolved = resolve_key(provider, env=env, home=root, legacy_db=legacy_db)
+        resolved = resolve_key(provider, env=env, home=root)
         statuses.append(
             KeyStatus(
                 provider=provider,
@@ -253,10 +220,13 @@ def read_check_status(provider: str, *, home: Path | None = None) -> CheckStatus
 
 
 @contextmanager
-def _home_lock(home: Path) -> Iterator[None]:
+def home_lock(home: Path) -> Iterator[None]:
     """按 `MLA_HOME` 串行化配置写操作：原子 `mkdir` 抢锁，已存在即报错、不自动抢。
 
-    当前只有 `set_key` / `clear_key` 用它；正常与异常路径都在 `finally` 里释放。
+    `set_key` / `clear_key` 与首次凭据迁移（`services.bootstrap`）共用这把锁：
+    迁移要在同一把锁里完成「写入 → 重读校验 → 删旧行 → 写标记」，所以它调的是
+    `_set_key_unlocked()` 而不是会自己抢锁的 `set_key()`。正常与异常路径都在
+    `finally` 里释放；发现遗留锁时只报诊断，绝不按等待时长自动判死抢锁。
     """
     ensure_home_dir(home)
     lock = lock_dir(home)

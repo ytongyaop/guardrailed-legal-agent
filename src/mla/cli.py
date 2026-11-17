@@ -25,7 +25,7 @@ from .domain.rules import load_rules
 from .graph.build import build_graph
 from .graph.nodes import Deps
 from .graph.state import CheckState
-from .services.bootstrap import ensure_runtime_ready
+from .services.bootstrap import STATUS_FAILED, ensure_runtime_ready
 from .services.credentials import resolve_llm_config
 from .services.retrieval import build_retriever
 from .services.tasks import NO_MODEL_MESSAGE, allow_no_model
@@ -101,11 +101,9 @@ def cmd_check(args: argparse.Namespace) -> int:
     cfg = load_config()
     # 门禁（规格 003 第 8 章「无模型时可看不可新算」）：模型是核对的大脑。
     # 放在读规则 / 建检索器之前，保证被拒时不建库、不落任务、不产生任何记录。
-    # Key 统一由 resolver 解析：环境变量 > auth.json > 阶段三旧库只读兜底（阶段四删除）。
-    # 旧库兜底要读「本次真正在用的库」：bootstrap 复制失败时会回退到 cwd 旧库
-    # （report.db_path），此时 cfg.paths.db 指向尚不存在的新库，读它拿不到旧 Key。
-    runtime_db = _runtime_db_path(args) or cfg.paths.db
-    llm_cfg, _resolved = resolve_llm_config(cfg, legacy_db=runtime_db)
+    # Key 统一由 resolver 解析：环境变量 > auth.json > 未配置；旧库 Key 已由引导阶段
+    # 一次性迁移并清理（规格 002 第 7 章），解析路径不再读数据库。
+    llm_cfg, _resolved = resolve_llm_config(cfg)
     offline = allow_no_model()
     if llm_cfg is None and not offline:
         print(NO_MODEL_MESSAGE, file=sys.stderr)
@@ -265,10 +263,10 @@ def cmd_admin(args: argparse.Namespace) -> int:
 
 
 def _bootstrap_runtime(args: argparse.Namespace) -> None:
-    """解析出命令后、执行前引导运行目录：旧库复制，并把结果路径写回 `args`。
+    """解析出命令后、执行前引导运行目录：旧库复制与首次凭据迁移，并把结果路径写回 `args`。
 
     `--version` 由 argparse 在解析阶段直接退出，因此这类不碰数据库的命令不会触发复制。
-    诊断只打到 stderr，不含任何 Key。
+    诊断只打到 stderr，不含任何 Key；迁移失败必须可见，不能静默显示成成功。
     """
     report = ensure_runtime_ready()
     args.runtime_db_path = report.db_path
@@ -279,6 +277,9 @@ def _bootstrap_runtime(args: argparse.Namespace) -> None:
         )
     for warning in report.warnings:
         print(f"警告：{warning}", file=sys.stderr)
+    for message in report.migration.messages:
+        prefix = "警告：" if report.migration.status == STATUS_FAILED else ""
+        print(f"{prefix}{message}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
