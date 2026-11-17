@@ -36,7 +36,16 @@ jobs:
           python -m pip install --force-reinstall --no-deps /tmp/whl/*.whl
           mkdir -p /tmp/mla-wheel-run
           cd /tmp/mla-wheel-run
-          python -m mla check --contract "$(python -c 'import os, mla; print(os.path.join(os.path.dirname(mla.__file__), "data", "evalsets", "sample_contract.txt"))')"
+          CONTRACT="$(python -c 'import os, mla; print(os.path.join(os.path.dirname(mla.__file__), "data", "evalsets", "sample_contract.txt"))')"
+          # 1) 版本可读
+          python -m mla --version
+          # 2) 无模型时核对必须被拒绝（退出码非 0）
+          if python -m mla check --contract "$CONTRACT"; then
+            echo "::error::无模型时 mla check 应返回非零退出码"
+            exit 1
+          fi
+          # 3) 离线诊断模式应可用
+          MLA_ALLOW_NO_LLM=1 python -m mla check --contract "$CONTRACT" > /dev/null
 
       - name: Lint
         run: ruff check src tests scripts
