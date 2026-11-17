@@ -15,6 +15,49 @@ from pathlib import Path
 PACKAGE_DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
+class ConfigError(Exception):
+    """运行期配置错误：路径或凭据形状不合法时抛出。"""
+
+
+def _is_windows() -> bool:
+    """平台判定单独成函数：生产口径就是 `os.name`，测试可替换分支。"""
+    return os.name == "nt"
+
+
+def _user_home() -> Path:
+    """取当前用户主目录；取不到就报配置错误，绝不回退到当前工作目录。"""
+    try:
+        home = Path.home()
+    except RuntimeError as exc:  # 3.13+ 无法解析用户目录时抛 RuntimeError
+        raise ConfigError("无法确定当前用户目录，请把 MLA_HOME 设为绝对路径") from exc
+    if not str(home).strip() or not home.is_absolute():
+        raise ConfigError("无法确定当前用户目录，请把 MLA_HOME 设为绝对路径")
+    return home
+
+
+def mla_home(env: Mapping[str, str] | None = None) -> Path:
+    """用户级运行目录（凭据、默认数据库、向量缓存都放在它下面）。
+
+    纯路径计算：不创建目录、不读凭据、不碰数据库，也不把 cwd 当兜底。
+    """
+    e = _env(env)
+    override = (e.get("MLA_HOME") or "").strip()
+    if override:
+        path = Path(override)
+        if not path.is_absolute():
+            raise ConfigError(f"MLA_HOME 必须是绝对路径：{override}")
+        return path
+    if _is_windows():
+        local_appdata = (e.get("LOCALAPPDATA") or "").strip()
+        if local_appdata:
+            return Path(local_appdata) / "mla"
+        return _user_home() / "AppData" / "Local" / "mla"
+    xdg_data = (e.get("XDG_DATA_HOME") or "").strip()
+    if xdg_data:
+        return Path(xdg_data) / "mla"
+    return _user_home() / ".local" / "share" / "mla"
+
+
 def data_path(relative: str) -> str:
     """把相对包内数据目录的路径解析成绝对路径字符串。
 
