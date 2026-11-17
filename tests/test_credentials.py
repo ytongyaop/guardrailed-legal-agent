@@ -8,6 +8,7 @@ POSIX 权限位断言只在非 Windows 运行。
 from __future__ import annotations
 
 import json
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -216,6 +217,84 @@ def test_resolve_llm_config_injects_key(home: Path) -> None:
     assert cfg.api_key == DUMMY_KEY
     assert cfg.model == "deepseek-chat"
     assert resolved.source == "auth_file"
+
+
+# ---------------------------------------------------------------- 阶段三旧库兜底
+
+
+def _legacy_db(tmp_path: Path, key: str = DUMMY_KEY) -> Path:
+    """造一份带 `settings.llm_api_key` 的旧库（阶段三兜底的输入）。"""
+    db = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT)")
+        conn.execute("INSERT INTO settings (key, value) VALUES ('llm_api_key', ?)", (key,))
+    return db
+
+
+def test_legacy_database_is_third_source(home: Path, tmp_path: Path) -> None:
+    """旧库是第三级：标签固定为「兼容来源（旧数据库）」，且解析不创建 MLA_HOME。"""
+    db = _legacy_db(tmp_path)
+
+    resolved = resolve_key("deepseek", env={}, home=home, legacy_db=db)
+
+    assert resolved.key == DUMMY_KEY
+    assert resolved.source == "legacy_database"
+    assert resolved.label == "兼容来源（旧数据库）"
+    assert resolved.origin == str(db)
+    assert not home.exists()  # 只读：不顺带建目录
+
+
+def test_env_and_file_override_legacy_database(home: Path, tmp_path: Path) -> None:
+    """env 最高，其次是 auth.json；旧库只在两处都没有时兜底。"""
+    db = _legacy_db(tmp_path)
+
+    env_key = resolve_key("deepseek", env={"MLA_LLM_API_KEY": OTHER_KEY}, home=home, legacy_db=db)
+    assert (env_key.key, env_key.source) == (OTHER_KEY, "environment")
+
+    set_key("deepseek", OTHER_KEY, home=home)
+    file_key = resolve_key("deepseek", env={}, home=home, legacy_db=db)
+    assert (file_key.key, file_key.source) == (OTHER_KEY, "auth_file")
+
+
+def test_legacy_database_missing_is_not_created(home: Path, tmp_path: Path) -> None:
+    """旧库不存在 → 当作空，返回 none，且绝不创建数据库文件。"""
+    missing = tmp_path / "not-there.sqlite3"
+
+    resolved = resolve_key("deepseek", env={}, home=home, legacy_db=missing)
+
+    assert resolved.source == "none"
+    assert not missing.exists()
+
+
+def test_legacy_database_without_settings_table_degrades_to_none(home: Path, tmp_path: Path) -> None:
+    """旧库存在但没有 settings 表（读失败）：按空处理，不抛错。"""
+    db = tmp_path / "empty.sqlite3"
+    sqlite3.connect(db).close()
+
+    assert resolve_key("deepseek", env={}, home=home, legacy_db=db).source == "none"
+
+
+def test_list_key_status_reports_legacy_label(home: Path, tmp_path: Path) -> None:
+    """`list_key_status` 也能反映旧库来源（接口备好，UI 本批不改）。"""
+    db = _legacy_db(tmp_path)
+
+    status = list_key_status(env={}, home=home, legacy_db=db)[0]
+
+    assert status.source == "legacy_database"
+    assert status.label == "兼容来源（旧数据库）"
+    assert status.type == "api_key"
+    assert KEY_PREFIX not in repr(status) and KEY_PREFIX not in str(status)
+
+
+def test_resolve_llm_config_passes_legacy_db(home: Path, tmp_path: Path) -> None:
+    """`resolve_llm_config` 透传 legacy_db，且不覆盖校验超时等非秘密参数。"""
+    db = _legacy_db(tmp_path)
+
+    cfg, resolved = resolve_llm_config(env={}, home=home, legacy_db=db)
+
+    assert cfg is not None and cfg.api_key == DUMMY_KEY
+    assert cfg.auth_check_timeout_s == 10
+    assert resolved.source == "legacy_database"
 
 
 # ---------------------------------------------------------------- 权限

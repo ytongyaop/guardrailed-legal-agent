@@ -1,28 +1,35 @@
 """DeepSeek 适配的错误路径：HTTPError / 超时 / 非法 JSON 一律包装成 LLMError，并带一次重试。
 
+另有校验探针（`probe_models`）的契约测试：只发一次 `GET /models`、只按异常类型与状态码
+分类、超时取 `auth_check_timeout_s`（与推理超时互不串用）。
+
 不联网：`urlopen` 换成假实现，`time.sleep` 打桩（重试间隔 0.5s 不真等）。
 """
 
 from __future__ import annotations
 
 import io
+import socket
 import urllib.error
 from collections.abc import Callable
 
 import pytest
 
 from mla.adapters import llm as llm_mod
-from mla.adapters.llm import DeepSeekLLM, LLMError
+from mla.adapters.llm import DeepSeekLLM, LLMError, ProbeResult
 from mla.config import LLMConfig
 
 CFG = LLMConfig(api_key="test-key", timeout_s=1)
+PROBE_CFG = LLMConfig(api_key="cfg-key", timeout_s=60, auth_check_timeout_s=10)
+PROBE_KEY = "test-key"
 
 
 class _FakeResponse:
     """够用的假响应：支持 `with urlopen(...) as resp: resp.read()`。"""
 
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, status: int = 200) -> None:
         self._body = body
+        self.status = status
 
     def read(self) -> bytes:
         return self._body
@@ -48,6 +55,43 @@ def _patch(monkeypatch: pytest.MonkeyPatch, behaviour: Callable[..., object]) ->
     monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(llm_mod.time, "sleep", fake_sleep)
     return record
+
+
+def _patch_probe(monkeypatch: pytest.MonkeyPatch, behaviour: Callable[..., object]) -> dict[str, list]:
+    """替换 urlopen，同时记下每次请求与 timeout（探针契约测试用）。"""
+    record: dict[str, list] = {"requests": [], "timeouts": []}
+
+    def fake_urlopen(req: object, timeout: float | None = None) -> object:
+        record["requests"].append(req)
+        record["timeouts"].append(timeout)
+        return behaviour()
+
+    monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake_urlopen)
+    return record
+
+
+def _raise_http(code: int) -> Callable[..., object]:
+    """指定状态码的 HTTPError（探针分类测试用）。"""
+
+    def behaviour() -> object:
+        raise urllib.error.HTTPError(
+            "https://api.deepseek.com/models",
+            code,
+            "boom",
+            {},  # type: ignore[arg-type]
+            io.BytesIO(b'{"error": "boom"}'),
+        )
+
+    return behaviour
+
+
+def _raise(error: BaseException) -> Callable[..., object]:
+    """抛出指定异常实例（网络类分类测试用）。"""
+
+    def behaviour() -> object:
+        raise error
+
+    return behaviour
 
 
 def _raise_http_500() -> object:
@@ -156,3 +200,117 @@ def test_parse_rejects_non_object_json() -> None:
     """模型返回数组等非对象结构时按"不是 JSON 对象"报错。"""
     with pytest.raises(LLMError, match="不是 JSON 对象"):
         DeepSeekLLM._parse("[]")
+
+
+# ---------------------------------------------------------------- 校验探针
+
+
+def test_probe_models_ok_hits_only_models_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """2xx → ok：只发一次 GET /models，空 payload，不碰生成接口。"""
+    record = _patch_probe(monkeypatch, lambda: _FakeResponse(b'{"data": []}', status=200))
+
+    result = DeepSeekLLM(PROBE_CFG).probe_models(PROBE_KEY)
+
+    assert result == ProbeResult(kind="ok", status_code=200, message="HTTP 200")
+    assert len(record["requests"]) == 1  # 只发一次，不重试
+    request = record["requests"][0]
+    assert request.get_method() == "GET"
+    assert request.full_url.endswith("/models")
+    assert "/chat/completions" not in request.full_url
+    assert request.data is None  # 空 payload：不为校验构造 messages
+    assert request.get_header("Authorization") == f"Bearer {PROBE_KEY}"
+    assert record["timeouts"] == [10]  # auth_check_timeout_s，不是 timeout_s
+
+
+@pytest.mark.parametrize("code", [401, 403])
+def test_probe_models_maps_auth_codes(monkeypatch: pytest.MonkeyPatch, code: int) -> None:
+    """401 / 403 → auth，状态码原样带出，诊断里没有 Key。"""
+    _patch_probe(monkeypatch, _raise_http(code))
+
+    result = DeepSeekLLM(PROBE_CFG).probe_models(PROBE_KEY)
+
+    assert result.kind == "auth"
+    assert result.status_code == code
+    assert PROBE_KEY not in result.message
+
+
+@pytest.mark.parametrize("code", [400, 429, 500, 503])
+def test_probe_models_maps_other_http_to_server(monkeypatch: pytest.MonkeyPatch, code: int) -> None:
+    """其余 4xx / 5xx（含 429、503）→ server，不能误判成 Key 无效。"""
+    _patch_probe(monkeypatch, _raise_http(code))
+
+    result = DeepSeekLLM(PROBE_CFG).probe_models(PROBE_KEY)
+
+    assert result.kind == "server"
+    assert result.status_code == code
+    assert f"HTTP {code}" in result.message
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        urllib.error.URLError("dns failure"),
+        TimeoutError("timed out"),
+        socket.gaierror(-2, "unknown host"),
+        ConnectionError("refused"),
+    ],
+    ids=["urlerror", "timeout", "gaierror", "connection"],
+)
+def test_probe_models_maps_network_errors(monkeypatch: pytest.MonkeyPatch, error: BaseException) -> None:
+    """网络类异常一律 network，status_code 为空，诊断只放异常类名。"""
+    _patch_probe(monkeypatch, _raise(error))
+
+    result = DeepSeekLLM(PROBE_CFG).probe_models(PROBE_KEY)
+
+    assert result.kind == "network"
+    assert result.status_code is None
+    assert result.message == type(error).__name__
+    assert PROBE_KEY not in result.message
+
+
+def test_probe_models_without_key_sends_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """空 Key 不发请求，归入 auth。"""
+    record = _patch_probe(monkeypatch, lambda: _FakeResponse(b"{}"))
+
+    result = DeepSeekLLM(LLMConfig(api_key="")).probe_models("   ")
+
+    assert result.kind == "auth" and result.status_code is None
+    assert record["requests"] == []
+
+
+def test_probe_models_honours_explicit_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """调用方显式传的超时优先于配置默认值。"""
+    record = _patch_probe(monkeypatch, lambda: _FakeResponse(b"{}"))
+
+    DeepSeekLLM(PROBE_CFG).probe_models(PROBE_KEY, timeout_s=2.5)
+
+    assert record["timeouts"] == [2.5]
+
+
+def test_generate_still_uses_inference_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """推理路径仍只读 timeout_s，不被校验超时影响（AC-24 的另一半）。"""
+    body = b'{"choices": [{"message": {"content": "{\\"label\\": \\"x\\"}"}}]}'
+    record = _patch_probe(monkeypatch, lambda: _FakeResponse(body))
+
+    DeepSeekLLM(PROBE_CFG).generate("sys", "user")
+
+    assert record["timeouts"] == [60]
+    assert record["requests"][0].full_url.endswith("/chat/completions")
+
+
+def test_probe_and_health_never_leak_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """校验失败时的 message 与 health 的 last_error 都不含 Key。"""
+    _patch_probe(monkeypatch, _raise_http(401))
+    llm = DeepSeekLLM(PROBE_CFG)
+
+    result = llm.probe_models(PROBE_KEY)
+    assert llm.health() is False
+    assert PROBE_KEY not in result.message
+    assert PROBE_KEY not in llm.last_error
+
+
+def test_health_true_on_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    """探针拿到 2xx 时 health 仍返回 bool True（签名与语义不变）。"""
+    _patch_probe(monkeypatch, lambda: _FakeResponse(b'{"data": []}'))
+
+    assert DeepSeekLLM(CFG).health() is True

@@ -68,6 +68,7 @@ from mla.domain.models import RuleEntry, Severity  # noqa: E402
 from mla.domain.rules import evaluate, load_rules  # noqa: E402
 from mla.ports.generation import Generator  # noqa: E402
 from mla.services.clause_review import review_clauses  # noqa: E402
+from mla.services.credentials import resolve_llm_config  # noqa: E402
 
 GRADE_ORDER = ("A", "B", "C")
 NEGATIVE_GRADE = "合规"
@@ -1058,8 +1059,13 @@ def main(argv: list[str] | None = None) -> int:
     triggers = load_triggers(cfg.paths.clauses)
     rules = load_rules(cfg.paths.rules)
     library_ids = {row.statute_id for row in load_statutes(cfg.paths.statutes)}
-    llm: Generator | None = DeepSeekLLM(cfg.llm) if cfg.llm.api_key else None
-    model_note = f"已启用 {cfg.llm.model}" if llm else "未配置（两条模型臂将为空，只有规则臂有数）"
+    llm_cfg, _resolved = resolve_llm_config(cfg, legacy_db=cfg.paths.db)
+    llm: Generator | None = DeepSeekLLM(llm_cfg) if llm_cfg else None
+    model_note = (
+        f"已启用 {llm_cfg.model}"
+        if llm is not None and llm_cfg is not None
+        else "未配置（两条模型臂将为空，只有规则臂有数）"
+    )
     print(f"大模型：{model_note}")
     print(
         f"触发器 {len(triggers)} 条；规则 {len(rules)} 条；法源库 {len(library_ids)} 条；gold {len(golds)} 条"

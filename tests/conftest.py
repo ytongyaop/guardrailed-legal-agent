@@ -3,8 +3,8 @@
 四层保险：
 1. 抽取强制走正则（MLA_EXTRACT_MODE=regex）—— 抽取器此时是 RegexExtractor，模型根本不会被构造出来；
 2. 屏蔽 .streamlit/secrets.toml 里的真实 Key —— 这条桩只服务 embedding：`[embedding].api_key`
-   会把开发者的真实向量检索 Key 带进来。LLM 一侧目前仍由 `mla.config` 读 secrets（阶段三才删），
-   所以现在它同时挡住 LLM 的 secrets Key；阶段三之后这条桩就只防 embedding 真 Key；
+   会把开发者的真实向量检索 Key 带进来。LLM 一侧已不读 secrets（阶段三起由
+   `services.credentials` 统一解析），这里保留它就是为了只防 embedding 真 Key；
 3. 运行期目录全部指向临时目录（MLA_HOME / MLA_DB / MLA_INDEX_DIR）—— 命令行会从 settings
    表读界面保存的 Key，本机库里有真实 Key；不隔离的话 check 相关用例会真的请求 DeepSeek。
    MLA_HOME 故意**不预先创建**，用来验证「只读解析不创建目录」；再把 cwd 切到同一个空目录，

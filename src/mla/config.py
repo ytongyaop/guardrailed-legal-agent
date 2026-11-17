@@ -1,7 +1,14 @@
 """配置：可调参数集中处。用 `load_config()` 显式加载，便于测试与三档消融各自传参。
 
-密钥只从环境变量读，不写进仓库、不落盘：
+**LLM 的 Key 不在这里合成**（规格 002 第 4、6 章）：本模块只装非秘密参数，
+`LLMConfig.api_key` 保留为显式注入字段，默认必须为空。真正的取值由
+`services.credentials.resolve_llm_config()` 统一提供，优先级为
+`MLA_LLM_API_KEY` > `<MLA_HOME>/auth.json`（阶段三另有最低优先级的旧库只读兜底，
+阶段四删除）。`.streamlit/secrets.toml` 不再参与 LLM Key，只保留 embedding 一侧。
+
+相关环境变量：
     MLA_LLM_PROVIDER / MLA_LLM_MODEL / MLA_LLM_API_KEY / MLA_LLM_BASE_URL
+    MLA_LLM_TIMEOUT（推理超时） / MLA_AUTH_CHECK_TIMEOUT（只用于 GET /models 校验）
 """
 
 from __future__ import annotations
@@ -75,10 +82,12 @@ def _env(env: Mapping[str, str] | None) -> Mapping[str, str]:
 class LLMConfig:
     provider: str = "deepseek"
     model: str = "deepseek-chat"
-    api_key: str = ""
+    api_key: str = ""  # 显式注入字段：由 resolver 填，`load_config()` 只装环境变量值
     base_url: str = "https://api.deepseek.com"
     temperature: float = 0.0
     timeout_s: int = 60
+    # 保存 Key / 测试连接的校验超时（只作用于 `GET /models`），与推理超时互不串用
+    auth_check_timeout_s: int = 10
 
 
 @dataclass(frozen=True)
@@ -170,6 +179,7 @@ def env_flag(name: str, default: str = "") -> bool:
 
 
 def _secrets_section(name: str) -> dict:
+    """读 `secrets.toml` 的某个段；**只服务 embedding**（LLM Key 已不从这里读）。"""
     path = Path(".streamlit/secrets.toml")
     if not path.exists():
         return {}
@@ -181,22 +191,23 @@ def _secrets_section(name: str) -> dict:
     return section if isinstance(section, dict) else {}
 
 
-def _secrets_api_key() -> str:
-    """兼容旧调用：默认 LLM Key。"""
-    return str(_secrets_section("llm").get("api_key", ""))
-
-
 def load_config(env: Mapping[str, str] | None = None) -> Config:
-    """从环境变量加载配置（默认读 os.environ）。"""
+    """从环境变量加载配置（默认读 os.environ）。
+
+    LLM 的 `api_key` 只取 `MLA_LLM_API_KEY`：完整优先级由
+    `services.credentials.resolve_llm_config()` 负责，这里不做任何来源合成。
+    """
     e = _env(env)
     return Config(
         llm=LLMConfig(
             provider=e.get("MLA_LLM_PROVIDER", "deepseek"),
             model=e.get("MLA_LLM_MODEL", "deepseek-chat"),
-            api_key=e.get("MLA_LLM_API_KEY", "") or (_secrets_api_key() if env is None else ""),
+            api_key=e.get("MLA_LLM_API_KEY", ""),
             base_url=e.get("MLA_LLM_BASE_URL", "https://api.deepseek.com"),
             temperature=float(e.get("MLA_LLM_TEMPERATURE", "0")),
             timeout_s=int(e.get("MLA_LLM_TIMEOUT", "60")),
+            # 校验超时单独成参数：只用于 `GET /models`，不得与推理超时混用
+            auth_check_timeout_s=int(e.get("MLA_AUTH_CHECK_TIMEOUT", "10")),
         ),
         embedding=EmbeddingConfig(
             provider=e.get("MLA_EMBED_PROVIDER", "aliyun"),

@@ -12,10 +12,8 @@ from __future__ import annotations
 import argparse
 import json
 import secrets
-import sqlite3
 import string
 import sys
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -28,12 +26,9 @@ from .graph.build import build_graph
 from .graph.nodes import Deps
 from .graph.state import CheckState
 from .services.bootstrap import ensure_runtime_ready
+from .services.credentials import resolve_llm_config
 from .services.retrieval import build_retriever
 from .services.tasks import NO_MODEL_MESSAGE, allow_no_model
-
-# 与界面设置页写入的键名保持一致（见 src/mla/ui/app.py 的 LLM_KEY_SETTING）。
-# 这里不 import app.py：那会连带把 streamlit 拖进命令行入口。
-LLM_KEY_SETTING = "llm_api_key"
 
 
 def _load_facts(path: str | None) -> dict[str, str]:
@@ -57,26 +52,6 @@ def _runtime_db_path(args: argparse.Namespace) -> str | None:
     直接调用命令函数（不带 `main()`）时返回 `None`，`SqliteRepository` 回落到配置默认路径。
     """
     return getattr(args, "runtime_db_path", None)
-
-
-def _sqlite_api_key(db_path: str | None = None) -> str:
-    """从数据库 settings 表读界面设置页保存的 Key（键 llm_api_key）。
-
-    解析顺序在 `cmd_check` 里体现：环境变量 / secrets.toml（`load_config` 已合并）优先，
-    这里只做兜底，让命令行与界面看到同一份配置。
-    `db_path` 由 `main()` 的引导结果传入，保证与仓库实例用的是同一个库。
-    库文件不存在时直接返回空串：读配置不该顺手创建数据库。
-    """
-    from .adapters.persist import SqliteRepository
-
-    db = Path(db_path or load_config().paths.db)
-    if not db.is_file():
-        return ""
-    try:
-        return SqliteRepository(db_path=db_path).get_setting(LLM_KEY_SETTING)
-    except (OSError, sqlite3.Error):
-        # 读配置失败不该让核对主流程崩掉，按未配置处理（与界面读不到 Key 同口径）
-        return ""
 
 
 def _missing_summary(terms: list) -> dict[str, Any]:
@@ -126,16 +101,19 @@ def cmd_check(args: argparse.Namespace) -> int:
     cfg = load_config()
     # 门禁（规格 003 第 8 章「无模型时可看不可新算」）：模型是核对的大脑。
     # 放在读规则 / 建检索器之前，保证被拒时不建库、不落任务、不产生任何记录。
-    # 环境变量 / secrets.toml 为空时，回落到界面设置页写进 settings 表的 Key。
-    api_key = cfg.llm.api_key or _sqlite_api_key(_runtime_db_path(args))
+    # Key 统一由 resolver 解析：环境变量 > auth.json > 阶段三旧库只读兜底（阶段四删除）。
+    # 旧库兜底要读「本次真正在用的库」：bootstrap 复制失败时会回退到 cwd 旧库
+    # （report.db_path），此时 cfg.paths.db 指向尚不存在的新库，读它拿不到旧 Key。
+    runtime_db = _runtime_db_path(args) or cfg.paths.db
+    llm_cfg, _resolved = resolve_llm_config(cfg, legacy_db=runtime_db)
     offline = allow_no_model()
-    if not api_key and not offline:
+    if llm_cfg is None and not offline:
         print(NO_MODEL_MESSAGE, file=sys.stderr)
         print("（离线诊断可用：设置 MLA_ALLOW_NO_LLM=1 后照常输出规则与缺项结果）", file=sys.stderr)
         # 退出码 2：1 已表示"跑完但校验未过"，这里表示"命令根本没跑起来"，
         # 与 argparse 用法错误同属一类（都没产出可用结论）。
         return 2
-    if not api_key:
+    if llm_cfg is None:
         print("离线诊断模式：无模型（MLA_ALLOW_NO_LLM=1），结论只来自规则与缺项检测。", file=sys.stderr)
 
     rules = load_rules(args.rules or cfg.paths.rules)
@@ -153,7 +131,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     deps = Deps(
         rules=rules,
         retriever=build_retriever(cfg),
-        generator=DeepSeekLLM(replace(cfg.llm, api_key=api_key)) if api_key else None,
+        generator=DeepSeekLLM(llm_cfg) if llm_cfg is not None else None,
     )
     final, order = _run(init, deps, args.trace)
 

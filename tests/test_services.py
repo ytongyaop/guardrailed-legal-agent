@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from mla.adapters.persist import SqliteRepository
-from mla.config import LLMConfig, Paths, data_path
+from mla.config import LLMConfig, Paths, data_path, mla_home
 from mla.domain.models import Role, TaskMode, User
-from mla.services.tasks import run_check, run_qa
+from mla.services.tasks import has_model, run_check, run_qa
 
 pytestmark = pytest.mark.no_llm
 
 CONTRACT = Path(data_path("evalsets/sample_contract.txt")).read_text(encoding="utf-8")
 NO_LLM = LLMConfig(api_key="")  # 测试不读 secrets、不联网
+DUMMY_KEY = "sk-dummy-" + "0" * 26
 
 
 def _repo(tmp_path) -> SqliteRepository:
@@ -33,6 +35,30 @@ def _user() -> User:
         role=Role.USER,
         enterprise_id="E1",
     )
+
+
+def test_has_model_follows_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
+    """无参时走 resolver：隔离 HOME 下无 Key → False；写入 auth.json 后 → True。"""
+    assert has_model() is False
+
+    home = mla_home()
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "auth.json").write_text(
+        json.dumps({"deepseek": {"type": "api_key", "key": DUMMY_KEY}}), encoding="utf-8"
+    )
+    assert has_model() is True
+
+
+def test_has_model_sees_environment_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """环境变量优先：不写文件也能判为有模型。"""
+    monkeypatch.setenv("MLA_LLM_API_KEY", DUMMY_KEY)
+    assert has_model() is True
+
+
+def test_has_model_keeps_explicit_argument_behavior() -> None:
+    """显式传入仍按 api_key 判定，不看 resolver（测试与已解析配置走这条）。"""
+    assert has_model(NO_LLM) is False
+    assert has_model(LLMConfig(api_key=DUMMY_KEY)) is True
 
 
 def test_run_check_persists_task_and_log(tmp_path) -> None:

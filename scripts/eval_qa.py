@@ -20,6 +20,7 @@ from mla.adapters.embedding import DashScopeEmbedder  # noqa: E402
 from mla.adapters.llm import DeepSeekLLM  # noqa: E402
 from mla.adapters.rag import Bm25Retriever, DenseRetriever, HybridRetriever  # noqa: E402
 from mla.config import data_path, load_config  # noqa: E402
+from mla.services.credentials import resolve_llm_config  # noqa: E402
 from mla.services.qa_agent import run_qa_agent  # noqa: E402
 
 MODEL_SYSTEM = """你是劳动用工问答助手。只输出 JSON：{"answers":[{"text":"结论","source_ids":["法条ID"]}]}。
@@ -63,9 +64,10 @@ def _model_only(llm: DeepSeekLLM, question: str) -> list[tuple[str, ...]]:
 
 def main() -> None:
     cfg = load_config()
-    if not cfg.llm.api_key:
+    llm_cfg, _resolved = resolve_llm_config(cfg, legacy_db=cfg.paths.db)
+    if llm_cfg is None:
         raise SystemExit("未配置 DeepSeek Key")
-    llm = DeepSeekLLM(cfg.llm)
+    llm = DeepSeekLLM(llm_cfg)
     cases = _load_cases()
     library = {
         json.loads(x)["statute_id"]

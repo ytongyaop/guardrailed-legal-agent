@@ -26,6 +26,7 @@ from ..graph.state import CheckState
 from ..ports.extraction import Extractor
 from ..ports.repository import Repository
 from .clause_review import RetryStats, review_clauses
+from .credentials import resolve_llm_config
 from .retrieval import build_retriever
 
 # 条款审查启用时，这条规则让位给触发器 TR-PROBATION-WAGE-BASE + 模型判定
@@ -55,8 +56,15 @@ def allow_no_model() -> bool:
 
 
 def has_model(llm: LLMConfig | None = None) -> bool:
-    """是否有可用模型：与 `_deps` 同一判定口径（配置里的 api_key 非空才构造生成器）。"""
-    return bool((llm or load_config().llm).api_key)
+    """是否有可用模型：与 `_deps` 同一判定口径（resolver 解析到 Key 才算有模型）。
+
+    不传 `llm` 时走统一 resolver（env > auth.json > 阶段三旧库兜底），不再直接读
+    `load_config().llm.api_key`——那会绕过 resolver 的优先级。
+    """
+    if llm is not None:
+        return bool(llm.api_key)
+    llm_cfg, _resolved = resolve_llm_config()
+    return llm_cfg is not None
 
 
 def model_first_enabled() -> bool:
@@ -91,8 +99,10 @@ def _deps(
 ) -> Deps:
     cfg = load_config()
     policy = cfg.policy if max_ask_rounds is None else replace(cfg.policy, max_ask_rounds=max_ask_rounds)
-    llm_cfg = llm or cfg.llm
-    generator = DeepSeekLLM(llm_cfg) if llm_cfg.api_key else None
+    # 未显式传入就交给统一 resolver（环境变量 > auth.json > 阶段三旧库兜底）；
+    # 显式传入的路径保持原语义：只有 api_key 非空才构造生成器。
+    llm_cfg = llm if llm is not None else resolve_llm_config(legacy_db=cfg.paths.db)[0]
+    generator = DeepSeekLLM(llm_cfg) if llm_cfg is not None and llm_cfg.api_key else None
     extractor: Extractor
     mode = cfg.extraction.mode
     if mode == "regex":

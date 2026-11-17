@@ -121,6 +121,8 @@ def _cli_env(tmp_path: Path, **overrides: str) -> dict[str, str]:
             "MLA_ALLOW_NO_LLM": "",
             "MLA_DB": str(tmp_path / "cli.sqlite3"),
             "MLA_INDEX_DIR": str(tmp_path / "index"),
+            # 用户目录也隔离：否则 resolver 可能读到开发机真实的 auth.json
+            "MLA_HOME": str(tmp_path / "mla-home"),
         }
     )
     env.update(overrides)
