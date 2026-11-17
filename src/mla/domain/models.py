@@ -327,6 +327,10 @@ class CheckTask:
     clause_review: bool = False  # 本次是否真的跑了条款审查（历史详情据此区分「未做」与「未发现」）
     model_first: bool = False  # 本次是否走模型主导路径（items 由共识层产出，verdict 不叠加条款 A/B）
     clause_findings: list[ClauseFinding] = field(default_factory=list)  # 条款审查结论（存在性域）
+    # L4 返工成本（规格 003 第 4.5.5 节）：只供评测与诊断，界面 / 报告不展示
+    clause_retry_calls: int = 0  # 本任务实际多发的模型调用次数（返工轮次之和）
+    clause_retry_items: int = 0  # 进入返工队列的条目数
+    clause_retry_passed: int = 0  # 返工后修正通过的条目数
     undetermined: list[UndeterminedRule] = field(default_factory=list)  # 判不了的规则（缺字段，不混进 items）
     unmet: list[UnmetTerm] = field(default_factory=list)  # 合同未约定的必备约定（旁路，不进 items）
     statutory_na: int = 0  # 因合同未约定、按法定标准适用而不判的规则条数

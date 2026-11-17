@@ -5,12 +5,15 @@
 1. 候选由触发器层产出（`domain.clauses.detect_clauses`），本层**不做召回**；
 2. 每 `batch_size`（默认 5）条候选一次模型调用，批量判定，避免 20 条串行把耗时拖到 100 秒以上；
 3. `_behavior_check` 先做 L3.2 行为校验（规格 003 第 7.2 节）：idx / grade / reason / statute_ids /
-   evidence / quote_statute 的字段形态，任一不过即丢弃该条（不进入下一步），并记 `L3.2 形态校验未过` 诊断；
+   evidence / quote_statute 的字段形态，任一不过即记 `L3.2 形态校验未过` 诊断，并交给 L4 返工；
 4. `_verify` 逐条做程序核验（L3.1）：等级合法 → 证据长度 / 未跨段 / 落在候选所在段落
    （加严：不再退回首次出现）→
    法条在库（含 quote_statute 回声核验）→ 触发器条目引用在候选闭集内；A 级缺 quote_statute 降 B，
    A/B 级缺法条的降为 C（不丢弃），证据与候选片段重叠不足降一级（只降不升），其余硬性不过即丢弃并记诊断；
-5. 模型可在候选之外自提发现（`extra`），**一律降为 C**、标 `source="model_extra"`、条数封顶。
+5. **L4 返工**（规格 003 第 4.5 节，P2-7）：一轮收集完失败清单后，只把**可返工**的失败项随原 payload
+   回喂模型重试（上限 `MLA_CLAUSE_RETRY`，默认 2，0 = 关闭）；仍失败才丢弃。不可返工（证据无法定位 /
+   跨段 / 重叠不足 / 降级类）直接丢弃或按六道降级，不浪费一次调用；
+6. 模型可在候选之外自提发现（`extra`），**一律降为 C**、标 `source="model_extra"`、条数封顶。
 
 消融开关：`verify=False` 时跳过第 4 步（L3.1）的四道校验，等级与法条 ID 原样保留（含库外条号），
 供评测的 `model_raw` 臂度量"没有核验层会输出什么"；本条路径只用于度量，不用于生产展示。
@@ -28,6 +31,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
@@ -94,6 +98,53 @@ KNOWN_FIELDS = frozenset(
     }
 )
 
+# 规格 003 第 4.5 节（P2-7）：L4 返工。上限默认 2（一批最多 1 次原始 + 2 次重试），
+# `MLA_CLAUSE_RETRY=0` 关闭返工（等价 P2-6：校验失败直接丢弃，不发多余调用）。
+RETRY_DEFAULT = 2
+# 返工清单里 `expected` 的通用占位（与具体 check 无关的场合）
+RETRY_EXPECTED_GRADE = "A / B / C 之一"
+
+
+@dataclass
+class RetryStats:
+    """返工成本（规格 003 第 4.5.5 节）：只供评测与诊断，界面 / 报告不展示。
+
+    - `calls`：本任务实际**多发**的模型调用次数（返工轮次之和，不含首轮）；
+    - `items`：进入返工队列的条目数（同一批里同一 idx 只计一次）；
+    - `passed`：返工后修正通过的条目数（首轮失败、返工轮次里过核验）。
+    """
+
+    calls: int = 0
+    items: int = 0
+    passed: int = 0
+
+
+@dataclass(frozen=True)
+class _Failure:
+    """一条**可机械判定**的失败项（返工清单里的一行，规格 4.5.4）。
+
+    `retryable=False` 表示不可返工：返工只会给它第二次编造 / 看错条款的机会，直接丢弃更省一次调用。
+    """
+
+    check: str
+    expected: str
+    actual: str
+    retryable: bool = True
+
+
+def _fail(
+    failures: list[_Failure] | None,
+    check: str,
+    expected: str,
+    actual: str,
+    *,
+    retryable: bool = True,
+) -> None:
+    """记一条结构化失败项；`failures=None`（直接调用 / 无需返工）时什么都不做。"""
+    if failures is not None:
+        failures.append(_Failure(check=check, expected=expected, actual=actual, retryable=retryable))
+
+
 REVIEW_SYSTEM = """你是劳动合同条款风险审查助手。只输出 JSON 对象，不要解释，不要 Markdown。
 
 输入五部分：contract_paragraphs（候选条款及其邻近段落，按段落编号）、candidates（本批待判定的可疑条款）、
@@ -130,6 +181,8 @@ rule_checks 只列 mismatch（合同数值与法条不一致）与 needs_fact（
 
 输出格式：
 {"findings":[{"idx":0,"grade":"A","reason":"...","statute_ids":["LCL-35"],"quote_statute":"...","evidence":"...","need_facts":[]}],"extra":[{"grade":"C","reason":"...","evidence":"...","statute_ids":[],"quote_statute":"","need_facts":[]}]}
+
+若收到返工清单，只修正清单里列出的问题，不要改动其他结论。
 """
 
 
@@ -543,6 +596,7 @@ def _behavior_check(
     batch: Sequence[ClauseCandidate],
     *,
     diagnostics: list[str] | None = None,
+    failures: list[_Failure] | None = None,
 ) -> list[str]:
     """L3.2 行为校验（规格 003 第 7.2 节）：判模型有没有按 L1 的约定把字段交出来。
 
@@ -550,8 +604,8 @@ def _behavior_check(
     "条号在库但越出闭集"归 L3.1 第 4 道，"抄的法条原文不是原文"归 L3.1 第 3 道。两者分工按对象切，
     因此这里既不查库、也不碰合同原文。
 
-    返回失败项列表（空列表 = 通过）。失败项不带前缀，调用方统一加 `L3_2_PREFIX` 并丢弃该条
-    （**不返工**：返工队列是 P2-7）。
+    返回失败项列表（空列表 = 通过）。失败项不带前缀，调用方统一加 `L3_2_PREFIX` 并交给 L4 返工
+    （`failures` 非 None 时同步写一份结构化失败清单，供返工请求使用；判定项本身不变）。
 
     检查项（与 7.2 一一对应）：
 
@@ -564,8 +618,8 @@ def _behavior_check(
     6. `quote_statute` 是字符串；A/B 级必填非空，C 级可空（抄错原文仍归 L3.1 第 3 道）；
     7. 未知字段：不算失败，只在 `diagnostics` 里记一条 `L3.2 形态校验提示`，用于观察模型是否在自造字段。
 
-    第 8 项（"任一检查失败 → 该条不进入 L3.1，直接丢弃并记诊断"）由调用方 `_collect` 执行：
-    本函数只负责把失败项列出来，不碰 `errors`，也不做丢弃——这样判定与副作用分开，便于单测与 P2-7 复用。
+    第 8 项（"任一检查失败 → 该条不进入 L3.1"）由调用方执行：本函数只负责把失败项列出来，
+    不碰 `errors`，也不做丢弃——这样判定与副作用分开，便于单测与 P2-7 复用。
 
     注意 `verify=False`（消融的 `model_raw` 臂）不得调用本函数：该臂要求原样保留模型输出，
     连非法等级都要留着供评测度量。
@@ -576,53 +630,67 @@ def _behavior_check(
     # 1. idx：bool 是 int 的子类，JSON 的 true 会通过 isinstance(idx, int)，必须显式排除。
     if "idx" not in row:
         problems.append("缺 idx（每条结论必须指向本批候选下标）")
+        _fail(failures, "idx_out_of_range", f"本批 0–{upper} 的整数下标", "缺 idx")
     else:
         idx = row.get("idx")
         if isinstance(idx, bool) or not isinstance(idx, int):
             problems.append(f"idx 越界（{idx!r} 不是整数，本批 0–{upper}）")
+            _fail(failures, "idx_out_of_range", f"本批 0–{upper} 的整数下标", f"{idx!r}")
         elif not 0 <= idx < len(batch):
             problems.append(f"idx 越界（{idx} 不在本批 0–{upper} 内）")
+            _fail(failures, "idx_out_of_range", f"本批 0–{upper} 的整数下标", str(idx))
 
     # 2. grade：大小写敏感（`a` / `A ` 都算越域），空值算缺失。
     grade = row.get("grade")
     if not isinstance(grade, str) or not grade.strip():
         problems.append("缺 grade（等级不合法：只接受 A/B/C，大小写敏感）")
+        _fail(failures, "grade_enum", RETRY_EXPECTED_GRADE, "缺 grade")
     elif grade not in GRADES:
         problems.append(f"grade={grade!r} 等级不合法（只接受 A/B/C，大小写敏感）")
+        _fail(failures, "grade_enum", RETRY_EXPECTED_GRADE, repr(grade))
 
     # 3. reason：非空 + 长度上限（只判形态；"理由写得够不够好"不进 L3）。
     reason = row.get("reason")
     if not isinstance(reason, str) or not reason.strip():
         problems.append("缺 reason（空值）")
+        _fail(failures, "field_missing", "非空的 reason", "空值")
     elif len(reason.strip()) > MAX_REASON:
         problems.append(f"reason 超长（{len(reason.strip())} 字 > {MAX_REASON}）")
+        _fail(failures, "length", f"reason ≤ {MAX_REASON} 字", f"{len(reason.strip())} 字")
 
     # 4. statute_ids：类型 → 元素 → 去重后是否非空（A/B 才要求非空）。
     raw_ids = row.get("statute_ids")
     if not isinstance(raw_ids, list):
         problems.append("statute_ids 不是字符串列表")
+        _fail(failures, "format", "条号字符串列表", type(raw_ids).__name__)
     else:
         blank = [item for item in raw_ids if not isinstance(item, str) or not item.strip()]
         if blank:
             problems.append(f"statute_ids 含 {len(blank)} 个非字符串或空元素")
+            _fail(failures, "format", "非空条号字符串", f"{len(blank)} 个空元素")
         else:
             deduped = list(dict.fromkeys(item.strip() for item in raw_ids))
             if not deduped and grade in ("A", "B"):
                 problems.append("缺 statute_ids（A/B 级必须有法条依据）")
+                _fail(failures, "field_missing", "候选闭集内的条号", "空列表")
 
     # 5. evidence：只判"是非字符串、是否空"；长度与可定位归 L3.1 第 2 道。
     evidence = row.get("evidence")
     if not isinstance(evidence, str):
         problems.append("evidence 不是字符串")
+        _fail(failures, "format", "合同原文的连续片段", type(evidence).__name__)
     elif not evidence.strip():
         problems.append("缺 evidence（空值）")
+        _fail(failures, "field_missing", "合同原文的连续片段", "空值")
 
     # 6. quote_statute：A/B 必填非空，C 可空；抄错真伪归 L3.1 第 3 道。
     quote = row.get("quote_statute", "")
     if not isinstance(quote, str):
         problems.append("quote_statute 不是字符串")
+        _fail(failures, "quote_statute_mismatch", "所引法条原文的连续子串", type(quote).__name__)
     elif not quote.strip() and grade in ("A", "B"):
         problems.append("缺 quote_statute（A/B 级必填）")
+        _fail(failures, "quote_statute_mismatch", "所引法条原文的连续子串", "空值")
 
     # 7. 未知字段：只记提示，不算失败（不丢弃该条）。
     if diagnostics is not None:
@@ -643,6 +711,7 @@ def _verify(
     *,
     errors: list[str] | None = None,
     verify: bool = True,
+    failure: list[_Failure] | None = None,
 ) -> ClauseFinding | None:
     """单条程序核验：任一硬性不过返回 None（丢弃）；软性问题降级或只记诊断。
 
@@ -652,6 +721,10 @@ def _verify(
     quote_statute 不是所引法条原文的连续子串（第 3 道回声核验）→ 清空该引用，A 级随之降 B；
     模型证据与候选片段重叠不足 → 降一级（只降不升），span 仍取候选片段。
     `verify=False` 直接走 `_unverified`（消融的 model_raw 臂），不做任何校验。
+
+    `failure` 非 None 时同步写结构化失败清单（规格 4.5.2 的 `check` / `expected` / `actual`）：
+    **判定逻辑不变**，只是让 L4 返工能分辨"可返工"（条号 / 长度 / 格式 / 抄错原文）与
+    "不可返工"（证据定位不到 / 跨段 / 看错段落——返工只会给它第二次编造机会）。
     """
     if not verify:
         return _unverified(finding_raw, candidate, contract_text)
@@ -661,6 +734,7 @@ def _verify(
     raw_grade = str(finding_raw.get("grade", "") or "").strip().upper()
     if raw_grade not in GRADES:
         diagnostics.append(f"{tag}：等级不合法（{raw_grade or '空'}），已丢弃")
+        _fail(failure, "grade_enum", RETRY_EXPECTED_GRADE, raw_grade or "空")
         return None
 
     evidence = str(finding_raw.get("evidence", "") or "").strip()
@@ -671,10 +745,17 @@ def _verify(
             f"{tag}：第 2 道核验：证据长度越界（归一化后 {len(norm_evidence)} 字，"
             f"要求 {MIN_EVIDENCE_CHARS}–{MAX_EVIDENCE_CHARS} 字），已丢弃"
         )
+        _fail(
+            failure,
+            "length",
+            f"evidence {MIN_EVIDENCE_CHARS}–{MAX_EVIDENCE_CHARS} 字",
+            f"{len(norm_evidence)} 字",
+        )
         return None
     # 第 2 道（加严 2/3）：跨段拼接。证据体里出现换行就是两段拼起来的，不是连续抄写。
     if "\n" in evidence or "\r" in evidence:
         diagnostics.append(f"{tag}：第 2 道核验：证据跨段拼接（含换行），已丢弃")
+        _fail(failure, "evidence_cross_paragraph", "逐字连续抄写，不跨段", "含换行", retryable=False)
         return None
     located = _locate(evidence, contract_text, candidate.paragraph if candidate is not None else None)
     if located is None:
@@ -684,8 +765,16 @@ def _verify(
                 f"{tag}：第 2 道核验：证据只在候选第 {candidate.paragraph} 段之外的段落出现"
                 f"（不再退回首次出现），已丢弃"
             )
+            _fail(
+                failure,
+                "evidence_out_of_paragraph",
+                f"落在候选第 {candidate.paragraph} 段",
+                "只在别的段落出现",
+                retryable=False,
+            )
             return None
         diagnostics.append(f"{tag}：证据无法在合同原文定位，已丢弃")
+        _fail(failure, "evidence_not_found", "合同原文的连续片段", "原文中不存在", retryable=False)
         return None
     if candidate is not None:
         # 第 2 道（加严 3/3）：必须落在候选所在段落内。先核起点（起点在别段＝模型看错了条款），
@@ -694,32 +783,49 @@ def _verify(
             diagnostics.append(
                 f"{tag}：第 2 道核验：证据不在候选所在段落（候选在第 {candidate.paragraph} 段），已丢弃"
             )
+            _fail(
+                failure,
+                "evidence_out_of_paragraph",
+                f"落在候选第 {candidate.paragraph} 段",
+                "落在别段",
+                retryable=False,
+            )
             return None
         if _paragraph_of(contract_text, located[1] - 1) != candidate.paragraph:
             diagnostics.append(
                 f"{tag}：第 2 道核验：证据跨段拼接（归一化后跨过第 {candidate.paragraph} 段边界），已丢弃"
             )
+            _fail(failure, "evidence_cross_paragraph", "逐字连续抄写，不跨段", "跨过段边界", retryable=False)
             return None
 
     raw_ids = finding_raw.get("statute_ids") or []
     if not isinstance(raw_ids, list):
         diagnostics.append(f"{tag}：statute_ids 不是列表，已丢弃")
+        _fail(failure, "format", "条号字符串列表", type(raw_ids).__name__)
         return None
     ids = tuple(dict.fromkeys(str(x).strip() for x in raw_ids if str(x).strip()))
     unknown = [sid for sid in ids if sid not in library]
     if unknown:
         diagnostics.append(f"{tag}：引用了法源库中不存在的条号 {' / '.join(unknown)}，已丢弃")
+        _fail(failure, "citation_in_library", "法源库内的条号", " / ".join(unknown))
         return None
     if candidate is not None:
         allowed = set(candidate.candidate_statute_ids)
         outside = [sid for sid in ids if sid not in allowed]
         if outside:
             diagnostics.append(f"{tag}：引用越出候选闭集 {' / '.join(outside)}，已丢弃")
+            _fail(
+                failure,
+                "citation_closed_set",
+                f"候选闭集 {' / '.join(candidate.candidate_statute_ids)}",
+                " / ".join(outside),
+            )
             return None
 
     # 第 3 道（加严）：quote_statute 必须是所引法条 text 归一化后的连续子串。
     # 抄错 / 仿写只清空引用、不丢整条——结论的证据已在第 2 道核验过在原文可定位，
-    # 硬性丢弃留给"证据定位不到"这类不可修正的失败。
+    # 硬性丢弃留给"证据定位不到"这类不可修正的失败。返工队列会先试着让它重抄一次：
+    # `failure` 里记一条可返工项，返工到上限仍不对就按本条路径降级保留（不丢结论）。
     quote = str(finding_raw.get("quote_statute", "") or "").strip()
     if quote and not ids:
         diagnostics.append(f"{tag}：第 3 道核验：quote_statute 无对应法条（statute_ids 为空），已清空该引用")
@@ -727,6 +833,12 @@ def _verify(
     elif quote and not any(_quote_in_statute(quote, library[sid].text or "") for sid in ids):
         diagnostics.append(
             f"{tag}：第 3 道核验：quote_statute 不是所引法条（{' / '.join(ids)}）原文的连续子串，已清空该引用"
+        )
+        _fail(
+            failure,
+            "quote_statute_mismatch",
+            f"所引法条（{' / '.join(ids)}）原文的连续子串",
+            quote[:40],
         )
         quote = ""
 
@@ -794,56 +906,118 @@ def _verify(
     )
 
 
-def _collect(
+@dataclass
+class _Pending:
+    """一条等待返工的失败：上一轮原始行 + 失败清单 + 可回退结论（软性失败才有）。"""
+
+    idx: int | None
+    raw: dict[str, Any]
+    failures: list[_Failure]
+    fallback: ClauseFinding | None = None
+
+
+@dataclass
+class _RowOutcome:
+    """一轮里一条模型输出的判定结果（不提交、不写 `seen`：返工可能替换它）。
+
+    `key` 是稳定标识：idx 合法时用 idx，否则用 `("row", 序号)`——idx 本身就是失败项时要能对上人。
+    """
+
+    key: object
+    idx: int | None
+    raw: dict[str, Any]
+    finding: ClauseFinding | None
+    failures: list[_Failure]
+
+    @property
+    def fatal(self) -> bool:
+        """含不可返工失败：返工也没用，直接丢弃（4.5.3）。"""
+        return any(not f.retryable for f in self.failures)
+
+
+def _validated_idx(idx: object, batch: Sequence[ClauseCandidate]) -> int | None:
+    """idx 合法（整数、非 bool、落在本批范围）时返回它，否则 None。"""
+    if isinstance(idx, bool) or not isinstance(idx, int):
+        return None
+    return idx if 0 <= idx < len(batch) else None
+
+
+def _evaluate_row(
+    row: dict[str, Any],
+    ordinal: int,
+    batch: Sequence[ClauseCandidate],
+    contract_text: str,
+    library: Mapping[str, StatuteEntry],
+    diagnostics: list[str],
+    batch_no: int,
+    *,
+    verify: bool,
+) -> _RowOutcome:
+    """一轮里判一条输出：L3.2（形态）→ L3.1（值域）。只返回结果，不提交、不写 `seen`。
+
+    L3.2 只在 `verify=True`（生产臂）执行：`verify=False` 是消融的 `model_raw` 臂，
+    要求原样保留模型输出（含非法等级、库外条号）供评测度量，不能事先按形态丢掉，也不返工。
+    """
+    failure: list[_Failure] = []
+    if verify:
+        # L3.2 行为校验（规格 003 第 7.2 节）：形态不过**不进入 L3.1**——先形态后值域，
+        # 缺 statute_ids 时查闭集没有意义。失败项进 L4 返工队列（P2-7），不可返工的照旧直接丢。
+        problems = _behavior_check(row, batch, diagnostics=diagnostics, failures=failure)
+        if problems:
+            for problem in problems:
+                diagnostics.append(f"{L3_2_PREFIX}第 {batch_no} 批 {problem}")
+            idx = _validated_idx(row.get("idx"), batch)
+            return _RowOutcome(
+                key=idx if idx is not None else ("row", ordinal),
+                idx=idx,
+                raw=row,
+                finding=None,
+                failures=failure,
+            )
+        idx = row["idx"]
+    else:
+        # bool 是 int 的子类：JSON 里的 true 会通过 isinstance(idx, int)，被当成 idx=1 命中候选，
+        # 必须显式排除，否则模型给错类型时会静默落到别的候选上。
+        idx = _validated_idx(row.get("idx"), batch)
+        if idx is None:
+            diagnostics.append(f"第 {batch_no} 批：idx 越界（{row.get('idx')}），已丢弃")
+            return _RowOutcome(key=("row", ordinal), idx=None, raw=row, finding=None, failures=[])
+
+    finding = _verify(
+        row,
+        batch[idx],
+        contract_text,
+        library,
+        errors=diagnostics,
+        verify=verify,
+        failure=failure,
+    )
+    return _RowOutcome(key=idx, idx=idx, raw=row, finding=finding, failures=failure)
+
+
+def _evaluate_batch(
     raw: dict[str, Any],
     batch: Sequence[ClauseCandidate],
     contract_text: str,
     library: Mapping[str, StatuteEntry],
     diagnostics: list[str],
-    seen: set[tuple[int, str]],
     batch_no: int,
     *,
-    verify: bool = True,
-) -> tuple[list[ClauseFinding], list[dict[str, Any]]]:
-    """收一批模型输出：先过 L3.2 形态校验，候选结论再逐条走 L3.1 核验；自提结论只收集原始行。
-
-    自提条目的条数封顶在调用方做（整份合同 `max_extra`）。
-
-    L3.2 只在 `verify=True`（生产臂）执行：`verify=False` 是消融的 `model_raw` 臂，
-    要求原样保留模型输出（含非法等级、库外条号）供评测度量，不能事先按形态丢掉。
-    """
-    found: list[ClauseFinding] = []
+    verify: bool,
+) -> tuple[list[_RowOutcome], list[dict[str, Any]]]:
+    """判一轮模型输出：返回逐行结果 + 自提原始行（封顶与去重仍在调用方做）。"""
+    outcomes: list[_RowOutcome] = []
     rows = raw.get("findings")
     if isinstance(rows, list):
-        for row in rows:
+        for ordinal, row in enumerate(rows):
             if not isinstance(row, dict):
                 diagnostics.append(f"第 {batch_no} 批：有 1 条结论不是对象，已丢弃")
                 continue
-            if verify:
-                # L3.2 行为校验（规格 003 第 7.2 节）：形态不过即丢弃，**不进入 L3.1**——
-                # 先形态后值域，缺 statute_ids 时查闭集没有意义。失败不返工（返工是 P2-7）。
-                problems = _behavior_check(row, batch, diagnostics=diagnostics)
-                if problems:
-                    for problem in problems:
-                        diagnostics.append(f"{L3_2_PREFIX}第 {batch_no} 批 {problem}")
-                    continue
-                idx = row["idx"]
-            else:
-                idx = row.get("idx")
-                # bool 是 int 的子类：JSON 里的 true 会通过 isinstance(idx, int)，被当成 idx=1 命中候选，
-                # 必须显式排除，否则模型给错类型时会静默落到别的候选上。
-                if isinstance(idx, bool) or not isinstance(idx, int) or not 0 <= idx < len(batch):
-                    diagnostics.append(f"第 {batch_no} 批：idx 越界（{idx}），已丢弃")
-                    continue
-            finding = _verify(row, batch[idx], contract_text, library, errors=diagnostics, verify=verify)
-            if finding is None:
-                continue
-            key = (finding.paragraph, finding.trigger_id)
-            if key in seen:
-                diagnostics.append(f"{finding.trigger_id}：同一段落重复结论，只保留第一条")
-                continue
-            seen.add(key)
-            found.append(finding)
+            outcomes.append(
+                _evaluate_row(
+                    row, ordinal, batch, contract_text, library, diagnostics, batch_no, verify=verify
+                )
+            )
     elif rows is not None:
         diagnostics.append(f"第 {batch_no} 批：findings 不是列表，已忽略")
     else:
@@ -853,7 +1027,200 @@ def _collect(
     extra_rows = [row for row in extras if isinstance(row, dict)] if isinstance(extras, list) else []
     if isinstance(extras, list) and len(extra_rows) != len(extras):
         diagnostics.append(f"第 {batch_no} 批：有 {len(extras) - len(extra_rows)} 条自提结论不是对象，已丢弃")
-    return found, extra_rows
+    return outcomes, extra_rows
+
+
+def _pending_tag(item: _Pending, batch: Sequence[ClauseCandidate]) -> str:
+    """诊断里的条目标识：有合法 idx 时用触发器名（与 L3.1 句式一致），否则用 idx / 行号。"""
+    if item.idx is not None and 0 <= item.idx < len(batch):
+        return batch[item.idx].trigger_id
+    return f"idx={item.idx}"
+
+
+def _retry_payload(
+    payload_json: str,
+    previous: Mapping[str, Any],
+    pending: Mapping[object, _Pending],
+    round_no: int,
+) -> str:
+    """返工请求：原批 payload + 上一轮输出 + 失败清单（规格 4.5.4）。
+
+    重发的是**整批 payload**（模型需要上下文），失败清单只列可返工项——不可返工项不进清单，
+    返工也不会让它变对。messages 形如：payload → assistant 上一轮输出 → user 返工清单。
+    """
+    failed: list[dict[str, Any]] = []
+    original: list[dict[str, Any]] = []
+    for item in pending.values():
+        original.append(item.raw)
+        for failure in item.failures:
+            if not failure.retryable:
+                continue
+            failed.append(
+                {
+                    "idx": item.idx,
+                    "check": failure.check,
+                    "expected": failure.expected,
+                    "actual": failure.actual,
+                    "fixable": True,
+                }
+            )
+    envelope = {"round": round_no, "failed": failed, "original": original}
+    return (
+        f"{payload_json}\n\n"
+        "assistant（上一轮输出）：\n"
+        f"{json.dumps(dict(previous), ensure_ascii=False)}\n\n"
+        "user（返工清单）：\n"
+        f"{json.dumps(envelope, ensure_ascii=False)}"
+    )
+
+
+def _review_batch(
+    llm: Generator,
+    system: str,
+    payload_json: str,
+    batch: Sequence[ClauseCandidate],
+    contract_text: str,
+    library: Mapping[str, StatuteEntry],
+    diagnostics: list[str],
+    seen: set[tuple[int, str]],
+    batch_no: int,
+    *,
+    verify: bool,
+    limit: int,
+    stats: RetryStats,
+) -> tuple[list[ClauseFinding], list[dict[str, Any]]]:
+    """一批的完整流水：首轮判定 → 只对可返工失败回喂（≤ `limit` 次）→ 提交结论。
+
+    失败清单只含可返工项；整批报废（调用失败 / 输出不是 JSON 对象）不返工——那不是模型"犯错"，
+    重问同一份输入只会再失败一次。返工输出里**只认返工清单上的条目**：其它条目一律忽略
+    （返工不得新增结论、不得改动未被点名的结论）。
+    """
+    try:
+        raw = llm.generate(system, payload_json, {"type": "object"})
+    except Exception as exc:  # noqa: BLE001 - 模型失败统一降级，不阻塞主流程
+        diagnostics.append(f"第 {batch_no} 批条款判定调用失败：{exc}")
+        return [], []
+    if not isinstance(raw, dict):
+        diagnostics.append(f"第 {batch_no} 批：模型输出不是 JSON 对象，已忽略")
+        return [], []
+
+    outcomes, extras = _evaluate_batch(
+        raw, batch, contract_text, library, diagnostics, batch_no, verify=verify
+    )
+
+    order: list[object] = []
+    resolved: dict[object, ClauseFinding] = {}
+    pending: dict[object, _Pending] = {}
+    for outcome in outcomes:
+        order.append(outcome.key)
+        if outcome.finding is not None and not outcome.failures:
+            resolved[outcome.key] = outcome.finding
+        elif outcome.finding is None and outcome.fatal:
+            continue  # 不可返工：诊断已记，直接丢弃
+        else:
+            pending[outcome.key] = _Pending(
+                idx=outcome.idx,
+                raw=outcome.raw,
+                failures=list(outcome.failures),
+                fallback=outcome.finding,
+            )
+
+    entered = len(pending) if limit > 0 else 0
+    stats.items += entered
+    round_no = 0
+    previous: Mapping[str, Any] = raw
+    while pending and round_no < limit:
+        round_no += 1
+        stats.calls += 1
+        failed_now = len(pending)
+        message = _retry_payload(payload_json, previous, pending, round_no)
+        try:
+            retried = llm.generate(system, message, {"type": "object"})
+        except Exception as exc:  # noqa: BLE001 - 返工失败按"没修好"处理，结论照常提交
+            diagnostics.append(f"第 {batch_no} 批第 {round_no} 次返工调用失败：{exc}")
+            break
+        if not isinstance(retried, dict):
+            diagnostics.append(f"第 {batch_no} 批第 {round_no} 次返工：模型输出不是 JSON 对象，已忽略")
+            break
+        # 返工轮次的诊断另存：多轮会把同一句失败文案重复出来，只补首轮没有的那些。
+        round_diag: list[str] = []
+        retried_outcomes, _ = _evaluate_batch(
+            retried, batch, contract_text, library, round_diag, batch_no, verify=verify
+        )
+        for message_text in round_diag:
+            if message_text not in diagnostics:
+                diagnostics.append(message_text)
+
+        fixed = 0
+        fixed_checks: set[str] = set()
+        untouched = list(retried_outcomes)
+        for key in list(pending):
+            target = next((o for o in untouched if o.key == key), None)
+            if target is None:
+                continue  # 模型没交回这条：保持待返工状态（下一轮清单里还会出现）
+            untouched.remove(target)
+            if target.finding is not None and not target.failures:
+                resolved[key] = target.finding
+                fixed_checks.update(f.check for f in pending[key].failures)
+                del pending[key]
+                fixed += 1
+            elif target.fatal:
+                # 返工后变成不可返工失败（例如开始编造原文）→ 丢弃，不再浪费调用
+                del pending[key]
+            else:
+                pending[key] = _Pending(
+                    idx=target.idx,
+                    raw=target.raw,
+                    failures=list(target.failures),
+                    fallback=target.finding or pending[key].fallback,
+                )
+        stats.passed += fixed
+        # 成功诊断带修好的 check 列表（规格 4.5.5）：事后能看出"哪类失败靠返工救了回来"
+        passed_checks = f"（check={' / '.join(sorted(fixed_checks))}）" if fixed_checks else ""
+        diagnostics.append(
+            f"第 {batch_no} 批返工第 {round_no} 次：自 {failed_now} 条失败中修正 {fixed} 条{passed_checks}"
+        )
+        previous = retried
+
+    if limit == 0:
+        # 关闭返工（`MLA_CLAUSE_RETRY=0`）：软性失败按六道的降级结果提交，等价 P2-6 行为。
+        for key, item in pending.items():
+            if item.fallback is not None:
+                resolved[key] = item.fallback
+    else:
+        for key, item in pending.items():
+            where = f"第 {batch_no} 批 {_pending_tag(item, batch)}"
+            if item.fallback is not None:
+                # 软性失败（quote 抄错）返工到上限仍不对：按第 3 道降级保留，不丢结论（4.5.5 降级例外）
+                resolved[key] = item.fallback
+                checks = " / ".join(sorted({f.check for f in item.failures}))
+                diagnostics.append(f"{where}：返工 {round_no} 次仍失败（check={checks}），按第 3 道降级保留")
+                continue
+            for failure in item.failures:
+                diagnostics.append(
+                    f"{where}：返工 {round_no} 次仍失败（check={failure.check}，"
+                    f"expected={failure.expected}，actual={failure.actual}），已丢弃"
+                )
+
+    found: list[ClauseFinding] = []
+    for key in order:
+        finding = resolved.get(key)
+        if finding is None:
+            continue
+        dedupe_key = (finding.paragraph, finding.trigger_id)
+        if dedupe_key in seen:
+            diagnostics.append(f"{finding.trigger_id}：同一段落重复结论，只保留第一条")
+            continue
+        seen.add(dedupe_key)
+        found.append(finding)
+    return found, extras
+
+
+def _retry_limit(retry: int | None) -> int:
+    """返工上限：显式参数优先，否则读 `MLA_CLAUSE_RETRY`（默认 2，0 = 关闭返工）。"""
+    if retry is not None:
+        return max(0, int(retry))
+    return max(0, int(load_config().clause_review.retry))
 
 
 def review_clauses(
@@ -868,6 +1235,8 @@ def review_clauses(
     verify: bool = True,
     rule_checks: Sequence[RuleCheck] | None = None,
     facts: Mapping[str, Any] | None = None,
+    retry: int | None = None,
+    retry_stats: RetryStats | None = None,
 ) -> tuple[ClauseFinding, ...]:
     """批量判定候选条款并做程序核验，返回按（段落、等级、触发器）稳定排序的结论。
 
@@ -882,8 +1251,13 @@ def review_clauses(
     `verify=False` 是**消融对照臂**（`model_raw`）：等级与法条 ID 原样保留，**不做自提封顶 C**
     （自提条目也照模型给的等级输出，生产臂一律封顶 C）；诊断里只剩"自提结论重叠去重"
     这类提示，不再出现核验丢弃；条数封顶与去重仍保留（它们只是输出规模约束，不是核验）。
+
+    `retry` 是 L4 返工上限（规格 003 第 4.5 节，P2-7）：`None` 读 `MLA_CLAUSE_RETRY`（默认 2），
+    `0` 关闭返工（等价 P2-6：校验失败直接丢弃，不发多余调用）。`retry_stats` 非 None 时回填成本三项
+    （多发的调用次数 / 进入返工的条目数 / 修好的条目数），供任务落库与评测使用，界面不展示。
     """
     diagnostics = errors if errors is not None else []
+    stats = retry_stats if retry_stats is not None else RetryStats()
     if not candidates:
         return ()
     if llm is None or not bool(getattr(llm, "available", True)):
@@ -899,6 +1273,8 @@ def review_clauses(
     seen: set[tuple[int, str]] = set()
     out: list[ClauseFinding] = []
     extra_rows: list[dict[str, Any]] = []
+    # 消融臂（verify=False）不返工：它要度量"没有核验层会输出什么"，重问一遍只会污染对照。
+    retry_limit = _retry_limit(retry) if verify else 0
     for batch_no, batch in enumerate(batches, start=1):
         # rule_checks / fact_sheet 按**本批候选**算（并集 / 字段优先级都随批变化），不能预先算一次。
         payload = json.dumps(
@@ -913,15 +1289,20 @@ def review_clauses(
             ),
             ensure_ascii=False,
         )
-        try:
-            raw = llm.generate(system, payload, {"type": "object"})
-        except Exception as exc:  # noqa: BLE001 - 模型失败统一降级，不阻塞主流程
-            diagnostics.append(f"第 {batch_no} 批条款判定调用失败：{exc}")
-            continue
-        if not isinstance(raw, dict):
-            diagnostics.append(f"第 {batch_no} 批：模型输出不是 JSON 对象，已忽略")
-            continue
-        found, rows = _collect(raw, batch, contract_text, library, diagnostics, seen, batch_no, verify=verify)
+        found, rows = _review_batch(
+            llm,
+            system,
+            payload,
+            batch,
+            contract_text,
+            library,
+            diagnostics,
+            seen,
+            batch_no,
+            verify=verify,
+            limit=retry_limit,
+            stats=stats,
+        )
         out.extend(found)
         extra_rows.extend(rows)
 

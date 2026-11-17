@@ -83,6 +83,8 @@ class ClauseReviewConfig:
     enabled: bool = True
     batch_size: int = 5  # 每次模型调用判定的候选条数（4 至 5 条，减少串行耗时）
     max_extra: int = 3  # 模型自提发现的封顶条数（一律降为 C 级）
+    # L4 返工上限（规格 003 第 4.5 节）：一批最多 1 次原始 + retry 次重试；0 = 关闭返工
+    retry: int = 2
 
 
 @dataclass(frozen=True)
@@ -177,6 +179,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
             enabled=_truthy(e.get("MLA_CLAUSE_REVIEW", "on")),
             batch_size=int(e.get("MLA_CLAUSE_REVIEW_BATCH", "5")),
             max_extra=int(e.get("MLA_CLAUSE_REVIEW_MAX_EXTRA", "3")),
+            retry=int(e.get("MLA_CLAUSE_RETRY", "2")),
         ),
         missing_terms=MissingTermsConfig(
             min_chars=int(e.get("MLA_MISSING_MIN_CHARS", "400")),

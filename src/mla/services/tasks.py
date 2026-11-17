@@ -25,7 +25,7 @@ from ..graph.nodes import Deps, consensus
 from ..graph.state import CheckState
 from ..ports.extraction import Extractor
 from ..ports.repository import Repository
-from .clause_review import review_clauses
+from .clause_review import RetryStats, review_clauses
 from .retrieval import build_retriever
 
 # 条款审查启用时，这条规则让位给触发器 TR-PROBATION-WAGE-BASE + 模型判定
@@ -214,7 +214,7 @@ def _review_clauses(
     *,
     rule_checks: Sequence[RuleCheck] | None = None,
     facts: Mapping[str, Any] | None = None,
-) -> tuple[list[ClauseFinding], list[str], bool]:
+) -> tuple[list[ClauseFinding], list[str], bool, RetryStats]:
     """条款审查（存在性域）：仅启用且有模型时执行；失败不阻塞主流程。
 
     `clause_review` 为 None 时按配置（`MLA_CLAUSE_REVIEW`），否则以调用方开关为准。
@@ -222,23 +222,25 @@ def _review_clauses(
     未配置模型 / 触发器读不出 / 没有合同正文都算没跑（False），命中不了候选算跑过（True）。
     `rule_checks` / `facts` 来自图跑完后的最终状态，随 payload 下发给模型作判断参考
     （规格 003 第 13 章 P2-3）；不传时 payload 是空列表 / 空对象，行为与改造前一致。
+    第四个返回值是 L4 返工的用量（规格 003 第 4.5.5 节）：只供任务落库与评测，界面不展示。
     """
     cfg = load_config()
     if not (cfg.clause_review.enabled if clause_review is None else clause_review):
-        return [], [], False
+        return [], [], False, RetryStats()
     contract_text = str(init.get("contract_text") or "")
     if not contract_text.strip():
-        return [], [], False
+        return [], [], False, RetryStats()
     if deps.generator is None:
-        return [], ["条款审查未启用：未配置大模型"], False
+        return [], ["条款审查未启用：未配置大模型"], False, RetryStats()
     try:
         triggers = load_triggers(cfg.paths.clauses)
     except (OSError, ValueError) as exc:
-        return [], [f"条款审查未启用：触发器表读取失败（{exc}）"], False
+        return [], [f"条款审查未启用：触发器表读取失败（{exc}）"], False, RetryStats()
     candidates = detect_clauses(contract_text, triggers)
     if not candidates:
-        return [], ["条款审查：未命中可疑条款候选"], True
+        return [], ["条款审查：未命中可疑条款候选"], True, RetryStats()
     errors: list[str] = []
+    retry_stats = RetryStats()
     findings = review_clauses(
         deps.generator,
         candidates,
@@ -248,8 +250,9 @@ def _review_clauses(
         errors=errors,
         rule_checks=rule_checks,
         facts=facts,
+        retry_stats=retry_stats,
     )
-    return list(findings), errors, True
+    return list(findings), errors, True, retry_stats
 
 
 def _dedupe_demoted_rule(items: list[CheckItem], findings: list[ClauseFinding]) -> list[CheckItem]:
@@ -280,7 +283,7 @@ def _run(
     final = build_graph(deps).invoke(init)
     # 条款审查要看到图跑完后的最终校验信号与事实梳理：只在此时它们才是完整的
     # （`extract` 已把正则/模型抽取的事实并进 `facts`，`rule_check` 已产出 `rule_checks`）。
-    clause_findings, clause_errors, review_ran = _review_clauses(
+    clause_findings, clause_errors, review_ran, retry_stats = _review_clauses(
         init,
         deps,
         clause_review,
@@ -337,6 +340,9 @@ def _run(
         clause_review=review_ran,
         model_first=model_first,
         clause_findings=clause_findings,
+        clause_retry_calls=retry_stats.calls,
+        clause_retry_items=retry_stats.items,
+        clause_retry_passed=retry_stats.passed,
         undetermined=list(final.get("undetermined") or []),
         unmet=list(final.get("unmet") or []),
         statutory_na=int(final.get("statutory_na") or 0),

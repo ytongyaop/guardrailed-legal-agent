@@ -66,7 +66,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   undetermined TEXT, rule_coverage TEXT, missing_terms TEXT, ask_items TEXT,
   unmet TEXT, statutory_na INTEGER DEFAULT 0,
   rule_checks TEXT,
-  clause_review INTEGER DEFAULT 0, model TEXT, model_first INTEGER DEFAULT 0
+  clause_review INTEGER DEFAULT 0, model TEXT, model_first INTEGER DEFAULT 0,
+  clause_retry_calls INTEGER DEFAULT 0, clause_retry_items INTEGER DEFAULT 0,
+  clause_retry_passed INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS logs (
   log_id TEXT PRIMARY KEY, task_id TEXT, user_id TEXT, action TEXT, detail TEXT, created_at TEXT
@@ -102,6 +104,9 @@ TASK_MIGRATIONS: dict[str, str] = {
     "model": "TEXT",
     "model_first": "INTEGER DEFAULT 0",
     "rule_checks": "TEXT",
+    "clause_retry_calls": "INTEGER DEFAULT 0",
+    "clause_retry_items": "INTEGER DEFAULT 0",
+    "clause_retry_passed": "INTEGER DEFAULT 0",
 }
 
 # 旧库迁移（users 表）：早期版本的 users 表没有 onboarded 列，启动时按需补。
@@ -571,8 +576,8 @@ class SqliteRepository:
             "questions,ask_rounds,refused,boundary_layer,boundary_reason,ask_history,errors,"
             "contract_id,contract_name,contract_chars,deleted,case_refs,agent_trace,clause_findings,"
             "undetermined,rule_coverage,missing_terms,ask_items,unmet,statutory_na,clause_review,model,"
-            "model_first,rule_checks)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "model_first,rule_checks,clause_retry_calls,clause_retry_items,clause_retry_passed)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task.task_id,
                 task.enterprise_id,
@@ -622,6 +627,9 @@ class SqliteRepository:
                 task.model,
                 int(task.model_first),
                 json.dumps([self._rule_check_to_dict(c) for c in task.rule_checks], ensure_ascii=False),
+                int(task.clause_retry_calls),
+                int(task.clause_retry_items),
+                int(task.clause_retry_passed),
             ),
         )
         self._conn.commit()
@@ -844,6 +852,9 @@ class SqliteRepository:
             agent_trace=[str(x) for x in json.loads(row["agent_trace"] or "[]")],
             clause_review=bool(row["clause_review"] or 0),
             model_first=bool(row["model_first"] or 0),
+            clause_retry_calls=int(row["clause_retry_calls"] or 0),
+            clause_retry_items=int(row["clause_retry_items"] or 0),
+            clause_retry_passed=int(row["clause_retry_passed"] or 0),
             clause_findings=[
                 ClauseFinding(
                     paragraph=int(d["paragraph"]),
