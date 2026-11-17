@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -30,6 +31,8 @@ from mla.services.credentials import clear_key, resolve_key
 DUMMY_KEY = "sk-dummy-" + "0" * 26
 OTHER_KEY = "sk-dummy-" + "1" * 26
 KEY_PREFIX = "sk-dummy-"
+# 任何 Key 形状的串（前缀 + 足够长的密钥体）。比裸数字断言稳定：与路径无关。
+KEY_SHAPE = re.compile(r"sk-[A-Za-z0-9_\-]{16,}")
 
 
 @pytest.fixture(autouse=True)
@@ -410,12 +413,20 @@ def test_lock_is_not_stolen(home: Path, tmp_path: Path) -> None:
 
 
 def test_migration_messages_never_contain_key(home: Path, tmp_path: Path) -> None:
-    """成功消息同样只给路径与结论：整段输出里不出现哑 Key，也不出现它的长度。"""
+    """成功消息同样只给路径与结论：不含哑 Key、其前缀，也不含任何 Key 形状的串。
+
+    这里**不对「长度 35」这类裸数字断言**：迁移消息本身必须带凭据路径，而 pytest 临时
+    目录名形如 ``pytest-835``，任意两位数字都可能恰好出现在路径里，于是断言结果取决于
+    本次运行目录，属于测试自身的假失败（``'35' not in blob`` 随机变红）。要表达「不泄露
+    Key」只需针对 Key 的形状断言；长度本身不是可用信息，可脱离路径独立判断的部分已被
+    ``KEY_SHAPE`` 覆盖。
+    """
     db = _legacy_db(tmp_path / "mla.sqlite3")
 
     report = migrate_legacy_key(home, [db])
 
     assert report.status == "imported"
-    blob = "\n".join(report.messages)
-    assert KEY_PREFIX not in blob and DUMMY_KEY not in blob
-    assert str(len(DUMMY_KEY)) not in blob
+    for message in report.messages:
+        assert KEY_PREFIX not in message
+        assert DUMMY_KEY not in message
+        assert KEY_SHAPE.search(message) is None

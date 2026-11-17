@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 import subprocess
 import urllib.error
 from dataclasses import fields
@@ -54,6 +55,8 @@ DUMMY_KEY = "sk-dummy-" + "0" * 26
 OTHER_KEY = "sk-dummy-" + "9" * 26
 LEGACY_KEY = "sk-dummy-" + "5" * 26
 KEY_PREFIX = "sk-dummy-"
+# 任何 Key 形状的串（前缀 + 足够长的密钥体）：与页面路径无关的泄露判据。
+KEY_SHAPE = re.compile(r"sk-[A-Za-z0-9_\-]{16,}")
 
 # 旧库里 Key 的键名（阶段四：只作为迁移候选，不再是解析来源）
 LEGACY_SETTING_KEY = "llm_api_key"
@@ -578,7 +581,7 @@ def test_unconfigured_hint(tmp_path, monkeypatch) -> None:
 
 
 def test_env_source_label(tmp_path, monkeypatch) -> None:
-    """AC-17：只设环境变量时来源如实显示，整页文本不含哑 Key 也不含其长度。"""
+    """AC-17：只设环境变量时来源如实显示，页面文本不含哑 Key、其前缀或 Key 形状的串。"""
     _patch_probe(monkeypatch)
     monkeypatch.setenv("MLA_LLM_API_KEY", DUMMY_KEY)
     st.cache_resource.clear()
@@ -591,8 +594,11 @@ def test_env_source_label(tmp_path, monkeypatch) -> None:
     assert "已配置 · 未校验（来源：环境变量（MLA_LLM_API_KEY））" in texts
     assert "服务商：DeepSeek" in texts
     assert "模型：deepseek-chat" in texts
+    # 不断言「长度 35」这类裸数字：页面文本可能含路径/计数，pytest 临时目录名
+    # （如 pytest-835）就会让它随机变红。只断言 Key 本身与前缀/形状。
     assert KEY_PREFIX not in texts
-    assert str(len(DUMMY_KEY)) not in texts
+    assert DUMMY_KEY not in texts
+    assert KEY_SHAPE.search(texts) is None
 
     # 列表接口只给元数据：没有 Key 字段，也没有长度字段
     statuses = list_key_status()
