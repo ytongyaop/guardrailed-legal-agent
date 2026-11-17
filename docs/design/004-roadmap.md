@@ -33,8 +33,8 @@
 | 2 | 结果页仍展示过程信息：耗时（`ui/app.py:1269` 指标、`:1517` 摘要行）、覆盖率注记（`:1514`）、判定来源徽标（`:83-92`、`:1020`、`:1334` / `:1342`） | 读者在"哪几条有冲突"和"程序怎么算出来的"之间来回跳，结论被稀释；非技术用户容易把徽标当成风险等级 |
 | 3 | `pyright` 对 `tests/` 有 14 个既有错误（门禁只跑 `src`，见 `CONTRIBUTING.md:47` 与 `ci.yml` 注释） | 改测试时没有类型保护，改动是否破坏用例只能靠跑测试发现；`pyproject.toml:70` 的 `include` 含 `tests`，本地全量检查会红，容易养成忽略红的习惯 |
 | 4 | 测试标记只覆盖 502/676，174 条未打标，集中在 `test_ui_smoke.py`(38)、`test_ui_setup.py`(21)、`test_contract_name.py`(15) 及 CLI / 检索类 | `-m no_llm` 与 `-m mock_llm` 都不代表全量；分套跑全绿会漏掉未打标用例的回归 |
-| 5 | `docs/architecture.md:22` 写"SQLite 5 张表（users / enterprises / contracts / tasks / logs）"，实际 6 张 | 实际多一张 `settings`（`adapters/persist.py:45-78`），设置类问题的排查落点查文档找不到 |
-| 6 | `README.md:247` 的「版本」一节只指向 Releases 与 CHANGELOG，不写当前版本号 | 用户无法从 README 判断手上是哪个版本，报缺陷时缺版本信息 |
+| 5 | ~~`docs/architecture.md:22` 写"SQLite 5 张表（users / enterprises / contracts / tasks / logs）"~~ **已修（2026-11-17）**：改为 6 张表并补 `settings` 用途说明 | — |
+| 6 | ~~`README.md:247` 的「版本」一节只指向 Releases 与 CHANGELOG，不写当前版本号~~ **已修（2026-11-17）**：开头补"当前版本 0.2.1"，保留 Releases / CHANGELOG 指引 | — |
 
 ## 4. 0.3.0 目标：凭据与数据路径重构
 

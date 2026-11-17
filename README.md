@@ -246,7 +246,9 @@ python scripts/eval_clauses.py --runs 1
 
 ## 版本
 
-当前版本见 [Releases](https://github.com/ytongyaop/guardrailed-legal-agent/releases) 与 [CHANGELOG.md](CHANGELOG.md)，版本号遵循语义化版本。
+当前版本 0.2.1（以 `src/mla/__init__.py` 与 [Releases](https://github.com/ytongyaop/guardrailed-legal-agent/releases) 为准）。
+
+详细变更见 [CHANGELOG.md](CHANGELOG.md)，版本号遵循语义化版本。
 
 ## English
 

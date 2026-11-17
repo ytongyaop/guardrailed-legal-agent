@@ -19,7 +19,7 @@
 
 | 数据 | 位置 | 说明 |
 | --- | --- | --- |
-| 账号、企业、合同、任务、日志 | 工作目录下的 `mla.sqlite3`（SQLite，5 张表：users / enterprises / contracts / tasks / logs） | 运行时数据，不进包目录。一个账号绑定一个企业；企业 ID 为空的查询不得返回全库数据；任务删除为软删，日志留痕 |
+| 账号、企业、合同、任务、日志、设置 | 工作目录下的 `mla.sqlite3`（SQLite，6 张表：users / enterprises / contracts / tasks / logs / settings） | 运行时数据，不进包目录。一个账号绑定一个企业；企业 ID 为空的查询不得返回全库数据；任务删除为软删，日志留痕；`settings` 存通用键值设置（键值对，如界面侧配置项） |
 | 法源、规则、触发器、必备条款规格、案例、回归集与留出集 | `src/mla/data/` 下的 JSONL / YAML 文件（随包分发，安装后在 `site-packages/mla/data/`） | 判定依据，只读，经 `mla.config.data_path()` 解析，各有独立校验脚本把关结构一致性 |
 | 语义向量缓存 | 工作目录下的 `data/index/` | 向量检索路径的本地缓存目录（运行期可写，不写进包目录）；BM25 路径不依赖它 |
 | 密钥 | 环境变量或 `.streamlit/secrets.toml`（不入库） | 只读取、不落盘、不进数据库 |
