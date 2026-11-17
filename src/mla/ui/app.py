@@ -14,7 +14,6 @@ from __future__ import annotations
 import csv
 import io
 import json
-import os
 import uuid
 from dataclasses import replace
 from datetime import datetime
@@ -24,7 +23,7 @@ import altair as alt
 import streamlit as st
 
 from mla.adapters.files import normalize_contract_name, parse_contract_bytes
-from mla.adapters.llm import DeepSeekLLM
+from mla.adapters.llm import DeepSeekLLM, ProbeResult
 from mla.adapters.persist import SqliteRepository
 from mla.config import LLMConfig, data_path, load_config
 from mla.domain.asking import candidate_fields
@@ -56,6 +55,19 @@ from mla.services.auth import (
 )
 from mla.services.bootstrap import BootstrapReport, ensure_runtime_ready
 from mla.services.consensus import SOURCE_RULE_CHECK
+from mla.services.credentials import (
+    DEFAULT_PROVIDER,
+    CheckStatus,
+    CredentialError,
+    KeyStatus,
+    clear_key,
+    list_key_status,
+    read_check_status,
+    record_check_status,
+    resolve_key,
+    resolve_llm_config,
+    set_key,
+)
 from mla.services.report import build_report_docx, merge_findings
 from mla.services.tasks import persist, run_check, run_qa
 from mla.ui.trend import trend_frame
@@ -135,53 +147,27 @@ def _show_runtime_notice(report: BootstrapReport) -> None:
         shown.append(text)
 
 
-# 模型 Key 的三处来源，顺序即优先级。三处都读原始值，不经过 load_config：
-# load_config 会把环境变量与 secrets 合成一个 api_key，混起来就分不清谁盖过谁。
-LLM_KEY_SETTING = "llm_api_key"
-KEY_SOURCE_LABELS: tuple[str, ...] = ("secrets.toml", "数据库设置", "环境变量")
+# ---------------- 模型 Key 的解析与设置页 ----------------
+# 解析只有一处：`services.credentials`（环境变量 > auth.json > 阶段三旧库兜底）。
+# 界面不缓存解析结果（规格 002 第 4 章）：保存、清除或外部改文件后，下一次调用重新读盘。
+def _resolve_llm(cfg) -> LLMConfig | None:
+    """当前生效的模型配置；未配置返回 `None`（界面按缺 Key 处理，不降级成模板回答）。"""
+    llm, _resolved = resolve_llm_config(cfg, legacy_db=cfg.paths.db)
+    return llm
 
 
-def _secrets_llm_key() -> str:
-    """只取 `.streamlit/secrets.toml` 里 [llm].api_key 这一处原始值。"""
-    try:
-        section = st.secrets.get("llm", {})
-    except Exception:  # noqa: BLE001 - 没有 secrets 文件时按未配置处理
-        return ""
-    return str(section.get("api_key", "")) if hasattr(section, "get") else ""
-
-
-def llm_key_sources(repo: SqliteRepository | None = None) -> tuple[str, str, str]:
-    """三处原始 Key，顺序即优先级：secrets.toml / 数据库设置 / 环境变量。"""
-    db_key = repo.get_setting(LLM_KEY_SETTING) if repo is not None else ""
-    return (_secrets_llm_key(), db_key, os.environ.get("MLA_LLM_API_KEY", ""))
-
-
-def resolve_llm_key(sources: tuple[str, ...]) -> str:
-    """按优先级取第一个非空值；都为空返回空串（界面按未配置处理）。"""
-    return next((str(value) for value in sources if value), "")
-
-
-def key_source_label(sources: tuple[str, ...]) -> str:
-    """当前生效的 Key 来自哪一处；都没有就是未配置。"""
-    for label, value in zip(KEY_SOURCE_LABELS, sources, strict=False):
-        if value:
-            return label
-    return "未配置"
-
-
-def _default_llm_key(repo: SqliteRepository | None = None) -> str:
-    return resolve_llm_key(llm_key_sources(repo))
-
-
-def _resolve_llm(cfg, repo: SqliteRepository | None = None) -> LLMConfig | None:
-    """只认三处来源（secrets.toml / 数据库 / 环境变量），不读任何会话级 Key。
-
-    调用点必须传 repo：否则数据库里保存的 Key 读不到，界面会误判“未配置模型”。
-    """
-    key = _default_llm_key(repo)
-    if not key:
-        return None
-    return replace(cfg.llm, api_key=key)
+# 服务商显示名：下拉的**取值**是 `auth.json` 的 provider 键名，这里只负责显示。
+PROVIDER_NAMES: dict[str, str] = {"deepseek": "DeepSeek"}
+# 校验失败的三类固定文案（规格 002 第 10.9 节）；分类由 `ProbeResult.kind` 决定，不解析中文。
+PROBE_MESSAGES: dict[str, str] = {
+    "auth": "Key 不正确，请检查后重新输入",
+    "network": "网络不通，请稍后重试（本次未保存）",
+    "server": "服务暂时不可用，本次未保存",
+}
+# 校验时间超过这个天数就在状态行末尾提醒复测：不改写“有效”，也不做后台自动复验。
+STATUS_STALE_DAYS = 30
+# Key 输入控件的 session_state 键：保存成功 / 取消后 pop 掉它来清空输入框（不回填任何已存 Key）
+KEY_INPUT = "settings_key_input"
 
 
 def _trend_chart(frame) -> alt.Chart:
@@ -733,10 +719,16 @@ def _page_check(repo: SqliteRepository, user: User) -> None:
     page_header("fact_check", "合同核对")
     # 门禁：模型是核对的大脑，没有模型不做核心活——不渲染输入方式、合同文本框、开始核对与追问，
     # 也不给残缺结论；导航与其他页面（登录、企业档案、合同管理、历史、设置）照常可用。
-    if _resolve_llm(get_config(), repo) is None:
+    if _resolve_llm(get_config()) is None:
         st.warning(
             "未配置模型，合同核对不可用；配置后才能给出结论。",
             icon=":material/smart_toy:",
+        )
+        # 缺 Key 的影响逐项说清（规格 002 第 10.5 节）：这不是“系统故障”，
+        # 也绝不降级成模板回答——没有模型就是不给生成式结论。
+        st.caption(
+            "缺 Key 时：处理建议不生成、生成式问答拒答、条款级审查不可用；"
+            "确定性规则核对与必备条款缺项检测不依赖模型。"
         )
         if is_admin(user):
             st.page_link(NAV["设置"], label="去设置页配置 API Key", icon=":material/arrow_forward:")
@@ -776,7 +768,11 @@ def _page_check(repo: SqliteRepository, user: User) -> None:
 
 
 def _clause_review_toggle(cfg, llm: LLMConfig | None) -> bool:
-    """条款审查开关：默认取配置（`MLA_CLAUSE_REVIEW`）；未配置模型时置灰并说明。"""
+    """条款审查开关：默认取配置（`MLA_CLAUSE_REVIEW`）；未配置模型时置灰并说明。
+
+    置灰不能只留一个灰框（规格 002 第 10.5 节）：旁边给一句“去设置”指引。
+    页面顶部已有完整影响说明时，这里只写这一句短提示，不重复三遍。
+    """
     default_on = bool(cfg.clause_review.enabled) and llm is not None
     st.checkbox(
         "启用条款审查（模型辅助）",
@@ -786,6 +782,7 @@ def _clause_review_toggle(cfg, llm: LLMConfig | None) -> bool:
         help="逐条审查可疑条款并按 A/B/C 分级，约需 20–30 秒并消耗模型额度。",
     )
     if llm is None:
+        st.caption("未配置模型，条款审查不可用；去设置页填写 API Key 后可用。")
         return False
     return bool(st.session_state.get("clause_review_on", default_on))
 
@@ -796,7 +793,7 @@ def _check_form(repo: SqliteRepository, user: User, ent_facts: dict[str, str]) -
     if text.strip():
         st.badge(f"将核对 {len(text)} 字", icon=":material/description:", color="blue")
     cfg = get_config()
-    llm = _resolve_llm(cfg, repo)
+    llm = _resolve_llm(cfg)
     if llm is not None:
         st.caption(
             "核对时会把合同正文发送至模型服务（DeepSeek）用于抽取关键条款；"
@@ -895,7 +892,7 @@ def _ask_panel(repo: SqliteRepository, user: User, pending: dict, ent_facts: dic
                 max_ask_rounds=1,
                 contract_name=str(st.session_state.get("ask_contract_name") or ""),
                 contract_id=str(st.session_state.get("ask_contract_id") or ""),
-                llm=_resolve_llm(get_config(), repo),
+                llm=_resolve_llm(get_config()),
                 clause_review=st.session_state.get("ask_clause_review"),
             )
         st.session_state["last_task"] = task
@@ -1171,7 +1168,7 @@ def _optional_picks(task, repo: SqliteRepository) -> list[str]:
     candidates = candidate_fields(tuple(repo.list_rules()), facts, limit=MAX_ASK_CANDIDATES)
     picked: list[str] = []
     if candidates:
-        llm_cfg = _resolve_llm(get_config(), repo)
+        llm_cfg = _resolve_llm(get_config())
         generator = DeepSeekLLM(llm_cfg) if llm_cfg is not None else None
         picked, _errors = suggest_optional(generator, facts, candidates)
     cache[key] = list(picked)
@@ -1223,7 +1220,7 @@ def _render_optional_facts(task, repo: SqliteRepository, user: User) -> None:
             max_ask_rounds=1,
             contract_name=str(st.session_state.get("ask_contract_name") or task.contract_name),
             contract_id=task.contract_id,
-            llm=_resolve_llm(get_config(), repo),
+            llm=_resolve_llm(get_config()),
             clause_review=st.session_state.get("ask_clause_review"),
         )
     st.session_state["last_task"] = new_task
@@ -1622,7 +1619,7 @@ def _render_qa_panel(task, repo: SqliteRepository, user: User) -> None:
                         question=text,
                         repo=repo,
                         enterprise_id=user.enterprise_id,
-                        llm=_resolve_llm(get_config(), repo),
+                        llm=_resolve_llm(get_config()),
                         context=_qa_context(task),
                     )
                 st.session_state["last_qa_context"] = {"task_id": task.task_id, "qa": answer}
@@ -1705,54 +1702,232 @@ def _settings_flash() -> None:
         st.error(msg, icon=":material/error:")
 
 
-def _render_model_settings(repo: SqliteRepository) -> None:
-    """模型 Key（仅管理员）：落库后下次启动自动读取；清除即回落到下一优先级。
+def _model_providers() -> list[str]:
+    """服务商下拉的取值：resolver 认识的 provider 键名（本版只有 `deepseek`）。
 
-    这是模型设置的唯一入口：侧栏不再提供会话级 Key，测试连接也放在这里。
+    取值不硬编码显示名：加第二家服务商时这里自动多一项（规格 002 第 10.6 节）。
     """
-    sources = llm_key_sources(repo)
-    st.markdown("#### :material/smart_toy: 模型设置")
-    st.caption(f"当前 Key 来源：{key_source_label(sources)}")
-    st.caption("优先级 secrets.toml > 数据库 > 环境变量")
-    with st.form("llm_key_form"):
-        new_key = st.text_input(
-            "DeepSeek API Key",
-            type="password",
-            placeholder="sk-……（保存在本机数据库，不写日志）",
-        )
-        saved = st.form_submit_button("保存", type="primary", icon=":material/save:")
-    if saved:
-        key = new_key.strip()
-        if not key:
-            st.warning("请先输入 Key；要清除已保存的 Key，用下面的清除按钮。", icon=":material/warning:")
-        else:
-            repo.set_setting(LLM_KEY_SETTING, key)
-            st.session_state["settings_flash"] = "已保存到本机数据库，下次启动自动读取"
-            st.rerun()
-    if st.button("清除数据库中的 Key", icon=":material/delete:"):
-        repo.set_setting(LLM_KEY_SETTING, "")
-        st.session_state["settings_flash"] = "已清除数据库中的 Key，回落到下一优先级"
-        st.rerun()
+    return [s.provider for s in list_key_status(legacy_db=get_config().paths.db)]
 
-    llm = _resolve_llm(get_config(), repo)
-    if st.button("测试连接", icon=":material/network_check:", disabled=llm is None):
-        with st.spinner("连接 DeepSeek……"):
-            probe = DeepSeekLLM(llm) if llm is not None else None
-            ok = probe.health() if probe is not None else False
-        if ok:
-            st.session_state["settings_flash"] = "连接正常"
-        else:
-            detail = (probe.last_error if probe is not None else "未配置 Key")[:80]
-            st.session_state["settings_error"] = f"连接失败：{detail}"
+
+def _provider_display(provider: str) -> str:
+    return PROVIDER_NAMES.get(provider, provider)
+
+
+def _format_checked_at(value: str) -> str:
+    """ISO-8601（带时区）→ 本地 `YYYY-MM-DD HH:MM`；解析不了返回空串（按未校验处理）。"""
+    try:
+        return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return ""
+
+
+def _checked_at_stale(value: str) -> bool:
+    """上次校验是否已超过 30 天（只影响提示，不改写“有效”）。"""
+    try:
+        checked = datetime.fromisoformat(value).astimezone()
+    except ValueError:
+        return False
+    return (datetime.now().astimezone() - checked).days > STATUS_STALE_DAYS
+
+
+def _key_status_line(status: KeyStatus | None, check: CheckStatus | None, model: str) -> str:
+    """设置页状态行：只答“是否已配置 / 上次校验是否通过 / 从哪来”。
+
+    **本函数没有 Key 参数**（规格 002 第 10.3 节）：从接口上就做不到显示 Key、长度或片段。
+    `check` 为 `None` 表示从未校验或 `auth-status.json` 损坏——一律按“未校验”渲染，
+    不凭空写“有效”，也不发任何网络请求（渲染只读文件）。
+    """
+    provider = _provider_display(status.provider if status is not None else DEFAULT_PROVIDER)
+    if status is None or status.source == "none":
+        return f"未配置 · 服务商：{provider}"
+    when = _format_checked_at(check.checked_at) if check is not None else ""
+    if check is None or not when:
+        head = f"已配置 · 未校验（来源：{status.label}）"
+    elif check.ok:
+        head = f"已配置 · 有效（{when}） · 来源：{status.label}"
+    else:
+        reason = PROBE_MESSAGES.get(check.kind, PROBE_MESSAGES["server"])
+        head = f"已配置 · 未通过校验（{reason}） · 来源：{status.label}"
+    line = f"{head} · 服务商：{provider} · 模型：{model}"
+    if check is not None and when and _checked_at_stale(check.checked_at):
+        line = f"{line} · 上次校验超过 30 天，建议重新测试"
+    return line
+
+
+def _probe(key: str) -> ProbeResult:
+    """一次 `GET /models` 校验：超时取 `auth_check_timeout_s`，不构造 messages、不产生 token 费用。"""
+    return DeepSeekLLM(get_config().llm).probe_models(key)
+
+
+def _failure_text(kind: str, *, replacing: bool) -> str:
+    """校验失败的固定文案（规格 002 第 10.9 节）；替换场景要先说明旧 Key 仍在用。"""
+    reason = PROBE_MESSAGES.get(kind, PROBE_MESSAGES["server"])
+    return f"新 Key 未通过校验，原 Key 仍在使用。{reason}" if replacing else reason
+
+
+def _save_key(provider: str, raw: str, *, replacing: bool) -> None:
+    """“测试并保存”：全项目唯一的写动作。校验不通过就不写文件、不写校验历史。"""
+    key = (raw or "").strip()
+    if not key:
+        st.session_state["settings_error"] = "请先粘贴 API Key，再点“测试并保存”。"
         st.rerun()
-    if llm is None:
-        st.caption("请先保存 Key，再测试连接。")
-    emb = get_config().embedding
+        return
+    probe = _probe(key)
+    if probe.kind != "ok":
+        st.session_state["settings_error"] = _failure_text(probe.kind, replacing=replacing)
+        st.rerun()
+        return
+    try:
+        set_key(provider, key)
+    except CredentialError as exc:
+        # 异常消息只含 provider 与路径，不含 Key
+        st.session_state["settings_error"] = str(exc)
+        st.rerun()
+        return
+    try:
+        record_check_status(provider, True, "ok")
+    except OSError:
+        # 校验历史是可丢的展示数据：写失败只降级为“未校验”，不回滚已成功的保存
+        pass
+    st.session_state["settings_flash"] = "已保存到用户凭据文件（连接校验通过），下次启动自动读取"
+    st.session_state.pop(KEY_INPUT, None)
+    st.session_state["settings_editing"] = False
+    st.session_state.pop("settings_confirm_clear", None)
+    st.rerun()
+
+
+def _test_connection(provider: str) -> None:
+    """手动复验**当前生效**的 Key：只发 `GET /models`，写校验历史，不改 `auth.json`。"""
+    resolved = resolve_key(provider, legacy_db=get_config().paths.db)
+    if resolved.source == "none":
+        return
+    probe = _probe(resolved.key)
+    kind = "ok" if probe.kind == "ok" else probe.kind
+    try:
+        record_check_status(provider, probe.kind == "ok", kind)
+    except (OSError, ValueError):
+        pass
+    if probe.kind == "ok":
+        st.session_state["settings_flash"] = "连接正常"
+    else:
+        st.session_state["settings_error"] = PROBE_MESSAGES.get(kind, PROBE_MESSAGES["server"])
+    st.rerun()
+
+
+def _clear_key(provider: str) -> None:
+    """清除只删 provider 条目（不写空串），成功后回到未配置态。"""
+    try:
+        clear_key(provider)
+    except CredentialError as exc:
+        st.session_state["settings_error"] = str(exc)
+    else:
+        st.session_state["settings_flash"] = "已清除该 Key"
+    st.session_state.pop(KEY_INPUT, None)
+    st.session_state.pop("settings_confirm_clear", None)
+    st.session_state["settings_editing"] = False
+    st.rerun()
+
+
+def _render_clear_confirm(provider: str) -> None:
+    """清除前的二次确认：默认动作是“取消”，“确认清除”不是 primary 按钮。"""
+    st.warning(
+        f"确认清除 {_provider_display(provider)} 的 Key？清除后：处理建议生成、生成式问答、"
+        "条款级审查不可用；确定性规则核对与必备条款缺项检测不受影响。",
+        icon=":material/warning:",
+    )
+    keep_col, drop_col = st.columns(2)
+    with keep_col:
+        if st.button("取消清除", type="primary", width="stretch"):
+            st.session_state.pop("settings_confirm_clear", None)
+            st.rerun()
+    with drop_col:
+        if st.button("确认清除", width="stretch"):
+            _clear_key(provider)
+
+
+def _render_key_editor(provider: str, providers: list[str], *, editing: bool) -> None:
+    """服务商下拉 + 掩码输入 + “测试并保存”；更改流程额外给“取消”与“清除此 Key”。
+
+    输入期可以切“显示”确认粘贴是否完整；保存成功后输入框清空且不回填，
+    已保存的 Key 永不回显（规格 002 第 10.3 节第 2 条）。
+    """
+    with st.container(border=True):
+        picked = st.selectbox(
+            "服务商",
+            providers,
+            index=providers.index(provider) if provider in providers else 0,
+            format_func=_provider_display,
+            key="settings_provider",
+        )
+        visible = st.toggle(
+            "显示",
+            value=False,
+            key="settings_key_visible",
+            help="仅用于确认粘贴是否完整；保存后输入框会清空，不会回填已保存的 Key。",
+        )
+        raw = st.text_input(
+            f"{_provider_display(picked)} API Key",
+            type="default" if visible else "password",
+            placeholder="粘贴 DeepSeek API Key",
+            key=KEY_INPUT,
+        )
+        if st.button("测试并保存", type="primary", icon=":material/check_circle:"):
+            _save_key(picked, raw, replacing=editing)
+        if not editing:
+            return
+        cancel_col, clear_col = st.columns(2)
+        with cancel_col:
+            if st.button("取消", icon=":material/close:", width="stretch"):
+                st.session_state.pop(KEY_INPUT, None)
+                st.session_state.pop("settings_confirm_clear", None)
+                st.session_state["settings_editing"] = False
+                st.rerun()
+        with clear_col:
+            if st.button("清除此 Key", icon=":material/delete:", width="stretch"):
+                st.session_state["settings_confirm_clear"] = True
+                st.rerun()
+        if st.session_state.get("settings_confirm_clear"):
+            _render_clear_confirm(picked)
+
+
+def _render_model_settings() -> None:
+    """模型 Key（仅管理员）：全项目唯一的写入口（规格 002 第 10 章）。
+
+    未配置态直接给输入区；已配置态收起，只留状态行 + “更改 Key” + “测试连接”；
+    “清除此 Key”藏在更改流程内并二次确认。任何位置都不显示 Key、长度或片段。
+    """
+    st.markdown("#### :material/smart_toy: 模型设置")
+    cfg = get_config()
+    providers = _model_providers()
+    provider = providers[0] if providers else DEFAULT_PROVIDER
+    status = next((s for s in list_key_status(legacy_db=cfg.paths.db) if s.provider == provider), None)
+    check = read_check_status(provider)  # None = 从未校验 / 记录损坏
+    st.caption(_key_status_line(status, check, cfg.llm.model))
+    configured = status is not None and status.source != "none"
+    if not configured:
+        _render_key_editor(provider, providers, editing=False)
+        st.caption(
+            "缺 Key 影响：处理建议不生成、生成式问答拒答、条款级审查不可用；"
+            "确定性规则核对与必备条款缺项检测不依赖模型。"
+        )
+    else:
+        change_col, test_col = st.columns(2)
+        with change_col:
+            if st.button("更改 Key", icon=":material/key:", width="stretch"):
+                st.session_state["settings_editing"] = True
+                st.rerun()
+        with test_col:
+            if st.button("测试连接", icon=":material/network_check:", width="stretch"):
+                _test_connection(provider)
+        if st.session_state.get("settings_editing"):
+            _render_key_editor(provider, providers, editing=True)
+    st.caption("DeepSeek Key 以明文保存在当前操作系统用户的凭据文件中，已收紧权限；不要分享该文件。")
+    emb = cfg.embedding
     if emb.api_key:
         st.caption(f"向量检索：{emb.model}")
     else:
         st.caption("向量检索：未配置 Key，回退 BM25")
-    st.caption("只接 DeepSeek；Key 不写日志。")
 
 
 def _render_account_settings(repo: SqliteRepository, user: User) -> None:
@@ -1779,7 +1954,7 @@ def _page_settings(repo: SqliteRepository, user: User) -> None:
     page_header("settings", "设置")
     _settings_flash()
     if is_admin(user):
-        _render_model_settings(repo)
+        _render_model_settings()
     _render_account_settings(repo, user)
 
 

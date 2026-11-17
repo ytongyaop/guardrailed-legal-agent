@@ -470,7 +470,7 @@ if WITH_TASK:
     )
     st.session_state["ask_clause_review"] = False
 # 注入假 LLMConfig 只证明“有模型”，不联网：run_check 不传 llm，抽取走正则。
-def fake_llm(cfg, repo=None):
+def fake_llm(cfg):
     return LLMConfig(api_key="test") if LLM_ON else None
 
 
