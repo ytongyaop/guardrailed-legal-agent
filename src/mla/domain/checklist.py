@@ -11,10 +11,8 @@ from .models import CaseRef, CheckItem, ItemKind, Suggestion
 # 规则前缀 -> 建议模板（{name} 会被规则名替换）
 SUGGESTION_TEMPLATES: dict[str, str] = {
     "R-PROBATION": "将试用期调整至法定上限内，并确认试用期工资不低于法定下限。",
-    "R-WRITTEN": "尽快补签书面劳动合同，避免逾期产生二倍工资责任。",
     "R-NONCOMPETE": "核对竞业限制期限与补偿约定，超期或未付补偿的条款应整改。",
     "R-OT": "按法定倍率补足加班费，并保留考勤与工资计算依据。",
-    "R-SI": "补办社会保险登记或补缴，留存缴费凭证。",
     "R-AL": "安排补休或按规定支付未休年休假工资报酬。",
     "R-WPR": "按约定周期足额支付工资，并保留支付记录。",
 }

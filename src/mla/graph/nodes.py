@@ -299,7 +299,7 @@ def rule_check(state: CheckState, deps: Deps) -> CheckState:
         "undetermined": undetermined,
         "statutory_na": statutory_na,
         "rule_coverage": coverage,
-        # 双写（规格 003 第 13 章 P1-1）：全部 20 条规则的四态一律转三态留痕，
+        # 双写（规格 003 第 13 章 P1-1）：全部 16 条规则的四态一律转三态留痕，
         # 含 ok / mismatch / needs_fact —— 共识层需要看到全貌，而不是只看违规那几条。
         # P1-3 起它是 `items` 的唯一来源（`items` 只保留图内中间产物），本节点照旧全量留痕。
         "rule_checks": [to_rule_check(o) for o in outcomes],

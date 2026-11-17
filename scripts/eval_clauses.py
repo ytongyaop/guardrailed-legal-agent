@@ -9,7 +9,7 @@
         src/mla/data/evalsets/contract_traps_03.txt src/mla/data/evalsets/contract_compliant_01.txt
 
 三条臂：
-    rule_only  只有现有 20 条数值规则出结论（不跑触发器、不调模型）；规则命中的 rule_id
+    rule_only  只有现有 16 条数值规则出结论（不跑触发器、不调模型）；规则命中的 rule_id
                按本脚本里的人工映射对到 gold 正样本，对不上的记为未覆盖。
     model_raw  触发器 + 模型，**关闭**程序核验（`review_clauses(verify=False)`）：
                等级与法条引用原样保留，库外条号单列 `out_of_library` 计数。
@@ -88,7 +88,7 @@ CASE_FILES = (
 
 # 规则 → gold 正样本的人工映射（`rule_only` 臂专用；**不改 gold 文件**）。
 # 判定口径：规则的 statute_id 与 gold.statute_ids 对得上，且规则字段就是该陷阱的数值形态。
-# 逐条核过全部 20 条规则，只有下面两处属于"同一数值形态"：
+# 逐条核过全部 16 条规则，只有下面两处属于"同一数值形态"：
 #   - R-PROBATION-WAGE-80 ↔ T05：规则字段 probation_wage_ratio 正是"试用期工资按基本工资 80%"的比例
 #     （gold T05 引 LCL-20，规则挂 LCR-15，同一条规范的两处出处）；
 #   - R-NONCOMPETE-TERM-2Y ↔ T12：规则字段 noncompete_years 正是"竞业限制 2 年"的期限

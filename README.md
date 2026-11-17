@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
-A guardrailed agent for labor-contract risk review: deterministic rules, model-assisted clause analysis, and source-traceable output for small businesses without in-house legal counsel.
+A guardrailed agent for labor-contract risk review: model-led clause judgment checked by deterministic rules and programmatic verification, and source-traceable output for small businesses without in-house legal counsel.
 
-面向小微企业（有雇工、缺专职法务）的劳动合同风险辅助核对系统。受限智能体（guardrailed agent）架构：流程由确定性代码固定，模型只负责自然语言环节，所有输出必须通过规则与证据核验才会呈现给用户。
+面向小微企业（有雇工、缺专职法务）的劳动合同风险辅助核对系统。受限智能体（guardrailed agent）架构：流程由确定性代码固定，模型负责读懂合同并逐条判定，规则与脚本负责给法条原文、限制输出形态、核算数值前提；模型每一条结论都要通过程序核验才会呈现给用户。
 
 技术栈：Python 3.11+（开发环境 3.14）· LangGraph 编排（13 个固定节点）· Streamlit 1.66 界面 · SQLite 3.50 存储 · DeepSeek `deepseek-chat`（OpenAI 兼容接口）· 阿里云 `qwen3.7-text-embedding-flash` 语义向量（1024 维，无 Key 自动回退 BM25）· python-docx 导出 Word 报告。
 
@@ -22,27 +22,29 @@ A guardrailed agent for labor-contract risk review: deterministic rules, model-a
 
 - 每条结论绑定 `statute_id` 并指向法条原文，校验器强制 100% 可追溯；建议类条目没有依据就拒绝生成。
 - 事实不足时补问：阻断项缺了不能出结论，其余可补充事实允许用户跳过；问题越界时拒答并建议转专业咨询。
-- 规则判定输出四态：违规、合规、不适用、无法判定。判不了必须说出来，不静默折叠进"合规"。
+- 模型负责判，规则负责卡数值：条款风险由模型逐条判定，数值前提（试用期上限、工资比例等）由规则核算，两边在汇总时对账；对外只呈现两层——正文输出、需补事实。判不了必须说出来，不静默折叠进"合规"。
 
-## 设计要点：三层判定
+## 设计要点：模型主判定，规则做约束与校验
 
-不同类型的问题交给不同的判定通道，各自独立出结果：
+怎么判、谁来判，写死在各环节的分工里：
 
-| 层 | 判什么 | 怎么判 | 模型参与 |
+| 环节 | 判什么 | 谁来做 | 程序管什么 |
 | --- | --- | --- | --- |
-| 数值域 | 试用期上限、试用期工资比例、加班倍率、竞业限制期限与补偿、社保登记、年假天数、工资支付次数等数值是否合法 | 20 条确定性规则，纯函数，相同输入必然相同输出 | 不参与 |
-| 存在性域 | 合同里有没有值得警惕的条款，例如约定放弃缴纳社保、加班费按基本工资计基数、试用期内可随时解除 | 33 条触发器先召回可疑条款，模型逐条判定 A/B/C 三级，再过六道程序核验 | 参与，但每条输出都被核验 |
-| 缺项域 | 《劳动合同法》第十七条规定的九类必备条款，合同正文有没有写 | 逐行匹配、不跨行拼接，只判"写没写"、不判合法性；第（九）类为兜底，不判、不进覆盖率分母 | 不参与 |
+| 条款判定 | 合同里有没有值得警惕的条款，例如约定放弃缴纳社保、加班费按基本工资计基数、试用期内可随时解除 | 33 条触发器先召回可疑段落，模型逐条判定并给出等级、理由、证据原文与法条原文摘抄 | 每条结论过六道核验（等级、证据定位、法条在库、引用闭集、缺依据降级、重叠度） |
+| 数值校验 | 试用期上限、试用期工资比例、加班倍率、竞业限制期限与补偿、社保登记、年假天数、工资支付次数等数值是否超限 | 16 条确定性规则，纯函数，相同输入必然相同输出 | 只输出校验信号（一致 / 不一致 / 需补事实），不单独成为给用户看的结论 |
+| 缺项检查 | 《劳动合同法》第十七条规定的九类必备条款，合同正文有没有写 | 逐行匹配、不跨行拼接 | 只判"写没写"、不判合法性；第（九）类为兜底，不判、不进覆盖率分母 |
 
-存在性域的三级含义：A 级＝法条明文禁止（必须给出法条与合同原文证据），B 级＝需补事实或含裁量（必须给出法条与待补事实），C 级＝待确认。界面与报告按"规则判定 → A → B → C"的顺序混排展示。
+汇总时模型结论与数值校验按法条条号对账：模型说"没问题"而数值超限的降一级，数值落在法定区间而模型判有问题的也降一级，等级只降不升。对外只展示两层——"正文输出"（内部 A、B 级）与"需补事实"（内部 C 级），列表按影响度（高 / 中 / 低）分组排序。
+
+内部等级 A/B/C 仍然保留，只用于核验与降级链，不再直接展示：A 级＝法条明文禁止，必须同时给出法条编号、合同原文证据与法条原文摘抄；B 级＝需补事实或含裁量；C 级＝待确认。对外 A 与 B 合并成"正文输出"，C 为"需补事实"。
 
 追问机制同属这套设计：阻断项只有 3 个（用工主体类型、是否签订书面合同、合同期限），缺了不能出结论；其余是可补充事实，用户可以跳过。问什么由程序决定，模型只负责润色问句、从字段闭集里挑可补充项，输出经八道核验，不合格逐条退回固定问句。
 
-### 为什么规则和模型要分工
+### 为什么是模型判、规则校验
 
-数值问题有标准答案：合同期限三年以上，试用期最长六个月——这类判定写成纯函数即可复现、可审计、零调用成本，交给模型只会引入不确定性。语义问题写不成规则：合同里一句"乙方自愿放弃缴纳社会保险，甲方以现金补贴代替"是否构成风险，需要理解自然语言，规则枚举不完。
+数值问题有标准答案：合同期限三年以上，试用期最长六个月——这类判定写成纯函数即可复现、可审计、零调用成本，让模型去算只会引入不确定性。语义问题写不成规则：合同里一句"乙方自愿放弃缴纳社会保险，甲方以现金补贴代替"是否构成风险，需要理解自然语言，规则枚举不完。
 
-所以分工是：数值判定归规则，条款理解归模型，但模型每次发言后面都跟着程序核验——引用不得越出候选法条闭集，证据必须能在合同原文定位，缺依据的结论一律降级。规则不会幻觉；模型的幻觉被核验拦住。两层失效模式互不传染：模型不可用时，数值域与缺项域照常出结果，只有存在性域整体不跑。
+所以位置是：模型是主判定通道，负责读懂条款、给等级、写理由，并摘抄所引法条原文；规则不判语义，负责三件事——把可引用的法条原文与闭集递给模型、限制模型输出的形态、核算数值前提。模型每一条结论都要过六道程序核验：引用不得越出候选法条闭集，证据必须是合同原文中能定位的 10–100 字连续片段，A 级还要摘抄法条原文（必须是该条原文的连续子串），证据与候选片段重叠不足按降级处理。规则不会幻觉，模型会；核验拦住模型，对账拦住两边不一致。无模型时系统不发起核对，不给缺了主判定通道的残缺结论。
 
 ## 快速开始
 
@@ -81,12 +83,13 @@ python -m mla check --contract src/mla/data/evalsets/sample_contract.txt
 
 没有安装界面依赖（`[ui,files]`）时，`streamlit run` 与 Word 报告导出不可用；命令行核对与评测脚本不受影响。
 
-密钥按需配置：完整能力需要 DeepSeek 的模型 Key，语义向量检索另需 `DASHSCOPE_API_KEY`（阿里云）。模型 Key 有三处来源，优先级为 `.streamlit/secrets.toml` > 设置页保存到本机数据库 > 环境变量 `MLA_LLM_API_KEY`；在设置页配置一次后，之后每次登录自动沿用，不必反复填。不配 Key 时系统不装作能用，而是显式降级：
+密钥按需配置：完整能力需要 DeepSeek 的模型 Key，语义向量检索另需 `DASHSCOPE_API_KEY`（阿里云）。模型 Key 有三处来源，优先级为 `.streamlit/secrets.toml` > 设置页保存到本机数据库 > 环境变量 `MLA_LLM_API_KEY`；在设置页配置一次后，之后每次登录自动沿用，不必反复填。不配 Key 时系统不装作能用，而是显式拒绝或降级：
 
-- 关键字段抽取回退纯正则；
-- 条款级审查不执行，界面开关置灰；
-- 处理建议不生成，问答直接拒答，不降级成模板回答；
-- 法条检索自动回退 BM25，仍可离线使用。
+- 核对整体被拒绝：没有模型就不发起核对，不给缺了主判定通道的结论（服务层同一道门禁，CLI 退出码 2，界面提示去设置页配置）；
+- 不再是"条款审查不执行但规则照跑"：核对既然被拒绝，也就不存在半套结果；条款审查开关同时置灰；
+- 处理建议不生成，范围内问答同样拒绝，不降级成模板回答；
+- 登录、设置、企业信息、历史记录与既有报告导出不受影响；法条检索仍可回退 BM25 离线使用；
+- 离线评测与诊断用 `MLA_ALLOW_NO_LLM=1` 显式放行旧路径：抽取回退纯正则、规则照跑，仅供测试，不作为产品行为。
 
 ## 配置
 
@@ -107,7 +110,7 @@ python -m mla check --contract src/mla/data/evalsets/sample_contract.txt
 | `MLA_LLM_BASE_URL` | 接口地址 | `https://api.deepseek.com` |
 | `DASHSCOPE_API_KEY` | 阿里云密钥，用于 `qwen3.7-text-embedding-flash` 语义向量；也可放 `secrets.toml` 的 `[embedding]` 段 `api_key` | 空，未配置时检索回退 BM25 |
 | `MLA_EXTRACT_MODE` | 抽取档位：`auto`＝正则优先、模型补缺失字段；`llm`＝强制模型；`regex`＝纯正则 | `auto` |
-| `MLA_CLAUSE_REVIEW` | 条款级审查（存在性域）开关，`on` / `true` / `1` / `yes` 为开 | `on` |
+| `MLA_CLAUSE_REVIEW` | 条款判定（触发器召回 + 模型判定）开关，`on` / `true` / `1` / `yes` 为开 | `on` |
 | `MLA_EXTRACT_MAX_CHARS` | 发送给模型的合同正文字数上限 | `20000` |
 | `MLA_DB` | SQLite 数据库路径（账号/企业/合同/任务/日志） | 工作目录下的 `mla.sqlite3` |
 | `MLA_INDEX_DIR` | 向量缓存目录 | 工作目录下的 `data/index/` |
@@ -138,8 +141,8 @@ python -m mla admin promote --username 你的账号
 | 数据 | 规模 | 说明 |
 | --- | --- | --- |
 | 法源 | 143 条 | 劳动合同法、实施条例、劳动法、社保法、工资支付条例、年休假条例、工伤保险条例、司法解释等 |
-| 确定性规则 | 20 条 | 数值域判定，数据驱动 |
-| 条款触发器 | 33 条 | 存在性域召回 |
+| 确定性规则 | 16 条 | 数值校验，数据驱动 |
+| 条款触发器 | 33 条 | 条款召回（只召回，不判定） |
 | 必备条款规格 | 9 类 | 依据《劳动合同法》第十七条 |
 | 官方案例 | 37 条 | 附在结论后供参考 |
 | 评测数据 | 回归集：主流程 52 条、条款级 95 条（正样本 38、负样本 57）；留出集：非模板合同 12 条、问答 20 条 | 两类纪律不同：回归集每次改动必跑、只要求不退化；留出集不参与调优、用于报告能力。构造方式见 [docs/evaluation.md](docs/evaluation.md) |
@@ -149,10 +152,10 @@ python -m mla admin promote --username 你的账号
 
 | 集合 | 结果 | 95% CI | 口径 |
 | --- | --- | --- | --- |
-| 回归集（主流程 52 条） | 纯正则档与模型档的准确率、召回率均为 1.0000 | 准确率 [0.931, 1.000] | 该集合开发中反复修改过，满分属构造性覆盖，只能说明没有退化；纯正则只能为 20 条规则中的 7 条提供全部依赖字段，在 52 条合同上实际触发违规判定的规则为 4 条；接入模型抽取后 20 条全部可判 |
+| 回归集（主流程 52 条） | 纯正则档与模型档的准确率、召回率均为 1.0000 | 准确率 [0.931, 1.000] | 该集合开发中反复修改过，满分属构造性覆盖，只能说明没有退化；纯正则抽取不能为全部 16 条规则提供依赖字段，缺字段的规则按"判不了"输出，不会被算成合规；接入模型抽取后 16 条全部可判 |
 | 留出集（非模板合同 12 条，纯正则） | 准确率 0.4167、召回率 0.3636 | [0.193, 0.680] | 一次成型后未再改动，是留出数据；非模板写法才是对抽取稳健性的真实考验，且 12 条的 95% 区间很宽 |
 | 留出集（非模板合同 12 条，接入模型） | 准确率、召回率均为 1.0000 | [0.757, 1.000] | 同上，模型抽取档在留出集上的表现 |
-| 回归集（条款级 95 条） | 3 份对抗合同＋1 份全合规对照：38 条正样本覆盖 38/38，57 条负样本 A 级误报 0 | 覆盖率 [0.908, 1.000]；误报率上界 5.1% | 触发器与条款 gold 同步扩充，覆盖属构造性覆盖，不代表对未见合同的表现；陷阱为人工植入 |
+| 回归集（条款级 95 条） | 3 份对抗合同＋1 份全合规对照：38 条正样本覆盖 38/38，57 条负样本 A 级误报 0 | 覆盖率 [0.9082, 1.0000]；误报率上界 6.31% | 触发器与条款 gold 同步扩充，覆盖属构造性覆盖，不代表对未见合同的表现；陷阱为人工植入 |
 | 必备条款覆盖率（4 份合同） | 1.000 / 1.000 / 0.875 / 0.750 | 未给区间 | 无独立评测集，这组数字是逐类人工对照基线；覆盖率分母不含第（九）类兜底 |
 
 必须说明：回归集的满分是构造性覆盖，留出集只有 12 条与 20 条、置信区间很宽；两类数据都是单人标注，指标描述的是这批样本上的表现，不能当作泛化结论。指标定义、消融维度、置信区间与全部局限见 [docs/evaluation.md](docs/evaluation.md)。
@@ -176,7 +179,7 @@ src/mla/
   __main__.py
   data/                          随包分发的数据（只读）
     statutes/statutes.jsonl      143 条法源
-    rules/rules.yaml             20 条规则
+    rules/rules.yaml             16 条规则
     clauses/triggers.yaml        33 条触发器
     clauses/missing_terms.yaml   9 类必备条款
     cases/cases.jsonl            37 条官方案例
@@ -247,9 +250,9 @@ python scripts/eval_clauses.py --runs 1
 
 ## English
 
-A labor-contract risk review tool for small and micro businesses that have employees but no in-house legal staff. It checks a contract along three independent channels: 20 deterministic rules for numeric limits (probation length, overtime rates, non-compete terms), 33 clause triggers that recall suspicious wording for model review with six programmatic checks, and a coverage check against the nine mandatory clauses required by Article 17 of the Labor Contract Law.
+A labor-contract risk review tool for small and micro businesses that have employees but no in-house legal staff. Clause risk is judged by a model: 33 triggers recall suspicious wording, the model grades each candidate and quotes the cited statute text, and six programmatic checks gate every conclusion (closed citation set, evidence located in the contract, verbatim statute echo, evidence overlap). 16 deterministic rules compute numeric limits (probation length, overtime rates, non-compete terms) and only emit verification signals, reconciled against the model's findings; a coverage check covers the nine mandatory clauses required by Article 17 of the Labor Contract Law. Without a model, core review is refused rather than degraded.
 
-Every finding is bound to a statute identifier and must resolve to a real article in the bundled 143-entry statute set; suggestions without a citation are not generated. Rule verdicts use four states (violated, compliant, not applicable, undetermined) so that a missing fact is never silently reported as compliant.
+Every finding is bound to a statute identifier and must resolve to a real article in the bundled 143-entry statute set; suggestions without a citation are not generated. Missing facts are never silently reported as compliant: numeric rules keep four internal states, and items without enough facts are shown as "needs facts" instead of a conclusion.
 
 Evaluation data is split into a regression set (used to detect regressions, built alongside the rules) and a held-out set (never used for tuning, used to report capability), with Wilson 95% confidence intervals. Results should be read as development-set numbers, not as generalization claims.
 

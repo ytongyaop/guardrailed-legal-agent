@@ -410,17 +410,17 @@ task = CheckTask(
             statute_ids=("LCL-19",),
         ),
         CheckItem(
-            item_id="RC-R-WRITTEN-1M",
+            item_id="RC-R-OT-MONTH-36H",
             kind=ItemKind.UNKNOWN,
             clause_ref="",
-            finding="数值与第 10 条不一致，需人工复核",
-            source_id="LCL-10",
+            finding="数值与第 41 条不一致，需人工复核",
+            source_id="LL-41",
             severity=Severity.SOFT,
-            rule_id="R-WRITTEN-1M",
+            rule_id="R-OT-MONTH-36H",
             grade="C",
             source="rule_check",
-            note="数值与第 10 条不一致，需人工复核",
-            statute_ids=("LCL-10",),
+            note="数值与第 41 条不一致，需人工复核",
+            statute_ids=("LL-41",),
         ),
     ],
 )
@@ -449,7 +449,7 @@ def test_new_path_renders_each_conclusion_once(tmp_path: Path) -> None:
     reason = "该约定与第十九条关于试用期期限的规定不符"
     assert text.count(reason) == 1  # 二次合并会让它出现两次
     assert "数值复核·需人工" in text
-    assert "数值与第 10 条不一致，需人工复核" in text
+    assert "数值与第 41 条不一致，需人工复核" in text
 
 
 def test_old_path_still_merges_clause_findings(tmp_path: Path) -> None:
@@ -458,7 +458,7 @@ def test_old_path_still_merges_clause_findings(tmp_path: Path) -> None:
     assert not at.exception
     text = _markdown_text(at)
     assert "规则判定·确定性" in text  # 旧路径仍按规则条目渲染 items
-    assert text.count("数值与第 10 条不一致，需人工复核") == 1
+    assert text.count("数值与第 41 条不一致，需人工复核") == 1
 
 
 def test_report_new_path_lists_items_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
