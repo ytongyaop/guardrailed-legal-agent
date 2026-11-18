@@ -56,12 +56,17 @@ function makeRouter() {
 }
 
 async function mountView() {
+  return (await mountAt('/')).wrapper
+}
+
+/** 挂载到指定 URL（用于 `/check?task_id=…` 的刷新恢复路径）。 */
+async function mountAt(initialPath: string) {
   const router = makeRouter()
-  await router.push('/')
+  await router.push(initialPath)
   await router.isReady()
   const wrapper = mount(CheckView, { global: { plugins: [router] } })
   await flushPromises()
-  return wrapper
+  return { wrapper, router }
 }
 
 function failedJob(code: string, message: string, label: string): JobView {
@@ -80,6 +85,8 @@ beforeEach(() => {
   resetSession()
   forgetDetail()
   clearInput()
+  // 「追问已处理」记在 sessionStorage 里（整页刷新也要认）：用例之间必须清掉
+  sessionStorage.clear()
   // 勾选项不随 clearInput 复位（那是输入草稿），用例之间要显式还原
   checkSession.input.source = 'text'
   checkSession.input.clauseReview = true
@@ -396,5 +403,109 @@ describe('追问 / 可选补充 / 问答', () => {
     expect(mocked.postQuestion).toHaveBeenCalledWith('T-1', '试用期的风险？')
     expect(view.find('[data-testid="qa-sources"]').exists()).toBe(true)
     expect(view.find('[data-testid="qa-process"]').exists()).toBe(false)
+  })
+})
+
+describe('从 URL 恢复结果（整页刷新）', () => {
+  beforeEach(() => {
+    applyAuth(ADMIN)
+  })
+
+  /** 服务端提出追问的任务（`workflow.state === 'awaiting_facts'`）。 */
+  function awaitingDetail(taskId = 'T-1'): TaskDetail {
+    const base = detail()
+    return {
+      ...base,
+      task: { ...base.task, task_id: taskId },
+      workflow: {
+        state: 'awaiting_facts',
+        effective_contract_id: 'C-1',
+        ask_rounds: 1,
+        questions: ['员工月工资是多少？'],
+        ask_items: [{ slot_id: 'monthly_wage', question: '员工月工资是多少？', source: 'rule', hint: null }],
+        optional_fields: [],
+      },
+    }
+  }
+
+  it('URL 带 task_id：挂载即 GET /tasks/{id}，用同一套结果组件渲染且不重跑核对', async () => {
+    mocked.fetchTask.mockResolvedValue(detail())
+    const { wrapper, router } = await mountAt('/?task_id=T-1')
+
+    expect(mocked.fetchTask).toHaveBeenCalledWith('T-1')
+    expect(wrapper.find('[data-testid="verdict-headline"]').text()).toContain('发现 1 条确定冲突')
+    expect(wrapper.find('[data-testid="statute-label"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="disclaimer"]').exists()).toBe(true)
+    // 问答能力也在：刷新不等于只读
+    expect(wrapper.find('[data-testid="qa-panel"]').exists()).toBe(true)
+    expect(mocked.postCheck).not.toHaveBeenCalled()
+    expect(router.currentRoute.value.query['task_id']).toBe('T-1')
+  })
+
+  it('404：清掉 query 并提示「该结果不可访问或已删除」', async () => {
+    mocked.fetchTask.mockRejectedValue(
+      new ApiError({ status: 404, code: 'NOT_FOUND', message: '任务不存在' }),
+    )
+    const { wrapper, router } = await mountAt('/?task_id=T-GONE')
+
+    expect(mocked.fetchTask).toHaveBeenCalledWith('T-GONE')
+    expect(router.currentRoute.value.query['task_id']).toBeUndefined()
+    expect(wrapper.find('[data-testid="restore-notice"]').text()).toContain('该结果不可访问或已删除')
+    expect(wrapper.find('[data-testid="result"]').exists()).toBe(false)
+  })
+
+  it('核对完成后把任务号写进 URL（刷新才有东西可恢复）', async () => {
+    mocked.postCheck.mockResolvedValue({ ...taskJob(detail()), status: 'queued', result: null })
+    mocked.fetchJob.mockResolvedValue(taskJob(detail()))
+
+    const { wrapper, router } = await mountAt('/')
+    await wrapper.find('textarea').setValue('第一条 试用期六个月。')
+    await wrapper.find('[data-testid="start-check"]').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query['task_id']).toBe('T-1')
+  })
+
+  it('追问重跑后 URL 里的任务号换成新任务', async () => {
+    mocked.fetchTask.mockResolvedValue(awaitingDetail())
+    const { wrapper, router } = await mountAt('/?task_id=T-1')
+
+    // 恢复后追问面板仍在（能力恢复，不是只读快照）
+    expect(wrapper.find('[data-testid="ask-panel"]').exists()).toBe(true)
+
+    const rerun = awaitingDetail('T-2')
+    mocked.postAnswers.mockResolvedValue({ ...taskJob(rerun), status: 'queued', result: null })
+    mocked.fetchJob.mockResolvedValue(taskJob(rerun))
+
+    await wrapper.find('[data-testid="ask-panel"] input').setValue('6000')
+    const submit = wrapper.findAll('[data-testid="ask-panel"] button').find((node) => node.text().includes('提交'))
+    await submit?.trigger('click')
+    await flushPromises()
+
+    expect(mocked.postAnswers).toHaveBeenCalledWith('T-1', { answers: { monthly_wage: '6000' }, skip: false })
+    expect(router.currentRoute.value.query['task_id']).toBe('T-2')
+  })
+
+  it('已经跳过追问的任务：刷新后直接看结果，不再被追问面板挡住', async () => {
+    const awaiting = awaitingDetail()
+    mocked.fetchTask.mockResolvedValue(awaiting)
+    mocked.postAnswers.mockResolvedValue(taskJob(awaiting))
+    mocked.fetchJob.mockResolvedValue(taskJob(awaiting))
+
+    const first = await mountAt('/?task_id=T-1')
+    expect(first.wrapper.find('[data-testid="ask-panel"]').exists()).toBe(true)
+    const skip = first.wrapper
+      .findAll('[data-testid="ask-panel"] button')
+      .find((node) => node.text().includes('跳过'))
+    await skip?.trigger('click')
+    await flushPromises()
+    expect(first.wrapper.find('[data-testid="verdict-headline"]').exists()).toBe(true)
+    first.wrapper.unmount()
+
+    // 模拟整页刷新：内存会话全丢，只剩 URL 与 sessionStorage
+    forgetDetail()
+    const reloaded = await mountAt('/?task_id=T-1')
+    expect(reloaded.wrapper.find('[data-testid="ask-panel"]').exists()).toBe(false)
+    expect(reloaded.wrapper.find('[data-testid="verdict-headline"]').text()).toContain('发现 1 条确定冲突')
   })
 })

@@ -5,8 +5,9 @@
  * - `8021` 注入占位 Key 并打桩模型 → 核对链路完整跑通；
  * - `8022` 没有 Key → 用来验证 409 `NO_MODEL` 与页面门禁。
  *
- * 页面切换一律用侧栏点击（SPA 内跳转）：整页刷新会清掉内存会话，
+ * 页面切换一般用侧栏点击（SPA 内跳转）：整页刷新会清掉内存会话，
  * 而「去设置打开过程开关再回来看同一次结果」正是要验证的行为。
+ * 内存会话之外的恢复路径另有专项用例：`/check?task_id=…` 刷新后按 URL 重新拉详情。
  */
 
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
@@ -187,4 +188,65 @@ test('未配置模型：页面无输入区，直接调接口得到 409 NO_MODEL'
   const body = (await response.json()) as { error: { code: string; action: { type: string } | null } }
   expect(body.error.code).toBe('NO_MODEL')
   expect(body.error.action?.type).toBe('open_settings')
+})
+
+test('整页刷新：按 URL 里的任务号恢复同一次结果，条目数与过程层都与刷新前一致', async ({ page, request }) => {
+  await ensureAdmin(request, MODEL_URL)
+  await login(page, MODEL_URL)
+  await runCheck(page)
+
+  // 核对完成后 URL 记着本次任务号（`router.replace`，不新增历史记录）
+  await expect(page).toHaveURL(/[?&]task_id=T-/)
+
+  const headlineBefore = await page.getByTestId('verdict-headline').innerText()
+  const cardsBefore = await page.getByTestId('finding-card').count()
+  const processBefore = await page.getByTestId('process-layer').count()
+  expect(cardsBefore).toBeGreaterThan(0)
+
+  // 刷新不能重新发起核对（否则等于再花一次模型额度）
+  const checkPosts: string[] = []
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && req.url().includes('/api/checks')) checkPosts.push(req.url())
+  })
+
+  await page.reload()
+
+  await expect(page.getByTestId('verdict-headline')).toHaveText(headlineBefore)
+  await expect(page.getByTestId('finding-card')).toHaveCount(cardsBefore)
+  await expect(page.getByTestId('process-layer')).toHaveCount(processBefore)
+  expect(checkPosts).toHaveLength(0)
+
+  // 第二层仍默认折叠；追问已处理过，刷新后不再挡住结果；问答入口还在
+  await expect(page.getByTestId('statute-fold').first().locator('.fold-text')).toBeHidden()
+  await expect(page.getByTestId('ask-panel')).toHaveCount(0)
+  await expect(page.getByTestId('qa-panel')).toBeVisible()
+
+  // 过程开关由服务端决定：打开后刷新，第三层照样出现，条目数不变
+  await page.getByRole('menuitem', { name: '设置' }).click()
+  await page.locator('.el-form-item').filter({ hasText: '显示查询路径与判定来源' }).locator('.el-switch').click()
+  await expect(page.getByText('界面设置已保存。')).toBeVisible()
+  await page.getByRole('menuitem', { name: '合同核对' }).click()
+  await expect(page.getByTestId('process-layer')).toBeVisible()
+
+  await page.reload()
+  await expect(page.getByTestId('process-layer')).toBeVisible()
+  await expect(page.getByTestId('verdict-headline')).toHaveText(headlineBefore)
+  await expect(page.getByTestId('finding-card')).toHaveCount(cardsBefore)
+
+  // 复位开关，避免影响重复运行时的观感
+  await page.getByRole('menuitem', { name: '设置' }).click()
+  await page.locator('.el-form-item').filter({ hasText: '显示查询路径与判定来源' }).locator('.el-switch').click()
+  await expect(page.getByText('界面设置已保存。')).toBeVisible()
+})
+
+test('URL 里的任务号读不到：清掉 query 并提示「该结果不可访问或已删除」', async ({ page, request }) => {
+  await ensureAdmin(request, MODEL_URL)
+  await login(page, MODEL_URL)
+
+  await page.goto(`${MODEL_URL}/check?task_id=T-NOT-EXIST`)
+
+  await expect(page.getByTestId('restore-notice')).toContainText('该结果不可访问或已删除')
+  await expect(page).toHaveURL(/\/check$/)
+  await expect(page.getByTestId('result-placeholder')).toBeVisible()
+  await expect(page.getByTestId('check-form')).toBeVisible()
 })

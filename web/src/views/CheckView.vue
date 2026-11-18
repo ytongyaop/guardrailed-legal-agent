@@ -10,9 +10,13 @@
  *
  * 结果详情存在内存会话（`stores/checkSession`）里：去设置页打开过程开关再回来，
  * 页面会重新 `GET /tasks/{id}`，看到的是同一次核对（不重跑），第三层按新开关出现。
+ *
+ * 内存会话扛不过整页刷新，所以每次拿到结果都把任务号写进 URL（`/check?task_id=T-…`，
+ * `router.replace` 不污染历史栈）：刷新后按 URL 里的任务号重新拉详情，渲染的还是同一套组件，
+ * 追问 / 可选补充 / 问答都还在；任务号不可读（404/403）就清掉 query 并说明原因。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import {
   deleteContract,
@@ -48,6 +52,7 @@ import {
 import { isAdmin, useSession } from '@/stores/session'
 
 const session = useSession()
+const route = useRoute()
 const router = useRouter()
 
 const input = checkSession.input
@@ -64,6 +69,12 @@ const jobFailure = ref<ApiError | null>(null)
 const formNotice = ref('')
 const parseFailure = ref<ApiError | null>(null)
 const parsing = ref(false)
+
+/** 从 URL 恢复：`/check?task_id=T-…` 挂载时拉详情，失败时清 query 并说明原因。 */
+const restoring = ref(false)
+const restoreTarget = ref('')
+const restoreFailure = ref<ApiError | null>(null)
+const restoreNotice = ref('')
 
 const contracts = ref<ContractSummary[]>([])
 const contractsLoading = ref(false)
@@ -96,6 +107,51 @@ function abortRunning(): void {
   busy.value = false
 }
 
+/** URL 里的任务号（不合法的 query 一律当没有）。 */
+function queryTaskId(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+/**
+ * 把任务号写进 URL：`router.replace` 不新增历史记录，浏览器后退仍是「上一步」而不是上一份结果。
+ * 传 null 表示清掉这一项（其余 query 原样保留）。
+ */
+async function syncTaskId(taskId: string | null): Promise<void> {
+  const next = taskId ?? ''
+  if (queryTaskId(route.query['task_id']) === next) return
+  await router.replace({ query: { ...route.query, task_id: next === '' ? undefined : next } })
+}
+
+/** 按 URL 拉一份详情：成功后会话、URL 都是同一个任务号；读不到就清 query 并说明。 */
+async function loadFromUrl(taskId: string): Promise<void> {
+  restoreTarget.value = taskId
+  restoring.value = true
+  restoreFailure.value = null
+  restoreNotice.value = ''
+  try {
+    const loaded = await fetchTask(taskId)
+    rememberDetail(loaded)
+    await syncTaskId(loaded.task.task_id)
+  } catch (error) {
+    const failure = toApiError(error)
+    // 越权与不存在服务端都回 404（不区分，避免探测他人任务）；会话失效另有 403
+    if (failure.status === 404 || failure.status === 403) {
+      forgetDetail()
+      await syncTaskId(null)
+      restoreNotice.value = '该结果不可访问或已删除'
+      return
+    }
+    restoreFailure.value = failure
+  } finally {
+    restoring.value = false
+  }
+}
+
+function retryRestore(): void {
+  if (restoreTarget.value === '') return
+  void loadFromUrl(restoreTarget.value)
+}
+
 /** 发起一次异步操作并轮询到结束；返回结束时的 job（被新操作取代时返回 null）。 */
 async function runJob(start: () => Promise<JobView>): Promise<JobView | null> {
   abortRunning()
@@ -121,8 +177,15 @@ async function runJob(start: () => Promise<JobView>): Promise<JobView | null> {
       jobFailure.value = settled.error ? apiErrorOf(settled.error) : ApiError.fromStatus(500)
       return settled
     }
-    if (isTaskDetail(settled.result)) rememberDetail(settled.result)
-    else if (isQaResult(settled.result)) rememberQa(settled.result)
+    if (isTaskDetail(settled.result)) {
+      rememberDetail(settled.result)
+      // 追问/补充事实重跑会换新任务号：URL 跟着换，刷新后还是这份新结果
+      await syncTaskId(settled.result.task.task_id)
+    } else if (isQaResult(settled.result)) {
+      rememberQa(settled.result)
+      // 问答挂在本份核对下面：URL 保持父任务号
+      await syncTaskId(settled.result.parent_task_id)
+    }
     return settled
   } catch (error) {
     if (token === runToken) jobFailure.value = toApiError(error)
@@ -171,6 +234,7 @@ async function onFilePicked(event: Event): Promise<void> {
 async function startCheck(): Promise<void> {
   formNotice.value = ''
   jobFailure.value = null
+  restoreNotice.value = ''
   if (input.source === 'history') {
     if (input.contractId === '') {
       formNotice.value = '请先选择一份历史合同。'
@@ -290,11 +354,15 @@ async function refreshDetail(): Promise<void> {
   const current = detail.value
   if (current === null) return
   try {
-    rememberDetail(await fetchTask(current.task.task_id))
+    const latest = await fetchTask(current.task.task_id)
+    rememberDetail(latest)
+    // 从侧栏回来时 URL 已被清成 `/check`：把任务号补回去，刷新才有东西可恢复
+    await syncTaskId(latest.task.task_id)
   } catch (error) {
     const failure = toApiError(error)
-    if (failure.status === 404) {
+    if (failure.status === 404 || failure.status === 403) {
       forgetDetail()
+      await syncTaskId(null)
       formNotice.value = '上一次的核对结果已失效（服务进程重启或该任务未存档），请重新提交合同。'
       return
     }
@@ -304,6 +372,13 @@ async function refreshDetail(): Promise<void> {
 
 onMounted(async () => {
   if (input.source === 'history') void loadContracts()
+  const urlTaskId = queryTaskId(route.query['task_id'])
+  if (urlTaskId !== '') {
+    // 刷新恢复：URL 里有任务号就以它为准（同一份结果只刷新，换一份就重新拉）
+    if (detail.value?.task.task_id === urlTaskId) await refreshDetail()
+    else await loadFromUrl(urlTaskId)
+    return
+  }
   await refreshDetail()
 })
 
@@ -315,6 +390,17 @@ onBeforeUnmount(() => {
 <template>
   <section class="page check-page">
     <page-header title="合同核对" />
+
+    <!-- URL 里的结果读不到（404/403）：已经清掉任务号，这里说明原因 -->
+    <el-alert
+      v-if="restoreNotice"
+      class="page-card"
+      type="warning"
+      :closable="false"
+      show-icon
+      :title="restoreNotice"
+      data-testid="restore-notice"
+    />
 
     <!-- 门禁 1：没有模型就什么都不渲染（不给残缺结论，也不给点了会失败的按钮） -->
     <el-card v-if="!modelReady" class="page-card" shadow="never" data-testid="no-model-gate">
@@ -448,7 +534,17 @@ onBeforeUnmount(() => {
 
       <div class="check-main">
         <el-card class="page-card result-card" shadow="never">
-          <div v-if="busy" class="job-progress" data-testid="job-progress">
+          <div v-if="restoring && detail === null" class="job-progress" data-testid="restore-loading">
+            <p class="job-status">正在读取这次核对的结果……</p>
+            <el-skeleton :rows="5" animated />
+          </div>
+          <error-notice
+            v-else-if="restoreFailure"
+            :error="restoreFailure"
+            data-testid="restore-error"
+            @retry="retryRestore"
+          />
+          <div v-else-if="busy" class="job-progress" data-testid="job-progress">
             <p class="job-status">{{ jobStatusText(job) }}</p>
             <el-skeleton :rows="5" animated />
           </div>

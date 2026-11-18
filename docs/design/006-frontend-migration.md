@@ -106,7 +106,7 @@ web/tests/                          # Vitest；Playwright 仅开发依赖
 | `/setup` | setup、setup/admin | `_init_screen` 首次管理员初始化 |
 | `/login`（登录/注册页签、忘记密码说明） | setup、login、register | `_login_screen`、`_forgot_password_help` |
 | 全局首次引导对话框 | me、onboarding | `_onboarding_dialog`；未确认每次登录仍出现 |
-| `/check` | me、contracts、parse、checks、jobs、tasks、answers、optional-facts、qa、report、settings/ui | `_page_check`、`_collect_input`、`_check_form`、`_ask_panel`、`_render_optional_facts`、`_render_task`、`_render_qa_panel`；无模型时不渲染输入/核对/追问 |
+| `/check` | me、contracts、parse、checks、jobs、tasks、answers、optional-facts、qa、report、settings/ui | `_page_check`、`_collect_input`、`_check_form`、`_ask_panel`、`_render_optional_facts`、`_render_task`、`_render_qa_panel`；无模型时不渲染输入/核对/追问；任务号写入 URL（/check?task_id=…），整页刷新按 URL 恢复同一结果，不重复发起核对；不可读时清 query 并提示。 |
 | `/enterprise` | enterprise 三端点 | `_page_enterprise`，含必选校验与删除确认 |
 | `/contracts` | contracts 列表/读取/删除 | `_page_contracts`，含文件名/正文搜索、原文与删除确认 |
 | `/history` | history、trend、删除 | `_page_history` 列表、筛选、软删、统计趋势；分页不改变最近 200 条口径 |

@@ -23,6 +23,7 @@ npm --prefix web run test:e2e # Playwright（真实后端进程 + 本机 Edge）
   否则后端 `_same_origin` 会因 `Origin` 与 `Host` 不一致返回 403 `CSRF_FAILED`。
 - 启动后端：`uvicorn mla.api.app:create_app --factory --reload --port 8000`。
 - 会话与 CSRF token 只存内存；刷新页面会重新请求 `/auth/me`，不写 localStorage。
+- 核对结果通过 URL 的 `task_id` 恢复：刷新或分享链接不会重复调用模型；「已跳过追问」只用 sessionStorage 记任务号，不存结果内容。
 - 所有中文文案按 `scripts/check_ui_text.py` 的口径写：简体、全角标点、不用直角引号，
   `npm --prefix web run test` 里的 `ui-text.spec.ts` 会扫一遍源码。
 
