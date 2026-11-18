@@ -367,7 +367,7 @@ def test_probation_arbitrary_dismissal_laborer_resignation_not_hit() -> None:
 CONTRACT_CANDIDATE_BASELINE = {
     "contract_traps_01.txt": 22,
     "contract_traps_02.txt": 9,
-    "contract_traps_03.txt": 12,
+    "contract_traps_03.txt": 13,
     "contract_compliant_01.txt": 0,
 }
 

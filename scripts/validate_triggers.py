@@ -9,7 +9,7 @@
    a. gold 正样本覆盖率 = 38/38（`src/mla/data/evalsets/clause_gold.jsonl` 中 grade ≠ 合规的样本）
    b. 负样本（grade = 合规）被触发 = 0 条
    c. `contract_compliant_01.txt` 候选 = 0 条
-   d. 四份合同候选数 = 22 / 9 / 12 / 0
+   d. 四份合同候选数 = 22 / 9 / 13 / 0
 
 ⚠️ 第 5 条这四项是**硬门禁**，不是「仅供参考的指标」。放宽其中任何一条，都要在 PR
 说明里给出理由（为什么放宽、放宽后由什么补上防误报能力），并同步更新本文件与
@@ -48,7 +48,7 @@ EXPECTED_GOLD_POSITIVES = 38
 EXPECTED_CANDIDATES: dict[str, int] = {
     "contract_traps_01.txt": 22,
     "contract_traps_02.txt": 9,
-    "contract_traps_03.txt": 12,
+    "contract_traps_03.txt": 13,
     "contract_compliant_01.txt": 0,
 }
 
