@@ -8,7 +8,7 @@ A guardrailed agent for labor-contract risk review: model-led clause judgment ch
 
 面向小微企业（有雇工、缺专职法务）的劳动合同风险辅助核对系统。受限智能体（guardrailed agent）架构：流程由确定性代码固定，模型负责读懂合同并逐条判定，规则与脚本负责给法条原文、限制输出形态、核算数值前提；模型每一条结论都要通过程序核验才会呈现给用户。
 
-技术栈：Python 3.11+（开发环境 3.14）· LangGraph 编排（13 个固定节点）· Streamlit 1.66 界面 · SQLite 3.50 存储 · DeepSeek `deepseek-chat`（OpenAI 兼容接口）· 阿里云 `qwen3.7-text-embedding-flash` 语义向量（1024 维，无 Key 自动回退 BM25）· python-docx 导出 Word 报告。
+技术栈：Python 3.11+（开发环境 3.14）· LangGraph 编排（13 个固定节点）· FastAPI 同源 API + Vue 3 / Element Plus 单页界面（Vite 构建）· SQLite 3.50 存储 · DeepSeek `deepseek-chat`（OpenAI 兼容接口）· 阿里云 `qwen3.7-text-embedding-flash` 语义向量（1024 维，无 Key 自动回退 BM25）· python-docx 导出 Word 报告。
 
 ## 它解决什么问题
 
@@ -48,23 +48,29 @@ A guardrailed agent for labor-contract risk review: model-led clause judgment ch
 
 ## 快速开始
 
-环境要求：Python 3.11+。
+环境要求：Python 3.11+、Node 20+（只有构建界面才需要）。
 
 ```bash
 # 仅命令行（规则核对、评测脚本）
 pip install -e .
 
-# 含界面与报告导出（完整功能）
-pip install -e ".[ui,files]"
+# 含 Web 服务与报告导出（完整功能）：FastAPI + uvicorn + python-docx
+pip install -e ".[web,files]"
+
+# 构建界面（产物在 web/dist，后端同源托管）
+npm --prefix web ci
+npm --prefix web run build
 ```
 
-装好后启动界面：
+装好后启动服务：
 
 ```bash
-streamlit run src/mla/ui/app.py
+uvicorn mla.api.app:create_app --factory --port 8000
 ```
 
-浏览器打开命令行输出的地址（默认 8501 端口）。库里还没有管理员账号时，页面会先显示初始化表单，填用户名、密码、企业名称，提交后直接进入主界面，不用再登录一次。
+浏览器打开 <http://127.0.0.1:8000>（默认只绑回环地址，不开跨域）。库里还没有管理员账号时，页面会先显示初始化表单，填用户名、密码、企业名称，提交后直接进入主界面，不用再登录一次。
+
+开发态另开一个终端跑 `npm --prefix web run dev`（Vite :5173，把 `/api` 代理到 8000），页面改动热更新；不启动 Vite 时后端直接托管 `web/dist` 的构建产物。
 
 - 密码至少 8 位：注册、首次初始化、改密码用同一条下限。
 - 首次登录会展示一次使用说明与免责声明，看过一次后不再弹出。
@@ -81,7 +87,7 @@ python -m mla check --contract src/mla/data/evalsets/sample_contract.txt
 
 `init` 默认创建用户名为 admin 的管理员；不传 `--admin-password` 时自动生成十六位随机口令，建号后只打印一次，请立即记录（之后不再显示）；自己指定口令时至少 8 位，不足直接报错退出。`check` 对仓库自带示例合同跑一次命令行核对，不依赖界面。
 
-没有安装界面依赖（`[ui,files]`）时，`streamlit run` 与 Word 报告导出不可用；命令行核对与评测脚本不受影响。
+没有安装 `[web]` 依赖又没有构建产物时，`uvicorn` 起不来或页面返回 503 与构建提示；Word 报告导出需要 `[files]`（`python-docx`），命令行核对与评测脚本不受影响。
 
 密钥按需配置：完整能力需要 DeepSeek 的模型 Key，语义向量检索另需 `DASHSCOPE_API_KEY`（阿里云）。模型 Key 在**设置页 → 「测试并保存」**里配置（没有界面时用 `mla auth set deepseek`）：保存前会发一次 `GET /models` 校验，不通过不落盘；保存成功后写入当前操作系统用户的凭据文件，之后每次启动自动沿用。环境变量 `MLA_LLM_API_KEY` 可临时覆盖凭据文件（优先级更高，且不写任何文件）。不配 Key 时系统不装作能用，而是显式拒绝或降级：
 
@@ -151,7 +157,7 @@ python -m mla admin promote --username 你的账号
 | 必备条款规格 | 9 类 | 依据《劳动合同法》第十七条 |
 | 官方案例 | 37 条 | 附在结论后供参考 |
 | 评测数据 | 回归集：主流程 52 条、条款级 95 条（正样本 38、负样本 57）；留出集：非模板合同 12 条、问答 20 条 | 两类纪律不同：回归集每次改动必跑、只要求不退化；留出集不参与调优、用于报告能力。构造方式见 [docs/evaluation.md](docs/evaluation.md) |
-| 测试 | 832 条（本版实测 831 passed / 1 skipped） | 全部离线可复现：测试强制纯正则抽取并屏蔽真实 Key |
+| 测试 | Python 926 条（本版实测 925 passed / 1 skipped），前端另有 vitest 单测与 Playwright E2E | 全部离线可复现：测试强制纯正则抽取并屏蔽真实 Key；E2E 用打桩模型 |
 
 评测结果（口径与数字同样重要，务必连着读）：
 
@@ -176,8 +182,10 @@ src/mla/
   graph/       build.py nodes.py state.py
   services/    tasks.py report.py clause_review.py asking.py qa_agent.py
                retrieval.py drafting.py auth.py
-  ui/          app.py trend.py
-               assets/logo.svg
+  api/         app.py deps.py errors.py jobs.py sessions.py permissions.py
+               presenters.py schemas.py
+    routes/    setup.py auth.py enterprise.py contracts.py settings.py admin.py
+               checks.py history.py report.py
   eval/        metrics.py ablation.py
   cli.py
   config.py
@@ -189,12 +197,15 @@ src/mla/
     clauses/missing_terms.yaml   9 类必备条款
     cases/cases.jsonl            37 条官方案例
     evalsets/                    回归集 52 ＋ 95，留出集 12 ＋ 20
+web/            Vue 3 + Element Plus 前端（规格 006）
+  src/          views/ components/ api/ stores/ composables/ router/ utils/
+  tests/        vitest 单测（DTO 渲染、路由守卫、文案口径走 Python 脚本）
+  e2e/          Playwright（真实后端进程 + 打桩模型）
 scripts/        校验与评测脚本
-tests/          832 条测试
-docs/           architecture.md evaluation.md
+tests/          926 条测试（Python；前端单测另计）
+docs/           architecture.md evaluation.md design/
 .github/        workflows/ci.yml · dependabot.yml · pull_request_template.md · ISSUE_TEMPLATE/
-.streamlit/     config.toml secrets.toml.example
-mla.sqlite3     运行后在工作目录生成（不入库）
+.streamlit/     secrets.toml.example（只剩 embedding 的 Key 指引，程序不读 [llm]）
 LICENSE
 CONTRIBUTING.md
 SECURITY.md
@@ -215,6 +226,9 @@ pytest --cov=mla --cov-fail-under=75
 ruff check src tests scripts
 pyright src
 python scripts/check_ui_text.py
+npm --prefix web run typecheck
+npm --prefix web run test -- --run
+npm --prefix web run build
 python scripts/validate_statutes.py src/mla/data/statutes/statutes.jsonl
 python scripts/validate_rules.py
 python scripts/validate_triggers.py
@@ -224,7 +238,7 @@ python scripts/run_eval.py --extract regex
 python scripts/eval_clauses.py --runs 1
 ```
 
-`validate_*` 脚本分别校验法源、规则、触发器、必备条款规格与条款 gold 的结构一致性——数据文件是判定依据的一部分，数据坏了等于代码坏了。测试离线可复现：`tests/conftest.py` 强制 `MLA_EXTRACT_MODE=regex` 并屏蔽真实 Key；覆盖率下限 75%，与 CI 一致。`pyright` 只检 `src`，`tests` 里有既有的类型报错，不属于本次门禁范围。
+`validate_*` 脚本分别校验法源、规则、触发器、必备条款规格与条款 gold 的结构一致性——数据文件是判定依据的一部分，数据坏了等于代码坏了。测试离线可复现：`tests/conftest.py` 强制 `MLA_EXTRACT_MODE=regex` 并屏蔽真实 Key；覆盖率下限 75%，与 CI 一致。`pyright` 只检 `src`，`tests` 里有既有的类型报错，不属于本次门禁范围。前端门禁是类型检查 + vitest + 构建；`check_ui_text.py` 同时扫 Python 文案与 `web/src/**/*.{vue,ts,css}`（文案规则只有这一份实现）。改到前端交互的还要跑 `npm --prefix web run test:e2e`（本机默认 Edge，CI 用 Chromium）。
 
 ## 隐私与边界
 
@@ -251,7 +265,7 @@ python scripts/eval_clauses.py --runs 1
 
 ## 版本
 
-当前版本 0.3.2（以 `src/mla/__init__.py` 与 [Releases](https://github.com/ytongyaop/guardrailed-legal-agent/releases) 为准）。
+当前版本 0.4.0（以 `src/mla/__init__.py` 与 [Releases](https://github.com/ytongyaop/guardrailed-legal-agent/releases) 为准）。0.4.0 把界面从 Streamlit 换成 Vue 3 + FastAPI，Streamlit 相关代码与依赖已删除。
 
 详细变更见 [CHANGELOG.md](CHANGELOG.md)，版本号遵循语义化版本。
 
@@ -263,7 +277,7 @@ Every finding is bound to a statute identifier and must resolve to a real articl
 
 Evaluation data is split into a regression set (used to detect regressions, built alongside the rules) and a held-out set (never used for tuning, used to report capability), with Wilson 95% confidence intervals. Results should be read as development-set numbers, not as generalization claims.
 
-Requirements: Python 3.11+. Install with `pip install -e ".[ui,files]"`, then run `streamlit run src/mla/ui/app.py`; the first launch asks you to create an administrator account. Tests run fully offline (`pytest`).
+Requirements: Python 3.11+ (Node 20+ only to build the UI). Install with `pip install -e ".[web,files]"`, build the frontend with `npm --prefix web ci && npm --prefix web run build`, then start `uvicorn mla.api.app:create_app --factory --port 8000` and open http://127.0.0.1:8000; the first launch asks you to create an administrator account. There is no Streamlit UI since 0.4.0. Tests run fully offline (`pytest`, `npm --prefix web run test -- --run`).
 
 Not legal advice. The tool reports conflicts with specific statutory provisions and points to the text; it does not determine whether a clause is invalid.
 

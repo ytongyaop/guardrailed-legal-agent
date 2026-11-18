@@ -1,6 +1,6 @@
 """`tests/api` 的共用小工具：初始化账号、登录、发请求、断言错误体。
 
-刻意不 import 任何界面模块（`mla.ui` 会在 0.4.0 批次 6 删除）；只依赖 `httpx` 客户端行为。
+刻意不 import 任何界面模块（0.4.0 批次 6 已删除 `src/mla/ui/`）；只依赖 `httpx` 客户端行为。
 """
 
 from __future__ import annotations

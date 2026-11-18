@@ -6,9 +6,38 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-18
+
+界面从 Streamlit 单进程换成 **FastAPI 同源 API + Vue 3 单页应用**（规格 006），判定、数据与规则一律未动。
+
+### Added
+
+- `src/mla/api/`：FastAPI 应用工厂（`uvicorn mla.api.app:create_app --factory`），同源 API + 生产静态托管（`/assets`、`web/dist` 与 `src/mla/api/static/` 的 SPA 回退）、JSON 错误体、请求号、同源校验
+- 不透明随机会话 + 服务端内存会话（30 分钟空闲 / 12 小时绝对过期）+ CSRF token，登录态写操作校验 `X-CSRF-Token`
+- 核对改为异步：`POST /checks` 返回 202 + `job_id`，进程内单 worker 轮询 job 状态；job 与内存任务重启即失效
+- `web/`：Vue 3 + Element Plus + Vite 前端，页面与旧界面逐条对应（初始化 / 登录、核对、企业档案、合同、历史、设置、5 个管理页签）
+- 核对结果**存档开关**：`archive=true`（默认）进企业档案、同企业可见；`archive=false` 只自己可见（`shared` / `owner_id` 两列，旧记录补默认值不回填）
+- 首次核对自动落库：不再需要"先跑一次再保存"，任务与合同一次写入
+- 结果页三层（结论 / 依据 / 过程）与过程开关 `ui.show_query_path` 在 API DTO 与前端同时落地，前端不做判定、计数、分级或排序
+- CI 增加 Node 与前端步骤：`npm ci`、`vue-tsc` 类型检查、vitest 单测、`npm run build`、Playwright E2E（CI 用 Chromium）；wheel 构建前先构建前端并把产物复制进 `src/mla/api/static/`
+
+### Changed
+
+- 启动方式改为 `uvicorn mla.api.app:create_app --factory --port 8000`，默认只绑回环地址、不开跨域；开发态另跑 `npm --prefix web run dev`（Vite :5173，`/api` 代理到 8000）
+- 展示层 helper 的唯一位移到 `api/presenters.py`（原来在 `ui/app.py`），API 与前端共用一份口径
+- 文案门禁 `scripts/check_ui_text.py` 的扫描面扩到 `web/src/**/*.{vue,ts,css}`（跳注释与 `components.d.ts`）；`web/tests/ui-text.spec.ts` 删除，规则只留这一份实现
+- `pyproject.toml`：删除 `ui` extra；`pydantic` 与 `python-docx` 挂到 `web` extra（API 直接依赖 pydantic，报告导出依赖 python-docx）；`files` extra 不变
+- 项目结构文档、README、CONTRIBUTING 的门禁命令同步为"Python + 前端"两套
+
+### Removed
+
+- `src/mla/ui/`（`app.py`、`trend.py`、`assets/logo.svg`）与 Streamlit / pandas / altair 依赖
+- 依赖 Streamlit 的测试：`test_ui_smoke.py`(43)、`test_ui_setup.py`(43)、`test_ui_enterprise.py`(6)、`test_result_ia.py`(20)、`test_history_filter.py`(3)、`test_trend.py`(4)，以及 `test_model_first.py` 第 8 节的 4 条 AppTest 渲染用例；核心断言已在 `tests/api/` 与 `web/tests/` 覆盖，没覆盖的两处（趋势标签去重与 12 点窗口、企业三项必选与事实预填）迁到 `tests/api/test_trend.py` 与 `tests/api/test_enterprise.py`
+- `.streamlit/config.toml`（只服务 Streamlit 主题）；`.streamlit/secrets.toml.example` 保留，它仍是 `[embedding]` Key 的配置说明
+
 ### Fixed
 
-- 0.4.0 开发中：核对结果按 URL 恢复，整页刷新不再丢失结果（此前刷新后需重新核对，会重复消耗模型额度）
+- 核对结果按 URL 恢复，整页刷新不再丢失结果（此前刷新后需重新核对，会重复消耗模型额度）
 
 ## [0.3.2] - 2026-11-18
 

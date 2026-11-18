@@ -17,11 +17,10 @@
 3. 法条一律以 `StatuteView` 出参：`label` 是可读法名条号，查不到时是
    「法源库未找到该条文」，内部 ID 只出现在 `id` 字段里供前端做 key。
 
-**依赖方向**：本模块是展示层 helper 的唯一实现，`mla.ui.app` 反过来 import 它（旧函数名
-保留为别名，页面调用点不动）。反向不行：`api` 不得 import `ui`——`mla.ui.app` 在 import 期
-就执行 `st.set_page_config()` 并依赖 streamlit / altair，API 与基线快照都不能带上界面子包
-（见 `tests/api/test_legacy_snapshot.py` 的 import 守卫）。所以这里只 import `domain` /
-`services` / `adapters` 与 `schemas`（pydantic），**不 import 任何 streamlit 相关模块**。
+**依赖方向**：本模块是展示层 helper 的唯一实现（0.4.0 前由 `src/mla/ui/app.py` 反过来 import 它，
+Streamlit 界面已删除，现在由 `api/routes/*` 直接调用）。反向不行：`api` 不得 import 任何界面框架——它只
+import `domain` / `services` / `adapters` 与 `schemas`（pydantic），基线快照因此不带界面依赖
+（见 `tests/api/test_legacy_snapshot.py` 的 import 守卫）。
 """
 
 from __future__ import annotations

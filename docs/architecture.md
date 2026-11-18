@@ -11,9 +11,26 @@
 | adapters | `src/mla/adapters` | 接口实现：SQLite 持久化（persist）、正则抽取（extract）、模型抽取（extract_llm）、BM25 / 向量 / 混合检索（rag）、DeepSeek 调用（llm）、Word 与 PDF 解析（files）、凭据文件读写与权限收紧（auth_file）、语义向量（embedding） |
 | graph | `src/mla/graph` | LangGraph 状态图：13 个固定节点、状态定义与条件路由 |
 | services | `src/mla/services` | 用例编排：账号与权限（auth）、凭据解析（credentials）、运行期引导与迁移（bootstrap）、检索装配（retrieval）、核对任务（tasks）、条款审查（clause_review）、共识层对账（consensus）、追问（asking）、生成式表述与来源校验（drafting）、问答循环（qa_agent）、Word 报告（report） |
-| ui | `src/mla/ui` | Streamlit 界面（app） |
+| api | `src/mla/api` | HTTP 层：应用工厂与同源校验（app）、依赖注入与会话（deps、sessions）、权限矩阵（permissions）、错误体（errors）、异步任务登记（jobs）、DTO（schemas）、展示口径（presenters）、端点（routes/*） |
+| web | `web/` | Vue 3 + Element Plus 单页界面（Vite 构建）：只渲染 API 给的 DTO，不做判定、计数、分级与排序；生产态由 FastAPI 同源托管构建产物 |
 
 依赖方向单向：外层依赖内层，domain 不 import 任何 adapter。节点函数用闭包绑定依赖集合（`Deps` 实例不进 state），单元测试注入假实现即可离线跑全图；节点返回状态增量，不原地修改。
+
+## 界面层：FastAPI + Vue
+
+0.4.0 起界面分两半，界面框架不进内层：`api` 只把 `domain` / `services` / `adapters` 的产物转成 DTO，`web` 只渲染 DTO。
+
+| 位置 | 内容 |
+| --- | --- |
+| `src/mla/api/app.py` | 应用工厂 `create_app()`（`uvicorn mla.api.app:create_app --factory`）：同源校验中间件（带 `Origin` 时比对 `Host`）、请求号、错误处理器、路由挂载、静态托管与 SPA 回退。默认只绑回环地址、不开 CORS |
+| `src/mla/api/deps.py`、`sessions.py`、`permissions.py` | 每请求的仓储与会话解析、内存会话表（30 分钟空闲 / 12 小时绝对过期）、能力矩阵（页面看不到不等于接口能调，授权在服务端） |
+| `src/mla/api/jobs.py` | 核对链路的进程内任务登记（单 worker），`POST /checks` 返回 202 + `job_id`；进程重启即失效，已落库历史不受影响 |
+| `src/mla/api/schemas.py` | 出入口 DTO（pydantic）；`presenters.py` 是展示口径的唯一位（结论三层拆分、时间与耗时文案、历史筛选与趋势、问答上下文），`web` 不补算 |
+| `src/mla/api/routes/` | setup / auth / enterprise / contracts / settings / admin / checks / history / report 九组端点；未知 `/api/*` 一律 JSON 404 |
+| `web/src/` | `views/` 页面、`components/`（结果页三层与折叠器）、`api/`（契约客户端与错误归一）、`stores/` 会话、`router/` 守卫；ECharts 只在展开趋势图时按需加载 |
+| `web/tests/`、`web/e2e/` | vitest 单测（DTO 渲染、路由守卫）与 Playwright E2E（真实后端进程 + 打桩模型，两个端口验证「有模型 / 无模型」两条路径） |
+
+同源是这条链的前提：开发态 Vite 把 `/api` 代理到 8000 且必须 `changeOrigin: false`，生产态由同一个 FastAPI 进程托管页面，因此不需要 CORS，也不接受跨站写请求。
 
 ## 数据与存储
 

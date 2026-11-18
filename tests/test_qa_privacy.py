@@ -99,7 +99,8 @@ def _user() -> User:
 
 
 def test_qa_context_and_prompts_exclude_contract_text(tmp_path, monkeypatch) -> None:
-    from mla.ui.app import _qa_context
+    # 上下文构造函数已随 0.4.0 迁到 API 展示层（旧 Streamlit 页面里的同名函数是同一实现）
+    from mla.api.presenters import qa_context as _qa_context
 
     repo = _repo(tmp_path)
     task = run_check(

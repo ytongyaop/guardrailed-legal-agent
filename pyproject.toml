@@ -28,19 +28,18 @@ Repository = "https://github.com/ytongyaop/guardrailed-legal-agent"
 Issues = "https://github.com/ytongyaop/guardrailed-legal-agent/issues"
 
 [project.optional-dependencies]
-# `ui` 也声明 pydantic 与 python-docx：`ui/app.py` 从 `api.presenters` 导入展示 helper，
-# 后者依赖 api.schemas；`ui/app.py` 直接 import `services.report`（顶层 `from docx import Document`）。
-# 批次 6 删除 UI 后这两条依赖随之消失（见 docs/design/006 未决 12）。
-ui = [
-    "streamlit>=1.40,<2.0",
-    "pandas>=1.5",
-    "altair>=5.0",
+# 0.4.0 起界面是 FastAPI + Vue（规格 006），Streamlit 专用依赖（streamlit / pandas / altair）已随
+# `src/mla/ui/` 一起删除。API 自己用 pydantic（`api/schemas.py`），导出 Word 报告要 python-docx
+# （`services/report.py` 顶层 import），所以这两条挂在 `web` extra 上——只装 `web` 就能起完整服务。
+files = ["python-docx>=1.1,<2.0", "pypdf>=4.0,<7.0"]
+# 0.4.0 Web 层（规格 006）：FastAPI 只做同源 API，不引入 CORS / 模板引擎
+web = [
+    "fastapi>=0.163,<0.200",
+    "uvicorn[standard]>=0.54,<1.0",
+    "python-multipart>=0.0.33,<0.1",
     "pydantic>=2.0,<3.0",
     "python-docx>=1.1,<2.0",
 ]
-files = ["python-docx>=1.1,<2.0", "pypdf>=4.0,<7.0"]
-# 0.4.0 Web 层（规格 006）：FastAPI 只做同源 API，不引入 CORS / 模板引擎
-web = ["fastapi>=0.163,<0.200", "uvicorn[standard]>=0.54,<1.0", "python-multipart>=0.0.33,<0.1"]
 dev = ["pytest", "pytest-cov", "ruff", "pyright"]
 
 [project.scripts]

@@ -1,6 +1,7 @@
 """AC-08 的**服务层**基准：只量 `run_check`，不量首屏（规格 006 批次 1）。
 
-为什么现在只测服务层：首屏对比要等批次 5 两边（旧 Streamlit / 新 FastAPI+SPA）都能跑才有意义；
+基准只测服务层；旧版数字来自 v0.3.2 冻结样本
+（tests/api/fixtures/frontend-perf-v0.3.2.json），首屏对比已不可能重跑。
 本批能先钉死的是"同机同数据下核对本身要多久"，作为后续两版对比中**服务侧**的那一半。
 
 口径（与 AC-08 一致的部分）：
@@ -11,11 +12,16 @@
 - 预热 2 次再计时（`--warmup`），避免首次导入 / 缓存填充污染样本；
 - 不联网、不读真实 Key、`save=False` 不写任务与日志；SQLite 建在系统临时目录，跑完删除。
 
-产物：`--out` 指向的 JSON（版本号、时间戳、运行次数、四类统计、每次原始样本），便于 AC-08
-把两次运行（旧版 / 新版）的原始样本放在一起算比值。
+产物：`--out` 指向的 JSON（版本号、时间戳、运行次数、四类统计、每次原始样本）。
+
+基准只测服务层。旧版样本已冻结在 tests/api/fixtures/frontend-perf-v0.3.2.json（只读，不要写回）；
+新版跑同一脚本产出的数字与它对比，不重跑旧界面（Streamlit 已在 0.4.0 移除）。
 
 用法：
-    python scripts/benchmark_frontend.py --runs 20 --out _tmp/frontend-perf-v0.3.2.json
+    # 默认输出 _tmp/frontend-perf-v<版本>.json
+    python scripts/benchmark_frontend.py --runs 20
+    # 显式 --out 可写到任意路径（例如临时核对某次改动）
+    python scripts/benchmark_frontend.py --runs 20 --out _tmp/perf-check.json
 """
 
 from __future__ import annotations
@@ -43,7 +49,9 @@ from mla.domain.models import Role, User  # noqa: E402
 from mla.services.tasks import run_check  # noqa: E402
 
 DEFAULT_RUNS = 20
-DEFAULT_OUT = "_tmp/frontend-perf-v0.3.2.json"
+# 默认输出带版本号落到 _tmp：`tests/api/fixtures/frontend-perf-v0.3.2.json` 是只读冻结基线，
+# 不带 `--out` 跑一次绝不能覆盖它；要写哪儿由 `--out` 自己决定。
+DEFAULT_OUT = f"_tmp/frontend-perf-v{mla.__version__}.json"
 DEFAULT_CONTRACT = "tests/api/fixtures/contract_mixed.txt"
 # 只有门禁看"有没有 Key"，这里给一个明显不是真 Key 的占位值；`_deps` 用它构造的打桩实例。
 FAKE_KEY = "benchmark-key-not-a-real-credential"
@@ -100,7 +108,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="量 run_check 的本地耗时（打桩生成器，不联网）")
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS, help="计时次数（默认 20）")
     parser.add_argument("--warmup", type=int, default=2, help="预热次数（默认 2，不计入样本）")
-    parser.add_argument("--out", default=DEFAULT_OUT, help=f"输出 JSON 路径（默认 {DEFAULT_OUT}）")
+    parser.add_argument(
+        "--out",
+        default=DEFAULT_OUT,
+        help=f"输出 JSON 路径（默认 {DEFAULT_OUT}；可指定任意路径，基线请勿覆盖）",
+    )
     parser.add_argument("--contract", default=DEFAULT_CONTRACT, help="合同正文路径（默认夹具合同）")
     return parser.parse_args(argv)
 

@@ -41,7 +41,7 @@ from .services.retrieval import build_retriever
 from .services.tasks import NO_MODEL_MESSAGE, allow_no_model
 
 # 校验失败的三类固定文案（规格 002 第 10.9 节），与设置页同一套口径。
-# 不从 `mla.ui.app` 导入：界面依赖是可选安装项（`pip install -e .[ui]`）。
+# 不从界面层导入：文案属于领域口径，CLI 与前端拿到的是同一份字符串。
 AUTH_PROBE_MESSAGES: dict[str, str] = {
     "auth": "Key 不正确，请检查后重新输入",
     "network": "网络不通，请稍后重试（本次未保存）",

@@ -38,6 +38,9 @@ src/mla/data/evalsets/*_history.jsonl
 web/node_modules/
 web/dist/
 
+# 前端构建产物的打包副本（006 §5：`src/mla/api/static/` 不入 git，由 `npm run build` 复制生成）
+src/mla/api/static/
+
 # Playwright 运行产物（报告与失败截图不入库）
 web/test-results/
 web/playwright-report/

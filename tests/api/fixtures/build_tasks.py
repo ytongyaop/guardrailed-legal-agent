@@ -7,8 +7,8 @@
   快照就成了自说自话。因此构造逻辑放这里，`python tests/api/fixtures/build_tasks.py`
   负责录制，`tests/api/test_legacy_snapshot.py` 负责断言。
 
-刻意**不 import `mla.ui`**：0.4.0 批次 6 会删除 Streamlit 界面，依赖它的快照会一起失效。
-这里只碰 `domain/` 与 `services/`（报告导出），AppTest 渲染出的 HTML / 元素树一律不进快照。
+刻意**不 import 任何界面模块**：0.4.0 批次 6 已删除 Streamlit 界面，快照只冻领域输出，
+所以它今天仍然能重放。这里只碰 `domain/` 与 `services/`（报告导出）。
 
 模型一律打桩：`tests/helpers.py` 的 `FakeGenerator`，按条款审查请求里的候选逐条回放
 "等级 + 该候选自带的法条原文"，零网络、零 Key、同输入同输出。

@@ -1,0 +1,44 @@
+{
+  "version": "0.3.2",
+  "generated_at": "2026-11-18T15:18:05",
+  "runs": 20,
+  "warmup": 2,
+  "scope": "run_check（服务层；不含模型网络时间与前端渲染）",
+  "config": {
+    "contract": "tests\\api\\fixtures\\contract_mixed.txt",
+    "contract_chars": 377,
+    "model_first": true,
+    "clause_review": true,
+    "save": false,
+    "items": 10,
+    "clause_findings": 7
+  },
+  "stats": {
+    "median_ms": 42.508,
+    "p95_ms": 43.178,
+    "min_ms": 41.634,
+    "max_ms": 43.68
+  },
+  "samples_ms": [
+    42.462,
+    41.634,
+    42.555,
+    42.307,
+    42.327,
+    42.569,
+    43.68,
+    42.139,
+    42.843,
+    42.448,
+    42.139,
+    42.411,
+    42.85,
+    42.424,
+    42.768,
+    42.165,
+    42.808,
+    43.178,
+    42.592,
+    42.654
+  ]
+}

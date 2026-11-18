@@ -4,13 +4,14 @@
 
 ## 开发环境
 
-需要 Python 3.11+（CI 在 3.11 与 3.12 上各跑一遍）。
+需要 Python 3.11+（CI 在 3.11 与 3.12 上各跑一遍）与 Node 20+（前端在 `web/`，CI 用 22）。
 
 ```bash
 python -m venv .venv
 # Windows: .venv\Scripts\activate
 # macOS / Linux: source .venv/bin/activate
-pip install -e ".[ui,files,dev]"
+pip install -e ".[files,web,dev]"
+npm --prefix web ci
 ```
 
 ## 跑测试
@@ -35,7 +36,9 @@ python -m mla check --contract src/mla/data/evalsets/sample_contract.txt
 ```bash
 ruff check src tests scripts
 python -m pyright src                                  # 只检查 src
-python scripts/check_ui_text.py                        # 界面文案规则（不判「违法/无效」等口径）
+python scripts/check_ui_text.py                        # 文案规则：Python 文案 + web/src（跳注释）
+npm --prefix web run typecheck                         # 前端类型检查（vue-tsc）
+npm --prefix web run test -- --run                     # 前端单测（vitest）
 python scripts/validate_statutes.py src/mla/data/statutes/statutes.jsonl
 python scripts/validate_rules.py
 python scripts/validate_triggers.py
@@ -43,6 +46,8 @@ python scripts/validate_missing_terms.py
 python scripts/validate_clause_gold.py
 python -m pytest --cov=mla --cov-report=term-missing   # CI 要求覆盖率不低于 75%
 ```
+
+改到前端的，还要跑 `npm --prefix web run build` 与 `npm --prefix web run test:e2e`（E2E 会拉起真实后端进程，本机默认用 Edge；CI 用 Chromium）。
 
 `tests/` 里存在既有的类型报错，因此 `pyright` **只对 `src` 生效**；不要在 PR 里顺手改测试的类型标注。
 

@@ -21,17 +21,53 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[ui,files,dev]"
+          pip install -e ".[files,web,dev]"
+
+      - name: Install frontend deps
+        run: npm --prefix web ci
+
+      - name: Frontend type check
+        run: npm --prefix web run typecheck
+
+      - name: Frontend unit tests
+        run: npm --prefix web run test -- --run
+
+      # 生产态由 FastAPI 同源托管 web/dist（006 §1），E2E 与 wheel 冒烟都要求先构建
+      - name: Build frontend
+        run: npm --prefix web run build
 
       - name: Test
         run: python -m pytest --cov=mla --cov-report=term-missing --cov-fail-under=75
 
+      - name: Install Playwright browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E
+        working-directory: web
+        env:
+          # CI 是 Linux：用安装好的 Chromium，本机开发默认 msedge 的设定不适用于这里
+          MLA_PLAYWRIGHT_CHANNEL: chromium
+          # playwright.config.ts 默认指向 .venv，CI 里没有虚拟环境，用作业自带解释器
+          MLA_PYTHON: python
+        run: npx playwright test
+
       - name: Smoke test installed wheel
         run: |
           rm -rf /tmp/whl /tmp/mla-wheel-run
+          # 静态产物随 wheel 打包（006 §5）：先复制构建产物进包目录，再打 wheel
+          mkdir -p src/mla/api/static
+          cp -r web/dist/. src/mla/api/static/
           python -m pip wheel . --no-deps -w /tmp/whl
           python -m pip install --force-reinstall --no-deps /tmp/whl/*.whl
           mkdir -p /tmp/mla-wheel-run
@@ -39,12 +75,14 @@ jobs:
           CONTRACT="$(python -c 'import os, mla; print(os.path.join(os.path.dirname(mla.__file__), "data", "evalsets", "sample_contract.txt"))')"
           # 1) 版本可读
           python -m mla --version
-          # 2) 无模型时核对必须被拒绝（退出码非 0）
+          # 2) 前端构建产物真的进了包（缺了页面会 503，只有 API 能用）
+          python -c 'import pathlib, mla; index = pathlib.Path(mla.__file__).parent / "api" / "static" / "index.html"; assert index.is_file(), index'
+          # 3) 无模型时核对必须被拒绝（退出码≠0）
           if python -m mla check --contract "$CONTRACT"; then
             echo "::error::无模型时 mla check 应返回非零退出码"
             exit 1
           fi
-          # 3) 离线诊断模式应可用
+          # 4) 离线诊断模式应可跑
           MLA_ALLOW_NO_LLM=1 python -m mla check --contract "$CONTRACT" > /dev/null
 
       - name: Lint
