@@ -994,15 +994,52 @@ def _render_unmet_terms(task, repo: SqliteRepository) -> None:
         st.caption(_unmet_line(row, repo))
 
 
-def _render_clause_finding(finding, repo: SqliteRepository, *, badge: str = "") -> None:
-    """**旧路径专用（`model_first=False`，回滚兼容）**：来源与等级 → 片段 → 理由 → 依据原文 → 待补事实。"""
+def _statute_source(repo: SqliteRepository, statute_id: str) -> str:
+    """依据一行的定位：条号常驻，内部 ID 不露给用户（查不到时不兜成 ID）。"""
+    if repo.get_statute(statute_id) is None:
+        return "法源库未找到该条文"
+    return source_label(repo, statute_id)
+
+
+def _render_statute_text(repo: SqliteRepository, statute_id: str) -> None:
+    """第二层依据：法条原文 + 施行日期 + 来源链接，默认折叠；条号留在折叠器外。"""
+    statute = repo.get_statute(statute_id)
+    if statute is None:
+        return
+    short = statute.law_name.replace("中华人民共和国", "")
+    with st.expander(f"《{short}》{statute.article_no} 原文", expanded=False):
+        st.markdown(statute.text)
+        st.caption(_statute_meta(statute))
+
+
+def _render_rule_finding(entry, repo: SqliteRepository, *, show_process: bool) -> None:
+    """旧路径的规则条目（`merge_findings` 的 rank 0）：结论 → 常驻条号 → 折叠原文。
+
+    来源徽标（“规则判定·确定性”）属判定来源，只在第三层出现（规格 005 第 2 节）；
+    条号与原文的归属不变：条号常驻，原文折叠。
+    """
+    head = f"**{entry.finding}**"
+    if show_process:
+        head = f":blue-badge[{FINDING_SOURCE_BADGES[0]}] {head}"
+    st.markdown(head)
+    st.caption(f"依据 {_statute_source(repo, entry.source_id)}")
+    _render_statute_text(repo, entry.source_id)
+
+
+def _render_clause_finding(finding, repo: SqliteRepository, *, rank: int, show_process: bool) -> None:
+    """**旧路径专用（`model_first=False`，回滚兼容）**：来源与等级 → 片段 → 理由 → 依据原文 → 待补事实。
+
+    内部 A/B/C 等级与来源徽标属“判定来源”，只在第三层出现；片段、理由与条号留在第一层。
+    """
     with st.container(border=True):
-        head = _grade_badge(str(finding.grade))
-        if badge:
-            head = f"{badge} {head}"
+        head_parts: list[str] = []
+        if show_process:
+            head_parts.append(f":{FINDING_SOURCE_COLORS[rank]}-badge[{FINDING_SOURCE_BADGES[rank]}]")
+            head_parts.append(_grade_badge(str(finding.grade)))
         if str(getattr(finding, "source", "trigger")) == "model_extra":
-            head += "（模型自提，待人工确认）"
-        st.markdown(head)
+            head_parts.append("（模型自提，待人工确认）")
+        if head_parts:
+            st.markdown(" ".join(head_parts))
         span = str(finding.span or "")
         clipped = span if len(span) <= CLAUSE_SPAN_LIMIT else span[:CLAUSE_SPAN_LIMIT] + "……"
         st.markdown(f"**条款片段**（正文第 {finding.paragraph} 段）：{clipped}")
@@ -1012,19 +1049,10 @@ def _render_clause_finding(finding, repo: SqliteRepository, *, badge: str = "") 
         if finding.reason:
             st.markdown(f"**理由**：{finding.reason}")
         if finding.statute_ids:
-            labels = [
-                source_label(repo, sid) if repo.get_statute(sid) is not None else "法源库未找到该条文"
-                for sid in finding.statute_ids
-            ]
+            labels = [_statute_source(repo, sid) for sid in finding.statute_ids]
             st.markdown("**依据**：" + "、".join(labels))
             for sid in finding.statute_ids:
-                statute = repo.get_statute(sid)
-                if statute is None:
-                    continue
-                short = statute.law_name.replace("中华人民共和国", "")
-                with st.expander(f"《{short}》{statute.article_no} 原文"):
-                    st.markdown(statute.text)
-                    st.caption(_statute_meta(statute))
+                _render_statute_text(repo, sid)
         if finding.need_facts:
             st.caption("需补充事实：" + "、".join(finding.need_facts))
 
@@ -1036,19 +1064,22 @@ def _certainty_mark(certainty: str) -> str:
     return f":gray-badge[{CERTAINTY_PENDING}]"
 
 
-def _render_consensus_item(item, repo: SqliteRepository) -> None:
+def _render_consensus_item(item, repo: SqliteRepository, *, show_process: bool) -> None:
     """模型主导路径（P1-3）的单条目：确定性 → 片段 → 理由 → 依据。
 
     条目已由共识层产出（`items` 里就是最终结论），这里只排版，不再拿 `clause_findings`
     做二次合并——否则同一条模型结论会被渲染两遍。程序追加的数值复核条目（`source="rule_check"`）
     没有合同段落，只给复核文案与依据。分组成"高/中/低影响"由 `_render_impact_groups` 负责，
     这里不再显示内部 A/B/C 等级。
+
+    确定性徽标是结论的一部分，常驻；来源徽标（“程序数值校验”）与共识 `note` 属判定来源，
+    只在第三层出现（规格 005 第 2 节）。
     """
     source = str(getattr(item, "source", "") or "")
     level = display_of(item)
     with st.container(border=True):
         head = _certainty_mark(level.certainty)
-        if source == SOURCE_RULE_CHECK:
+        if show_process and source == SOURCE_RULE_CHECK:
             head = f":gray-badge[{CONSENSUS_RULE_BADGE}] {head}"
         if source == "model_extra":
             head += "（模型自提，待人工确认）"
@@ -1067,24 +1098,15 @@ def _render_consensus_item(item, repo: SqliteRepository) -> None:
         if not ids and item.source_id:
             ids = [item.source_id]
         if ids:
-            labels = [
-                source_label(repo, sid) if repo.get_statute(sid) is not None else "法源库未找到该条文"
-                for sid in ids
-            ]
+            labels = [_statute_source(repo, sid) for sid in ids]
             st.markdown("**依据**：" + "、".join(labels))
             for sid in ids:
-                statute = repo.get_statute(sid)
-                if statute is None:
-                    continue
-                short = statute.law_name.replace("中华人民共和国", "")
-                with st.expander(f"《{short}》{statute.article_no} 原文"):
-                    st.markdown(statute.text)
-                    st.caption(_statute_meta(statute))
-        if item.note and item.note != item.finding:
+                _render_statute_text(repo, sid)
+        if show_process and item.note and item.note != item.finding:
             st.caption(item.note)
 
 
-def _render_impact_groups(items, repo: SqliteRepository) -> None:
+def _render_impact_groups(items, repo: SqliteRepository, *, show_process: bool) -> None:
     """按影响度分组渲染（规格 003 第 3.4 节）：只渲染有内容的分组，组内顺序由 grading 决定。"""
     ranked = [(display_of(item), item) for item in sort_items(items)]
     for impact, title in IMPACT_TITLES:
@@ -1093,7 +1115,7 @@ def _render_impact_groups(items, repo: SqliteRepository) -> None:
             continue
         st.markdown(f"**{title}**")
         for item in group:
-            _render_consensus_item(item, repo)
+            _render_consensus_item(item, repo, show_process=show_process)
 
 
 def _clause_review_note(task, clause_review: bool | None = None) -> str:
@@ -1143,13 +1165,17 @@ def _render_missing_term(term, repo: SqliteRepository, *, absent: bool) -> None:
         st.caption("依据条文未在法源库中找到，请人工核对。")
         return
     short = statute.law_name.replace("中华人民共和国", "")
-    with st.expander(f"{term.name}：依据条文原文"):
+    with st.expander(f"{term.name}：依据条文原文", expanded=False):
         st.markdown(statute.text)
         st.caption(f"《{short}》{statute.article_no} · {_statute_meta(statute)}")
 
 
-def _render_missing_terms(task, repo: SqliteRepository) -> None:
-    """必备条款完整性：先说有没有写，再分缺失 / 未见 / 需人工确认；不判条款效力。"""
+def _render_missing_terms(task, repo: SqliteRepository, *, show_written: bool) -> None:
+    """必备条款完整性：先说缺了哪些，再分缺失 / 未见 / 需人工确认；不判条款效力。
+
+    计数与冲突/待确认完全分开：这里只数“第十七条九类必备条款写没写”，不并进结论条数。
+    `已写 x 类` 是覆盖率口径，按规格 005 只在开关打开时出现（缺失/未见/需人工确认三项常驻）。
+    """
     terms = list(getattr(task, "missing_terms", None) or [])
     if not terms:
         return
@@ -1163,10 +1189,11 @@ def _render_missing_terms(task, repo: SqliteRepository) -> None:
     if not absent and not unseen and not written:
         st.caption("正文过短，未做必备条款判定。")
         return
-    st.caption(
-        f"本次检查《劳动合同法》第十七条九类必备条款：已写 {written} 类，缺失 {len(absent)} 类，"
-        f"未见 {len(unseen)} 类，需人工确认 {len(manual)} 类。{MISSING_TERMS_BASE_NOTE}"
-    )
+    counts: list[str] = []
+    if show_written:
+        counts.append(f"已写 {written} 类")
+    counts.extend([f"缺失 {len(absent)} 类", f"未见 {len(unseen)} 类", f"需人工确认 {len(manual)} 类"])
+    st.caption(f"本次检查《劳动合同法》第十七条九类必备条款：{'，'.join(counts)}。{MISSING_TERMS_BASE_NOTE}")
     for term in absent:
         _render_missing_term(term, repo, absent=True)
     for term in unseen:
@@ -1252,26 +1279,184 @@ def _render_result_disclaimer() -> None:
     st.caption(RESULT_DISCLAIMER)
 
 
+def _render_suggestions(task, repo: SqliteRepository) -> None:
+    """处理建议：正文与依据常驻、不折叠；导出 Word 放在这一块末尾（三层骨架的第一层收尾）。
+
+    顶部不再有“处理建议数量”指标——数量不是结论，正文才是。
+    """
+    with st.container(border=True):
+        st.markdown(
+            "#### :material/tips_and_updates: 处理建议（非法律意见）",
+            help="建议不构成法律意见，重大争议请咨询专业人士。",
+        )
+        if task.suggestions:
+            for s in task.suggestions:
+                cites = "、".join(source_label(repo, sid) for sid in s.source_ids)
+                st.markdown(f"- {s.text}")
+                if s.disclaimer and s.disclaimer != DISCLAIMER_FALLBACK:
+                    st.caption(f"依据 {cites} · {s.disclaimer}")
+                else:
+                    st.caption(f"依据 {cites}")
+        elif any("未配置大模型" in str(e) for e in (task.errors or [])):
+            st.caption("未配置大模型：本次不生成处理建议（规则核对结论不受影响）。")
+        else:
+            st.caption("本次没有可给出的建议（无依据不生成）。")
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.download_button(
+                "导出 Word 报告",
+                data=build_report_docx(task, repo),
+                file_name=f"核对报告-{task.task_id}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                icon=":material/download:",
+            )
+
+
+def _render_cases(task, repo: SqliteRepository) -> None:
+    """类案参照（第二层依据）：整体默认折叠，只作参照，不构成本案结论。"""
+    cases = repo.list_cases()
+    shown: list = []
+    note = ""
+    if cases:
+        by_id = {c.case_id: c for c in cases}
+        shown = [by_id[r.case_id] for r in task.case_refs if r.case_id in by_id]
+        if shown:
+            note = f"共 {len(cases)} 条官方案例，本次匹配 {len(shown)} 条"
+        else:
+            cited_ids = {i.source_id for i in task.items}
+            matched = [c for c in cases if set(c.statute_ids) & cited_ids]
+            shown = (matched or cases)[:5]
+            note = f"共 {len(cases)} 条官方案例，按法条匹配 {len(matched)} 条"
+    with st.expander("类案参照", icon=":material/library_books:", expanded=False):
+        st.caption(f"{CASE_NOTE} {note}".strip())
+        if cases:
+            for case in shown:
+                st.markdown(f"**{case.title}**")
+                st.caption(case.holding)
+                meta = f"{case.source} · {case.dispute_type}"
+                if case.source_url:
+                    meta += f" · 来源：{case.source_url}"
+                st.caption(meta)
+        else:
+            st.caption("暂无官方案例，当前结论全部来自法条。")
+
+
 # 结论形态只给 risk / clean 上色，partial 保持普通文字（覆盖不全不是结论，别用颜色当结论读）。
 VERDICT_COLORS: dict[str, str] = {"risk": "red", "clean": "green"}
 # 结论句不再带“不代表合规”的后缀（各区块各自复述一遍会打架），改成顶部常驻一行说明。
 VERDICT_CAVEAT = "结论不代表合规，请结合事实复核。"
 
 
-def _render_verdict(verdict: Verdict) -> None:
-    """顶部标题行 = 有语义的结论 + 覆盖明细（不再把条目数当裸指标）。"""
+def _render_verdict(verdict: Verdict, details: list[str]) -> None:
+    """顶部标题行 = 有语义的结论 + 第一层结论计数/限制提示；覆盖明细由第三层承接。"""
     color = VERDICT_COLORS.get(str(verdict.status), "")
     headline = f":{color}[{verdict.headline}]" if color else verdict.headline
     st.markdown(f"### {headline}")
-    if verdict.details:
-        st.caption(" · ".join(verdict.details))
+    if details:
+        st.caption(" · ".join(details))
     st.caption(VERDICT_CAVEAT)
+
+
+# ---------------- 三层信息架构（规格 005） ----------------
+# 开关只加第三层，不改第一二层：键名与取值口径见规格 005 第 4 节（只有 "1" 为开）。
+SHOW_QUERY_PATH_KEY = "ui.show_query_path"
+SHOW_QUERY_PATH_LABEL = "显示查询路径与判定来源"
+SHOW_QUERY_PATH_HELP = "显示耗时、覆盖率、判定来源、补问与运行详情；不影响核对结论。"
+PROCESS_SECTION_TITLE = "#### :material/route: 查询路径与判定来源"
+
+
+def show_query_path(repo: SqliteRepository) -> bool:
+    """第三层是否渲染：只有落库值恰为 "1" 为开；`0` / 空串 / 缺键 / 未知值都是关。
+
+    读取不回写：缺键就是关，不补一条 `0` 进 settings 表，旧库与新库因此完全同构。
+    """
+    return repo.get_setting(SHOW_QUERY_PATH_KEY) == "1"
+
+
+def _is_process_detail(row: str) -> bool:
+    """覆盖明细里哪些行属第三层（规格 005 第 2 节）。
+
+    移走的只有五类：`规则 x/y 可判定`、条款审查运行状态、缺事实无法判定数、
+    `必备条款 x/8 已写`；其余行是结论计数与限制提示（如“合同正文较短”），留在第一层。
+    """
+    text = str(row or "")
+    if text.startswith("规则 ") or text.startswith("必备条款 "):
+        return True
+    if text.startswith("条款审查") and any(k in text for k in ("已运行", "未运行", "未完成")):
+        return True
+    return "因缺少事实无法判定" in text
+
+
+def split_verdict_details(details: list[str]) -> tuple[list[str], list[str]]:
+    """把 `Verdict.details` 分成（第一层, 第三层）：只归类，不改写任何原文。"""
+    first: list[str] = []
+    process: list[str] = []
+    for row in details or []:
+        (process if _is_process_detail(row) else first).append(row)
+    return first, process
+
+
+def _latency_text(task) -> str:
+    """耗时：只有真跑过才有值；旧任务缺字段写“未记录”，不伪造 `0.00 秒`。"""
+    return f"{task.latency_s:.2f} 秒" if task.latency_s is not None else "未记录"
+
+
+def _render_process_layer(task, repo: SqliteRepository, *, details: list[str], clause_review) -> None:
+    """第三层：查询路径与判定来源。
+
+    只在开关打开时被调用，默认态整段代码不执行（不是渲染后再藏起来）。
+    第一二层的任何内容都不在这里重画，避免同一句话出现两次。
+    """
+    cited = {i.source_id for i in task.items if i.source_id}
+    cited.update(sid for i in task.items for sid in (getattr(i, "statute_ids", ()) or ()))
+    errors = [str(e) for e in (task.errors or [])]
+    extract_note = ""
+    if any(("回退" in e or "失败" in e or "超时" in e) for e in errors):
+        extract_note = "抽取已回退规则式：非常规写法的条款可能未被识别，请人工复核。"
+    elif any("未配置 Key" in e for e in errors):
+        extract_note = "本次未使用模型抽取：未配置 Key"
+
+    with st.container(border=True):
+        st.markdown(PROCESS_SECTION_TITLE)
+        with st.container(horizontal=True):
+            st.metric("引用条文", len(cited), border=True)
+            st.metric("耗时", _latency_text(task), border=True)
+        if details:
+            st.caption(" · ".join(details))
+        note = _clause_review_note(task, clause_review)
+        if note:
+            st.caption(note)
+        with st.container(horizontal=True):
+            st.badge(
+                "引用可溯源" if task.verify_ok else "引用不可溯源",
+                icon=":material/verified:" if task.verify_ok else ":material/error:",
+                color="green" if task.verify_ok else "red",
+            )
+            st.badge(
+                f"补问 {task.ask_rounds} 轮" if task.ask_rounds else "无补问",
+                icon=":material/help:",
+                color="blue" if task.ask_rounds else "gray",
+            )
+            if _show_degraded_badge(task):
+                st.badge("已降级", icon=":material/warning:", color="orange")
+        if extract_note:
+            st.caption(extract_note)
+        st.caption(_run_detail(task))
+        if task.questions:
+            st.info(
+                f"本次提出 {len(task.questions)} 个追问：" + "；".join(task.questions),
+                icon=":material/help:",
+            )
 
 
 def _render_task(
     task, repo: SqliteRepository, user: User | None = None, clause_review: bool | None = None
 ) -> None:
-    """结果页渲染；`clause_review` 传本次会话的开关，历史记录不传（改读落库的 `task.clause_review`）。"""
+    """结果页渲染；`clause_review` 传本次会话的开关，历史记录不传（改读落库的 `task.clause_review`）。
+
+    三层信息架构（规格 005）：第一层结论常驻（结论句、条目、条号、建议、必备条款计数），
+    第二层依据折叠（法条原文、事实、类案），第三层“查询路径与判定来源”只在
+    `ui.show_query_path=1` 时**执行渲染**——默认态不是渲染后隐藏，而是这段代码不跑。
+    """
     if task.refused:
         if task.boundary_layer == "llm":
             st.error(
@@ -1290,160 +1475,80 @@ def _render_task(
             )
         return
 
-    cited = {i.source_id for i in task.items if i.source_id}
-    cited.update(sid for i in task.items for sid in (getattr(i, "statute_ids", ()) or ()))
-    # 顶部先说结论形态、再说次要指标：0 条不等于没问题，“没查出来”与“没问题”必须能分开读。
+    show_process = show_query_path(repo)
+    # 顶部先说结论形态：0 条不等于没问题，“没查出来”与“没问题”必须能分开读。
     verdict = summarize_verdict(task)
-    _render_verdict(verdict)
-    with st.container(horizontal=True):
-        st.metric("处理建议", len(task.suggestions), border=True)
-        st.metric("引用条文", len(cited), border=True)
-        st.metric("耗时", f"{task.latency_s or 0:.2f} 秒", border=True)
+    first_details, process_details = split_verdict_details(verdict.details)
+    _render_verdict(verdict, first_details)
 
-    with st.container(horizontal=True, vertical_alignment="center"):
-        st.download_button(
-            "导出 Word 报告",
-            data=build_report_docx(task, repo),
-            file_name=f"核对报告-{task.task_id}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            icon=":material/download:",
+    model_first = bool(getattr(task, "model_first", False))
+    findings = list(task.clause_findings or [])
+    # 判不了的规则先分好组：两个区块共用同一份分组，顺序固定、与开关无关。
+    field_groups = _group_undetermined(task.undetermined, "field_missing")
+    premise_groups = _group_undetermined(task.undetermined, "premise_missing")
+    unmet = list(getattr(task, "unmet", None) or [])
+    missing_terms = list(getattr(task, "missing_terms", None) or [])
+
+    # ---- 第一层 结论：核对结论（条目内容、分级与顺序与改造前逐条相同）----
+    with st.container(border=True):
+        st.markdown(
+            "#### :material/rule: 核对结论",
+            help=(CONSENSUS_HELP if model_first else CLAUSE_HELP) if show_process else None,
         )
+        if model_first:
+            # 新路径：items 已是共识层结果（含模型结论与数值复核条目），按影响度分组渲染。
+            _render_impact_groups(task.items, repo, show_process=show_process)
+        else:
+            for rank, entry in merge_findings(task.items, findings):
+                if rank == 0:
+                    _render_rule_finding(entry, repo, show_process=show_process)
+                    continue
+                _render_clause_finding(entry, repo, rank=rank, show_process=show_process)
 
-    with st.container(horizontal=True):
-        st.badge(
-            "引用可溯源" if task.verify_ok else "引用不可溯源",
-            icon=":material/verified:" if task.verify_ok else ":material/error:",
-            color="green" if task.verify_ok else "red",
-        )
-        st.badge(
-            f"补问 {task.ask_rounds} 轮" if task.ask_rounds else "无补问",
-            icon=":material/help:",
-            color="blue" if task.ask_rounds else "gray",
-        )
-        if _show_degraded_badge(task):
-            st.badge("已降级", icon=":material/warning:", color="orange")
+    # ---- 第一层 结论：合同未约定 / 需补充事实 / 法定兜底（原有内容，一处一次）----
+    if unmet or field_groups or premise_groups or task.statutory_na:
+        with st.container(border=True):
+            _render_unmet_terms(task, repo)
+            if field_groups or premise_groups:
+                st.markdown("**需补充事实**")
+                for fields, rows in field_groups:
+                    st.caption(
+                        f"因缺少“{_field_label(fields)}”，以下 {len(rows)} 条规则无法判定："
+                        f"{_rule_names(rows)}"
+                    )
+                if premise_groups:
+                    premise_count = sum(len(rows) for _, rows in premise_groups)
+                    with st.expander(f"另有 {premise_count} 条规则因前提未确定而未判定", expanded=False):
+                        for fields, rows in premise_groups:
+                            label = _field_label(fields)
+                            st.caption(f"因缺少“{label}”，以下 {len(rows)} 条规则未判定：{_rule_names(rows)}")
+            if task.statutory_na:
+                st.caption(f"另有 {task.statutory_na} 条规则因合同未约定而适用法定标准。")
 
-    errors = [str(e) for e in (task.errors or [])]
-    extract_note = ""
-    if any(("回退" in e or "失败" in e or "超时" in e) for e in errors):
-        extract_note = "抽取已回退规则式：非常规写法的条款可能未被识别，请人工复核。"
-    elif any("未配置 Key" in e for e in errors):
-        extract_note = "本次未使用模型抽取：未配置 Key"
-    if extract_note:
-        st.caption(extract_note)
+    # ---- 第一层 结论：必备条款完整性（独立计数，不并入冲突或待确认）----
+    if missing_terms:
+        with st.container(border=True):
+            _render_missing_terms(task, repo, show_written=show_process)
 
+    # ---- 第一层 结论：处理建议正文（不折叠）＋导出 Word ----
+    _render_suggestions(task, repo)
+
+    # ---- 第二层 依据：事实与类案，默认折叠 ----
     if task.facts:
-        with st.popover(f"依据事实（{len(task.facts)} 项）", icon=":material/fact_check:"):
+        with st.expander(f"依据事实（{len(task.facts)} 项）", icon=":material/fact_check:", expanded=False):
             st.dataframe(
                 [{"事实": fact_display_name(k), "值": v} for k, v in task.facts.items()],
                 width="stretch",
                 hide_index=True,
             )
-    with st.expander("详情", icon=":material/info:"):
-        st.caption(_run_detail(task))
-    if task.questions:
-        st.info(
-            f"本次提出 {len(task.questions)} 个追问：" + "；".join(task.questions),
-            icon=":material/help:",
-        )
+    _render_cases(task, repo)
 
-    field_groups = _group_undetermined(task.undetermined, "field_missing")
-    premise_groups = _group_undetermined(task.undetermined, "premise_missing")
-
-    with st.container(border=True):
-        model_first = bool(getattr(task, "model_first", False))
-        st.markdown(
-            "#### :material/rule: 核对结论",
-            help=CONSENSUS_HELP if model_first else CLAUSE_HELP,
-        )
-        findings = list(task.clause_findings or [])
-        if model_first:
-            # 新路径：items 已是共识层结果（含模型结论与数值复核条目），按影响度分组渲染。
-            _render_impact_groups(task.items, repo)
-        else:
-            for rank, entry in merge_findings(task.items, findings):
-                if rank == 0:
-                    st.markdown(f":blue-badge[{FINDING_SOURCE_BADGES[0]}] **{entry.finding}**")
-                    cite = f"依据 {source_label(repo, entry.source_id)}"
-                    statute = repo.get_statute(entry.source_id)
-                    if statute is not None and statute.source_url:
-                        cite += f" · 来源：{statute.source_url}"
-                    st.caption(cite)
-                    continue
-                color = FINDING_SOURCE_COLORS[rank]
-                _render_clause_finding(entry, repo, badge=f":{color}-badge[{FINDING_SOURCE_BADGES[rank]}]")
-        note = _clause_review_note(task, clause_review)
-        if note:
-            st.caption(note)
-        # 结论句只在页面顶部（Verdict）说一次：结论区不再复述“未发现硬性风险项”这类判断，
-        # 正文长度也由顶部明细承载；这里只保留下面“具体哪些条判不了”的明细。
-
-        _render_missing_terms(task, repo)
-        _render_unmet_terms(task, repo)
-
-        if field_groups or premise_groups:
-            st.markdown("**需补充事实**")
-            for fields, rows in field_groups:
-                st.caption(
-                    f"因缺少“{_field_label(fields)}”，以下 {len(rows)} 条规则无法判定：{_rule_names(rows)}"
-                )
-            if premise_groups:
-                premise_count = sum(len(rows) for _, rows in premise_groups)
-                with st.expander(f"另有 {premise_count} 条规则因前提未确定而未判定", expanded=False):
-                    for fields, rows in premise_groups:
-                        label = _field_label(fields)
-                        st.caption(f"因缺少“{label}”，以下 {len(rows)} 条规则未判定：{_rule_names(rows)}")
-
-        if task.statutory_na:
-            st.caption(f"另有 {task.statutory_na} 条规则因合同未约定而适用法定标准。")
-
-    with st.container(border=True):
-        st.markdown(
-            "#### :material/tips_and_updates: 处理建议（非法律意见）",
-            help="建议不构成法律意见，重大争议请咨询专业人士。",
-        )
-        if task.suggestions:
-            for s in task.suggestions:
-                cites = "、".join(source_label(repo, sid) for sid in s.source_ids)
-                st.markdown(f"- {s.text}")
-                if s.disclaimer and s.disclaimer != DISCLAIMER_FALLBACK:
-                    st.caption(f"依据 {cites} · {s.disclaimer}")
-                else:
-                    st.caption(f"依据 {cites}")
-        else:
-            if any("未配置大模型" in e for e in task.errors):
-                st.caption("未配置大模型：本次不生成处理建议（规则核对结论不受影响）。")
-            else:
-                st.caption("本次没有可给出的建议（无依据不生成）。")
-
-    with st.container(border=True):
-        cases = repo.list_cases()
-        shown: list = []
-        note = ""
-        if cases:
-            by_id = {c.case_id: c for c in cases}
-            shown = [by_id[r.case_id] for r in task.case_refs if r.case_id in by_id]
-            if shown:
-                note = f"共 {len(cases)} 条官方案例，本次匹配 {len(shown)} 条"
-            else:
-                cited_ids = {i.source_id for i in task.items}
-                matched = [c for c in cases if set(c.statute_ids) & cited_ids]
-                shown = (matched or cases)[:5]
-                note = f"共 {len(cases)} 条官方案例，按法条匹配 {len(matched)} 条"
-        st.markdown("#### :material/library_books: 类案参照", help=f"{CASE_NOTE} {note}".strip())
-        if cases:
-            for case in shown:
-                st.markdown(f"**{case.title}**")
-                st.caption(case.holding)
-                meta = f"{case.source} · {case.dispute_type}"
-                if case.source_url:
-                    meta += f" · 来源：{case.source_url}"
-                st.caption(meta)
-        else:
-            st.caption("暂无官方案例，当前结论全部来自法条。")
+    # ---- 第三层 过程：开关关闭时这一段根本不执行（默认态连元素都不产生）----
+    if show_process:
+        _render_process_layer(task, repo, details=process_details, clause_review=clause_review)
 
     if user is not None:
-        _render_qa_panel(task, repo, user)
+        _render_qa_panel(task, repo, user, show_process=show_process)
 
     # 免责必须在所有区块之后：问答面板也归这一页，问答结论同样被这一行覆盖。
     _render_result_disclaimer()
@@ -1615,8 +1720,12 @@ def _qa_detail(task) -> str:
     return " · ".join(parts)
 
 
-def _render_qa_panel(task, repo: SqliteRepository, user: User) -> None:
-    """核对结果底部的“就本合同提问”面板：结合本次结构化结论作答，不发合同正文。"""
+def _render_qa_panel(task, repo: SqliteRepository, user: User, *, show_process: bool) -> None:
+    """核对结果底部的“就本合同提问”面板：结合本次结构化结论作答，不发合同正文。
+
+    问答的运行详情与结果页共用同一个开关（规格 005 第 2 节）：`show_process` 为假时
+    `_render_qa` 里的详情整段不执行。
+    """
     stored = st.session_state.get("last_qa_context")
     has_result = isinstance(stored, dict) and stored.get("task_id") == task.task_id
     with st.expander("就本合同继续提问", icon=":material/chat:", expanded=has_result):
@@ -1648,11 +1757,14 @@ def _render_qa_panel(task, repo: SqliteRepository, user: User) -> None:
         if isinstance(result, dict) and result.get("task_id") == task.task_id:
             qa_task = result.get("qa")
             if qa_task is not None:
-                _render_qa(qa_task, repo)
+                _render_qa(qa_task, repo, show_process=show_process)
 
 
-def _render_qa(task, repo: SqliteRepository) -> None:
-    """输出物理分两块：“结论与依据（法条原文）”与“处理建议（非法律意见）”。"""
+def _render_qa(task, repo: SqliteRepository, *, show_process: bool) -> None:
+    """输出物理分两块：“结论与依据（法条原文）”与“处理建议（非法律意见）”。
+
+    法条原文一律折叠（`expanded=False`），条号在折叠器标题上常驻；运行详情只在开关打开时出现。
+    """
     if task.refused:
         if task.boundary_layer == "llm":
             st.error(
@@ -1695,7 +1807,7 @@ def _render_qa(task, repo: SqliteRepository) -> None:
                 st.caption("依据条文未在法源库中找到，请人工核对。")
                 continue
             short = statute.law_name.replace("中华人民共和国", "")
-            with st.expander(f"《{short}》{statute.article_no}", expanded=len(sources) == 1):
+            with st.expander(f"《{short}》{statute.article_no}", expanded=False):
                 st.markdown(statute.text)
                 st.caption(_statute_meta(statute))
 
@@ -1708,9 +1820,8 @@ def _render_qa(task, repo: SqliteRepository) -> None:
                 st.caption(f"依据 {cites} · {s.disclaimer}")
             else:
                 st.caption(f"依据 {cites}")
-        if task.agent_trace or task.token_in or task.token_out:
-            with st.expander("详情", icon=":material/info:"):
-                st.caption(_qa_detail(task))
+        if show_process and (task.agent_trace or task.token_in or task.token_out):
+            st.caption(_qa_detail(task))
 
 
 # ---------------- 设置 ----------------
@@ -1969,12 +2080,35 @@ def _render_account_settings(repo: SqliteRepository, user: User) -> None:
             st.error(msg, icon=":material/error:")
 
 
+def _render_interface_settings(repo: SqliteRepository) -> None:
+    """界面设置（所有角色可用）：全库一个全局开关，切换即落库并重绘。
+
+    开关只控制结果页第三层的显隐，不影响核对结论；重建仓库实例（换页面 / 重开会话）后
+    仍按 `settings` 表里的值渲染，不需要重跑核对，也不改任何任务记录。
+    """
+    st.markdown("#### :material/tune: 界面设置")
+    current = show_query_path(repo)
+    checked = st.checkbox(
+        SHOW_QUERY_PATH_LABEL,
+        value=current,
+        key="settings_show_query_path",
+        help=SHOW_QUERY_PATH_HELP,
+    )
+    if checked != current:
+        repo.set_setting(SHOW_QUERY_PATH_KEY, "1" if checked else "0")
+        st.rerun()
+
+
 def _page_settings(repo: SqliteRepository, user: User) -> None:
-    """设置页：模型 Key 只给管理员；改密码所有登录用户都能用。"""
+    """设置页：模型 Key 只给管理员；界面设置与改密码所有登录用户都能用。
+
+    顺序固定（规格 005 第 4 节）：管理员 模型 / 界面 / 账号，普通用户 界面 / 账号。
+    """
     page_header("settings", "设置")
     _settings_flash()
     if is_admin(user):
         _render_model_settings()
+    _render_interface_settings(repo)
     _render_account_settings(repo, user)
 
 

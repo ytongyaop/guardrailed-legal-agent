@@ -458,6 +458,74 @@ def test_settings_page_hides_model_settings_for_normal_user(tmp_path) -> None:
     assert not any(b.label == "测试并保存" for b in at.button)
 
 
+# ---------------- 界面设置：查询路径开关（规格 005 第 4 节 / AC-03） ----------------
+def _switch(at: AppTest):
+    """界面设置的复选框（标签照规格，不按位置取）。"""
+    return next(c for c in at.checkbox if c.label == ui_app.SHOW_QUERY_PATH_LABEL)
+
+
+def test_settings_page_query_path_toggle_persists(tmp_path) -> None:
+    """缺键为关；勾选立即落库；重开会话仍保持；取消勾选写 0（读取本身不回写）。"""
+    repo = _repo(tmp_path)
+    _make_user(repo, "admin", "secret123", Role.ADMIN, onboarded=True)
+
+    at = _settings_app(tmp_path, "admin")
+    assert not at.exception
+    box = _switch(at)
+    assert box.value is False
+    assert ui_app.SHOW_QUERY_PATH_HELP in (box.help or "")
+    assert _repo(tmp_path).get_setting(ui_app.SHOW_QUERY_PATH_KEY) == "", "读取开关不得回写数据库"
+
+    at = box.set_value(True).run()
+    assert not at.exception
+    assert _repo(tmp_path).get_setting(ui_app.SHOW_QUERY_PATH_KEY) == "1"
+
+    again = _settings_app(tmp_path, "admin")
+    assert not again.exception
+    assert _switch(again).value is True, "重开会话后开关状态必须保持"
+
+    again = _switch(again).set_value(False).run()
+    assert not again.exception
+    assert _repo(tmp_path).get_setting(ui_app.SHOW_QUERY_PATH_KEY) == "0"
+    assert ui_app.show_query_path(_repo(tmp_path)) is False
+
+
+def test_settings_page_query_path_available_to_normal_user(tmp_path) -> None:
+    """普通用户也能看到并切换界面设置：全库一个全局开关，不按角色限制。"""
+    repo = _repo(tmp_path)
+    _make_user(repo, "alice", "secret123", Role.USER, onboarded=True)
+
+    at = _settings_app(tmp_path, "alice")
+    assert not at.exception
+    assert "界面设置" in _all_text(at)
+    assert "模型设置" not in _all_text(at)
+
+    at = _switch(at).set_value(True).run()
+    assert not at.exception
+    assert _repo(tmp_path).get_setting(ui_app.SHOW_QUERY_PATH_KEY) == "1"
+    # 普通用户写进去的开关对管理员同样生效（全局，不按用户保存）
+    assert ui_app.show_query_path(_repo(tmp_path)) is True
+
+
+def test_settings_page_query_path_section_order(tmp_path) -> None:
+    """管理员 模型 / 界面 / 账号；普通用户 界面 / 账号（规格 005 第 4 节）。"""
+    repo = _repo(tmp_path)
+    _make_user(repo, "admin", "secret123", Role.ADMIN, onboarded=True)
+    _make_user(repo, "alice", "secret123", Role.USER, onboarded=True)
+
+    admin_marks = [m.value for m in _settings_app(tmp_path, "admin").markdown]
+    model_at = next(i for i, value in enumerate(admin_marks) if "模型设置" in value)
+    ui_at = next(i for i, value in enumerate(admin_marks) if "界面设置" in value)
+    account_at = next(i for i, value in enumerate(admin_marks) if "账号设置" in value)
+    assert model_at < ui_at < account_at
+
+    user_marks = [m.value for m in _settings_app(tmp_path, "alice").markdown]
+    assert not any("模型设置" in value for value in user_marks)
+    ui_at = next(i for i, value in enumerate(user_marks) if "界面设置" in value)
+    account_at = next(i for i, value in enumerate(user_marks) if "账号设置" in value)
+    assert ui_at < account_at
+
+
 def test_settings_page_change_password_flow(tmp_path) -> None:
     """旧密码错报错、新密码短报错、成功后新密码能登录。"""
     repo = _repo(tmp_path)

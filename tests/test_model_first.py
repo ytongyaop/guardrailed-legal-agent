@@ -372,15 +372,18 @@ def test_legacy_record_without_new_columns_reads_as_old_path(tmp_path: Path) -> 
 
 # 直接渲染一个已组装好的新路径任务：同一条模型结论只能出现一次（否则就是二次合并）。
 DISPLAY_SCRIPT = """
+QUERY_PATH_ON = False
 from mla.adapters.persist import SqliteRepository
 from mla.config import Paths, data_path
 from mla.domain.models import CheckItem, CheckTask, ClauseFinding, ItemKind, Severity, TaskMode
-from mla.ui.app import _render_task
+from mla.ui.app import SHOW_QUERY_PATH_KEY, _render_task
 
 repo = SqliteRepository(
     paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
     db_path=DB_PATH,
 )
+if QUERY_PATH_ON:
+    repo.set_setting(SHOW_QUERY_PATH_KEY, "1")
 task = CheckTask(
     task_id="T-DISPLAY",
     mode=TaskMode.CHECK,
@@ -430,12 +433,14 @@ _render_task(task, repo)
 """
 
 
-def _render_app(tmp_path: Path, *, model_first: bool):
+def _render_app(tmp_path: Path, *, model_first: bool, query_path: bool = False):
     from streamlit.testing.v1 import AppTest
 
     script = DISPLAY_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "display.sqlite3"))).replace(
         "MODEL_FIRST", "True" if model_first else "False"
     )
+    if query_path:
+        script = script.replace("QUERY_PATH_ON = False", "QUERY_PATH_ON = True")
     return AppTest.from_string(script, default_timeout=60).run()
 
 
@@ -444,22 +449,51 @@ def _markdown_text(at) -> str:
 
 
 def test_new_path_renders_each_conclusion_once(tmp_path: Path) -> None:
-    """新路径：模型结论只在 items 里渲染一次；数值复核条目带来源徽标；不再合并 clause_findings。"""
+    """新路径（默认态）：模型结论只在 items 里渲染一次；不再合并 clause_findings。
+
+    来源徽标与共识 note 属第三层，默认态不出现；确定性徽标与理由留在第一层。
+    """
     at = _render_app(tmp_path, model_first=True)
     assert not at.exception
     text = _markdown_text(at)
     reason = "该约定与第十九条关于试用期期限的规定不符"
     assert text.count(reason) == 1  # 二次合并会让它出现两次
+    assert "数值与第 41 条不一致，请核对合同约定" in text
+    assert ":red-badge[确定冲突]" in text
+    assert "程序数值校验" not in text
+    assert "数值校验一致" not in text  # 共识 note 也在第三层
+
+
+def test_new_path_shows_sources_with_query_path(tmp_path: Path) -> None:
+    """开关态：数值复核条目的来源徽标与共识 note 出现，结论条数不变。"""
+    at = _render_app(tmp_path, model_first=True, query_path=True)
+    assert not at.exception
+    text = _markdown_text(at)
+    reason = "该约定与第十九条关于试用期期限的规定不符"
+    assert text.count(reason) == 1
     assert "程序数值校验" in text
     assert "数值与第 41 条不一致，请核对合同约定" in text
 
 
 def test_old_path_still_merges_clause_findings(tmp_path: Path) -> None:
-    """旧路径口径不变：items 只有规则条目，条款结论另行合并列出。"""
+    """旧路径口径不变：items 只有规则条目，条款结论另行合并列出。
+
+    默认态不露来源徽标；规则条目仍把结论与条号放在第一层。
+    """
     at = _render_app(tmp_path, model_first=False)
     assert not at.exception
     text = _markdown_text(at)
-    assert "规则判定·确定性" in text  # 旧路径仍按规则条目渲染 items
+    assert "规则判定·确定性" not in text
+    assert "该约定与第十九条关于试用期期限的规定不符" in text  # 条款结论仍在第一层
+    assert text.count("数值与第 41 条不一致，请核对合同约定") == 1
+
+
+def test_old_path_shows_rule_badge_with_query_path(tmp_path: Path) -> None:
+    """开关态：旧路径的规则条目带来源徽标（改造前行为）。"""
+    at = _render_app(tmp_path, model_first=False, query_path=True)
+    assert not at.exception
+    text = _markdown_text(at)
+    assert "规则判定·确定性" in text
     assert text.count("数值与第 41 条不一致，请核对合同约定") == 1
 
 

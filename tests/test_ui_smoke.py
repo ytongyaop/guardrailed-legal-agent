@@ -242,18 +242,21 @@ def test_navigation_has_admin_group_only_for_admin() -> None:
 
 
 RESULT_SCRIPT = """
+QUERY_PATH_ON = False
 from pathlib import Path
 
 from mla.adapters.persist import SqliteRepository
 from mla.config import Paths, data_path
 from mla.domain.models import Role, User
 from mla.services.tasks import run_check
-from mla.ui.app import _render_task
+from mla.ui.app import SHOW_QUERY_PATH_KEY, _render_task
 
 repo = SqliteRepository(
     paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
     db_path=DB_PATH,
 )
+if QUERY_PATH_ON:
+    repo.set_setting(SHOW_QUERY_PATH_KEY, "1")
 user = User(
     user_id="U1", username="ui", password_hash="x", salt="y", role=Role.USER, enterprise_id="E1"
 )
@@ -264,15 +267,18 @@ _render_task(task, repo)
 
 
 MERGED_SCRIPT = """
+QUERY_PATH_ON = False
 from mla.adapters.persist import SqliteRepository
 from mla.config import Paths, data_path
 from mla.domain.models import CheckItem, CheckTask, ClauseFinding, ItemKind, TaskMode
-from mla.ui.app import _render_task
+from mla.ui.app import SHOW_QUERY_PATH_KEY, _render_task
 
 repo = SqliteRepository(
     paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
     db_path=DB_PATH,
 )
+if QUERY_PATH_ON:
+    repo.set_setting(SHOW_QUERY_PATH_KEY, "1")
 task = CheckTask(
     task_id="T-MERGE",
     mode=TaskMode.CHECK,
@@ -302,12 +308,15 @@ _render_task(task, repo, clause_review=CLAUSE_ON)
 """
 
 
-def _merged_app(tmp_path, *, clause_on: bool, with_finding: bool) -> AppTest:
+def _merged_app(tmp_path, *, clause_on: bool, with_finding: bool, query_path: bool = False) -> AppTest:
+    """结果页两态渲染：`query_path=True` 先把全局开关写成 1（第三层才执行渲染）。"""
     script = (
         MERGED_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
         .replace("CLAUSE_ON", "True" if clause_on else "False")
         .replace("WITH_FINDING", "True" if with_finding else "False")
     )
+    if query_path:
+        script = script.replace("QUERY_PATH_ON = False", "QUERY_PATH_ON = True")
     return AppTest.from_string(script, default_timeout=60).run()
 
 
@@ -319,8 +328,28 @@ def _all_text(at: AppTest) -> str:
 
 
 def test_check_result_merges_clause_findings(tmp_path) -> None:
-    """核对结论内混排：规则条目带来源徽标排在最前，条款结论紧随其后，且不再单列区块。"""
+    """默认态：规则条目与条款结论仍按合并顺序排（规则在前），来源徽标与内部等级不出现。"""
     at = _merged_app(tmp_path, clause_on=True, with_finding=True)
+    assert not at.exception
+
+    markdowns = [m.value for m in at.markdown]
+    rule_line = next(i for i, m in enumerate(markdowns) if "试用期约定超过法定上限" in m)
+    clause_line = next(i for i, m in enumerate(markdowns) if "该约定与第二十条" in m)
+    assert rule_line < clause_line, "规则条目必须排在条款结论之前"
+    assert not any("条款审查（模型辅助）" in m for m in markdowns)
+
+    texts = _all_text(at)
+    assert "依据 LCL-19" not in texts  # 依据回链法条名，不直接露 ID
+    assert "《劳动合同法》第十九条" in texts
+    assert "该约定与第二十条关于试用期工资不得低于约定工资 80% 的规定不符" in texts
+    # 默认态不渲染第三层：来源徽标与内部等级都不出现
+    for hidden in ("规则判定·确定性", "模型审查·A", "A 与法条明文冲突"):
+        assert hidden not in texts, f"默认态露出了判定来源：{hidden}"
+
+
+def test_check_result_merges_clause_findings_with_query_path(tmp_path) -> None:
+    """开关态：来源徽标与内部等级回到条目旁，合并顺序不变。"""
+    at = _merged_app(tmp_path, clause_on=True, with_finding=True, query_path=True)
     assert not at.exception
 
     markdowns = [m.value for m in at.markdown]
@@ -332,19 +361,33 @@ def test_check_result_merges_clause_findings(tmp_path) -> None:
     assert "A 与法条明文冲突" in markdowns[clause_line]
 
     texts = _all_text(at)
-    assert "依据 LCL-19" not in texts  # 依据回链法条名，不直接露 ID
+    assert "依据 LCL-19" not in texts
     assert "《劳动合同法》第十九条" in texts
     assert "该约定与第二十条关于试用期工资不得低于约定工资 80% 的规定不符" in texts
 
 
 def test_clause_review_note_when_not_reviewed(tmp_path) -> None:
-    """条款审查未启用时给一行覆盖说明，不得写成未发现问题。"""
-    at = _merged_app(tmp_path, clause_on=False, with_finding=False)
+    """条款审查未启用时给一行覆盖说明，不得写成未发现问题（开关态）。"""
+    at = _merged_app(tmp_path, clause_on=False, with_finding=False, query_path=True)
     assert not at.exception
 
     texts = _all_text(at)
     assert "本次未做条款级审查，条款级风险未覆盖。" in texts
     assert "未发现问题" not in texts
+
+
+def test_clause_review_note_hidden_by_default(tmp_path) -> None:
+    """默认态：覆盖说明属第三层，两种情形都不出现；第一层的结论句与提醒照旧。"""
+    for clause_on, with_finding in ((True, False), (False, False)):
+        at = _merged_app(tmp_path, clause_on=clause_on, with_finding=with_finding)
+        assert not at.exception
+        texts = _all_text(at)
+        assert "本次未做条款级审查，条款级风险未覆盖。" not in texts
+        assert "本次条款级审查未发现可疑条款。" not in texts
+        assert "未发现问题" not in texts
+        # 结论句（`###` 标题）与顶部提醒仍在第一层
+        assert any(m.value.startswith("### ") for m in at.markdown)
+        assert "结论不代表合规，请结合事实复核。" in texts
 
 
 def test_result_top_shows_verdict_not_bare_count(tmp_path) -> None:
@@ -358,8 +401,8 @@ def test_result_top_shows_verdict_not_bare_count(tmp_path) -> None:
 
 
 def test_clause_review_note_when_nothing_found(tmp_path) -> None:
-    """启用且模型未命中：说未发现可疑条款，而不是未发现问题。"""
-    at = _merged_app(tmp_path, clause_on=True, with_finding=False)
+    """启用且模型未命中：说未发现可疑条款，而不是未发现问题（开关态）。"""
+    at = _merged_app(tmp_path, clause_on=True, with_finding=False, query_path=True)
     assert not at.exception
 
     texts = _all_text(at)
@@ -387,40 +430,54 @@ def test_result_disclaimer_always_once(tmp_path) -> None:
 
 
 HISTORY_SCRIPT = """
+QUERY_PATH_ON = False
 from mla.adapters.persist import SqliteRepository
 from mla.config import Paths, data_path
 from mla.domain.models import CheckTask, TaskMode
-from mla.ui.app import _render_task
+from mla.ui.app import SHOW_QUERY_PATH_KEY, _render_task
 
 repo = SqliteRepository(
     paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
     db_path=DB_PATH,
 )
+if QUERY_PATH_ON:
+    repo.set_setting(SHOW_QUERY_PATH_KEY, "1")
 task = CheckTask(task_id="T-HIST", mode=TaskMode.CHECK, enterprise_id="E1", clause_review=FLAG)
 _render_task(task, repo)
 """
 
 
-def _history_app(tmp_path, *, clause_review: bool) -> AppTest:
+def _history_app(tmp_path, *, clause_review: bool, query_path: bool = False) -> AppTest:
     script = HISTORY_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3"))).replace(
         "FLAG", "True" if clause_review else "False"
     )
+    if query_path:
+        script = script.replace("QUERY_PATH_ON = False", "QUERY_PATH_ON = True")
     return AppTest.from_string(script, default_timeout=60).run()
 
 
 def test_clause_review_note_uses_persisted_flag(tmp_path) -> None:
-    """历史详情不传开关，按落库的 clause_review 说：做过就“未发现”，没做才“未覆盖”。"""
-    reviewed = _history_app(tmp_path, clause_review=True)
+    """历史详情不传开关，按落库的 clause_review 说：做过就“未发现”，没做才“未覆盖”（开关态）。"""
+    reviewed = _history_app(tmp_path, clause_review=True, query_path=True)
     assert not reviewed.exception
     assert "本次条款级审查未发现可疑条款。" in _all_text(reviewed)
 
-    skipped = _history_app(tmp_path, clause_review=False)
+    skipped = _history_app(tmp_path, clause_review=False, query_path=True)
     assert not skipped.exception
     assert "本次未做条款级审查，条款级风险未覆盖。" in _all_text(skipped)
 
 
+def test_clause_review_note_hidden_in_history_default(tmp_path) -> None:
+    """历史详情默认态同样不渲染第三层：覆盖说明不出现，第一层结论句仍在。"""
+    at = _history_app(tmp_path, clause_review=False)
+    assert not at.exception
+    texts = _all_text(at)
+    assert "本次未做条款级审查，条款级风险未覆盖。" not in texts
+    assert "未发现硬性风险，但覆盖不完整" in texts
+
+
 def test_check_result_shows_missing_terms(tmp_path, monkeypatch) -> None:
-    """结果页必备条款区块：中文条款名 + 依据 ID，且不出现内部编号 MT-*。"""
+    """默认态结果页必备条款区块：中文条款名 + 常驻条号，且不出现内部编号 MT-*。"""
     script = RESULT_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
     at = AppTest.from_string(script, default_timeout=60).run()
     assert not at.exception
@@ -436,10 +493,34 @@ def test_check_result_shows_missing_terms(tmp_path, monkeypatch) -> None:
     assert "LCL-" not in texts  # 内部编号与前缀不露给用户
     assert "MT-" not in texts  # 内部编号不露给用户
     assert "合同无效" not in texts
+    # 缺失/未见/需人工确认是独立计数，常驻第一层
+    assert "九类必备条款：" in texts
+    assert "缺失 " in texts and "需人工确认 " in texts
+    # “已写 x 类”属覆盖率口径，默认态不出现
+    assert "必备条款 6/8 已写" not in texts
+    assert "已写 6 类" not in texts
 
     metrics = {m.label: m.value for m in at.metric}
-    assert "必备条款" not in metrics, "必备条款不再是裸指标，改由顶部覆盖明细说"
+    assert "必备条款" not in metrics, "必备条款不再是裸指标，改由结论区独立计数"
+    assert "处理建议" not in metrics, "顶部不再有处理建议数量指标"
+
+
+def test_check_result_shows_missing_terms_with_query_path(tmp_path, monkeypatch) -> None:
+    """开关态：覆盖率口径（必备条款 6/8 已写、已写 6 类）出现在第三层，计数仍与第一层一致。"""
+    script = RESULT_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3"))).replace(
+        "QUERY_PATH_ON = False", "QUERY_PATH_ON = True"
+    )
+    at = AppTest.from_string(script, default_timeout=60).run()
+    assert not at.exception
+
+    texts = "\n".join(
+        e.value
+        for e in list(at.markdown) + list(at.caption) + list(at.error) + list(at.warning) + list(at.info)
+    )
     assert "必备条款 6/8 已写" in texts
+    assert "已写 6 类" in texts
+    assert "第十七条" in texts
+    assert "LCL-" not in texts
 
 
 CHECK_PAGE_SCRIPT = """
@@ -636,15 +717,18 @@ ui_app._render_task(task, repo, user)
 
 
 SPLIT_SCRIPT = """
+QUERY_PATH_ON = False
 from mla.adapters.persist import SqliteRepository
 from mla.config import Paths, data_path
 from mla.domain.models import CheckTask, RuleCoverage, TaskMode, UndeterminedRule, UnmetTerm
-from mla.ui.app import _render_task
+from mla.ui.app import SHOW_QUERY_PATH_KEY, _render_task
 
 repo = SqliteRepository(
     paths=Paths(statutes=data_path("statutes/statutes.jsonl"), rules=data_path("rules/rules.yaml")),
     db_path=DB_PATH,
 )
+if QUERY_PATH_ON:
+    repo.set_setting(SHOW_QUERY_PATH_KEY, "1")
 task = CheckTask(
     task_id="T-SPLIT",
     mode=TaskMode.CHECK,
@@ -673,10 +757,16 @@ _render_task(task, repo)
 """
 
 
+def _split_app(tmp_path, *, query_path: bool = False) -> AppTest:
+    script = SPLIT_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
+    if query_path:
+        script = script.replace("QUERY_PATH_ON = False", "QUERY_PATH_ON = True")
+    return AppTest.from_string(script, default_timeout=60).run()
+
+
 def test_result_splits_unmet_statutory_and_missing_facts(tmp_path) -> None:
     """三个区块各出现一次、互不重复：合同未约定 / 需补充事实 / 法定兜底汇总。"""
-    script = SPLIT_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
-    at = AppTest.from_string(script, default_timeout=60).run()
+    at = _split_app(tmp_path)
     assert not at.exception
 
     markdowns = [m.value for m in at.markdown]
@@ -694,18 +784,31 @@ def test_result_splits_unmet_statutory_and_missing_facts(tmp_path) -> None:
 
 
 def test_result_top_admits_incomplete_coverage(tmp_path) -> None:
-    """没有条目但审查没跑：顶部必须写“覆盖不完整”，不能读成没问题。"""
-    script = SPLIT_SCRIPT.replace("DB_PATH", repr(str(tmp_path / "ui.sqlite3")))
-    at = AppTest.from_string(script, default_timeout=60).run()
+    """没有条目但审查没跑：顶部第一层必须写“覆盖不完整”，不能读成没问题。"""
+    at = _split_app(tmp_path)
+    assert not at.exception
+
+    texts = _all_text(at)
+    assert "未发现硬性风险，但覆盖不完整" in texts
+    # 结论句只在顶部说一次：结论区不再复述“未发现硬性风险项”这类判断。
+    assert "未发现可判定的硬性风险项" not in texts
+    assert "本次未发现硬性风险项" not in texts
+    # 覆盖率明细属第三层，默认态不出现
+    assert "条款审查未运行" not in texts
+    assert "规则 13/20 可判定" not in texts
+    assert "1 条规则因缺少事实无法判定" not in texts
+
+
+def test_result_top_shows_coverage_details_with_query_path(tmp_path) -> None:
+    """开关态：覆盖率明细（含条款审查运行状态、缺事实条数）出现在第三层。"""
+    at = _split_app(tmp_path, query_path=True)
     assert not at.exception
 
     texts = _all_text(at)
     assert "未发现硬性风险，但覆盖不完整" in texts
     assert "条款审查未运行" in texts
     assert "1 条规则因缺少事实无法判定" in texts
-    # 结论句只在顶部说一次：结论区不再复述“未发现硬性风险项”这类判断。
-    assert "未发现可判定的硬性风险项" not in texts
-    assert "本次未发现硬性风险项" not in texts
+    assert "规则 13/20 可判定" in texts
 
 
 HISTORY_LIST_SCRIPT = """
