@@ -316,6 +316,15 @@ class SqliteRepository:
             )
         self._conn.commit()
 
+    # ---------- 生命周期 ----------
+    def close(self) -> None:
+        """关闭底层 SQLite 连接（幂等）。
+
+        只为 Web 层的「每请求一个仓储、请求结束关闭连接」补一个出口：
+        不改任何查询语义，也不影响既有调用方（它们从不调用本方法）。
+        """
+        self._conn.close()
+
     # ---------- 法源 / 规则 / 案例（文件） ----------
     def list_statutes(self) -> list[StatuteEntry]:
         if self._statutes is None:
