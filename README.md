@@ -151,7 +151,7 @@ python -m mla admin promote --username 你的账号
 | 必备条款规格 | 9 类 | 依据《劳动合同法》第十七条 |
 | 官方案例 | 37 条 | 附在结论后供参考 |
 | 评测数据 | 回归集：主流程 52 条、条款级 95 条（正样本 38、负样本 57）；留出集：非模板合同 12 条、问答 20 条 | 两类纪律不同：回归集每次改动必跑、只要求不退化；留出集不参与调优、用于报告能力。构造方式见 [docs/evaluation.md](docs/evaluation.md) |
-| 测试 | 442 条 | 全部离线可复现：测试强制纯正则抽取并屏蔽真实 Key |
+| 测试 | 832 条（本版实测 831 passed / 1 skipped） | 全部离线可复现：测试强制纯正则抽取并屏蔽真实 Key |
 
 评测结果（口径与数字同样重要，务必连着读）：
 
@@ -190,7 +190,7 @@ src/mla/
     cases/cases.jsonl            37 条官方案例
     evalsets/                    回归集 52 ＋ 95，留出集 12 ＋ 20
 scripts/        校验与评测脚本
-tests/          442 条测试
+tests/          832 条测试
 docs/           architecture.md evaluation.md
 .github/        workflows/ci.yml · dependabot.yml · pull_request_template.md · ISSUE_TEMPLATE/
 .streamlit/     config.toml secrets.toml.example
@@ -251,7 +251,7 @@ python scripts/eval_clauses.py --runs 1
 
 ## 版本
 
-当前版本 0.3.0（以 `src/mla/__init__.py` 与 [Releases](https://github.com/ytongyaop/guardrailed-legal-agent/releases) 为准）。
+当前版本 0.3.1（以 `src/mla/__init__.py` 与 [Releases](https://github.com/ytongyaop/guardrailed-legal-agent/releases) 为准）。
 
 详细变更见 [CHANGELOG.md](CHANGELOG.md)，版本号遵循语义化版本。
 

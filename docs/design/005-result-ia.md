@@ -1,4 +1,4 @@
-# 005 结果页信息架构收敛（0.3.x）
+# 005 结果页信息架构收敛（0.3.1）
 
 基线：v0.3.0（`324b814`）。本文规定信息架构，Streamlit 仅用于验证，0.4.0 新前端须复现同一行为。
 行号以 v0.3.0 为准，实施时按函数与内容定位，不按行号机械修改。
@@ -111,7 +111,7 @@
 | AC-07 | 缺少新列/新 JSON 键的旧任务可打开；缺失覆盖、附注、来源等按无处理，无异常、无补算 | 用旧 schema 建行、读库后交给 `_render_task`；`python -m pytest tests/test_result_ia.py tests/test_model_first.py -k legacy` |
 | AC-08 | 原免责声明仍位于最后且仅一次，免责及对外词未改，拒答原因仍默认可见 | `python -m pytest tests/test_result_ia.py tests/test_ui_smoke.py -k "disclaimer or required_copy or refused"`；`python scripts/check_ui_text.py` |
 | AC-09 | Word、历史列表与问答生成/隐私行为未受顺带修改 | `python -m pytest tests/test_report.py tests/test_history_filter.py tests/test_ui_smoke.py` |
-| AC-10 | 全部既有及新增测试通过，静态门禁通过；不得删除或跳过既有用例（当前 801 passed + 1 skipped，收集数 802）来变绿 | `python -m pytest` 退出码 0；随后 `ruff check src tests scripts`、`python -m pyright src`、`python scripts/check_ui_text.py`；CI 覆盖率仍按 `--cov-fail-under=75` |
+| AC-10 | 全部既有及新增测试通过，静态门禁通过；不得删除或跳过既有用例（当前 831 passed + 1 skipped，收集数 832）来变绿 | `python -m pytest` 退出码 0；随后 `ruff check src tests scripts`、`python -m pyright src`、`python scripts/check_ui_text.py`；CI 覆盖率仍按 `--cov-fail-under=75` |
 
 预计调整测试：`test_ui_smoke.py`（来源徽标/顶部覆盖断言改为开关态，补默认态断言）、`test_model_first.py`（程序校验与旧路径来源徽标改为开关态）、`test_ui_setup.py`（设置持久化与角色可用性）；新增 `test_result_ia.py`（两态、条号、快照、旧记录）。`test_verdict.py`、`test_grading.py`、`test_settings.py`、`test_persist.py`、`test_report.py` 只作回归，不应需要改断言。
 
@@ -121,6 +121,31 @@
 2. **接通设置**：只改 `src/mla/ui/app.py` 的设置区与开关读取，补 `test_ui_setup.py` / `test_result_ia.py`；跑 AC-03，证明缺键关闭和持久化。
 3. **收敛三层**：在同一 UI 文件移动指标与过程内容、传递统一显隐状态、折叠类案与问答原文、为旧规则条目补同一原文折叠入口，并保持条号在折叠器外；不改领域/持久化文件。更新上述既有测试后跑 AC-01…AC-09。
 4. **全量验收**：核对快照无差异和计划外文件无改动，再执行 AC-10 全部门禁；若失败，区分本改造回归与已存在的环境/偶发失败并贴原始输出，不删用例求绿。
+
+## 验收记录（2026-11-17）
+
+用一份人工植入 12 类缺陷的演示合同在真实环境跑通，结论如下。
+
+呈现层：默认态不出现耗时/来源/内部等级，条号在原文折叠时仍可见，处理建议正文常驻；打开开关后过程层出现且结论层内容与顺序不变。验收通过。
+
+内容层：12 类缺陷中命中 8 类、漏检 4 类；按小项计为完全检出 5、部分检出 5、弱检出 1、漏检 6。
+
+漏检项（模型未给出任何结论）：
+
+- 强制无偿加班与豁免法定节假日加班费（合同第三条）
+- 免除工伤赔偿责任（第六条）
+- 侵占劳动者职务成果知识产权（第六条）
+- 概括放弃全部法定权益（第十一条）
+
+弱检出项：终身竞业限制 + 无补偿 + 高额违约金，仅以「数值与第 24 条不一致」出现，未指出「终身」与「无补偿」本身违法。
+
+模型事实错误：处理建议称「将竞业限制期限从 10 年改为不超过 2 年」，而合同原文为「终身」，合同中不存在「10 年」。
+
+另有一条「确定冲突」只给出「数值与第 24 条不一致，请核对合同约定」，未说明具体数值与差异，对使用者不构成可用信息。
+
+本次运行另触发「抽取已回退规则式」，可能影响条款候选的完整性。
+
+上述为模型能力边界（漏检与幻觉），非本版呈现层改动引入；后续通过更换法律领域专用模型、补充触发器与提示词约束分别评估。
 
 ## 未决问题
 

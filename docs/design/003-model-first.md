@@ -629,7 +629,7 @@ L1 的每条约定都必须有唯一检出层，否则"规则级"就只是愿望
 
 | 项 | 实测 |
 | --- | --- |
-| 本仓库用例数 | `pytest --collect-only` → **485 tests collected** |
+| 本仓库用例数 | 规格评审时 `pytest --collect-only` → **485 tests collected** |
 | 离线保障 | `tests/conftest.py:18-27` 三层保险：强制 `MLA_EXTRACT_MODE=regex`、屏蔽 secrets、`MLA_DB` 指向临时库 |
 | 副作用 | 由于全局无模型，**核心判定路径在测试里根本没有被测到** |
 
