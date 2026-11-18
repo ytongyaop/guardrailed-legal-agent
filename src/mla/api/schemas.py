@@ -475,6 +475,8 @@ class VerdictView(BaseModel):
     review_count: int
     conclusion_details: list[str] = Field(default_factory=list)
     process_details: list[str] = Field(default_factory=list)
+    #: 结论常驻提醒（005「原结论提醒」）：与旧界面同一句，前端不得另写一份。
+    caveat: str = ""
 
 
 class LimitsView(BaseModel):

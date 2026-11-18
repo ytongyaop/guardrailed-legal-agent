@@ -2,22 +2,26 @@
  * 端点封装（规格 006 §2 端点表）。页面只调用这里的函数，不拼 URL、不手写 header。
  *
  * 批次 4 覆盖：setup / auth / enterprise / contracts / settings / admin。
- * 核对、结果、历史、报告与问答属于批次 5，这里不提前封装。
+ * 批次 5 补上核对链路、结果、历史、报告与问答。
  */
 
 import { http } from './http'
 import type {
   AdminUser,
   AuthState,
+  CheckIn,
   ContractDetail,
   ContractPage,
   DeletionOut,
   EnterpriseIn,
   EnterpriseView,
   EvaluationView,
+  HistoryPage,
+  JobView,
   LogPage,
   LoginIn,
   ModelSettingsView,
+  ParseResult,
   PasswordChangeIn,
   RegisterIn,
   RuleCatalogView,
@@ -25,6 +29,8 @@ import type {
   SetupAdminIn,
   SetupStatus,
   StatutePage,
+  TaskDetail,
+  TrendView,
   UserView,
 } from './types'
 
@@ -100,6 +106,75 @@ export function fetchContract(contractId: string): Promise<ContractDetail> {
 
 export function deleteContract(contractId: string): Promise<void> {
   return http.delete<void>(`/contracts/${encodeURIComponent(contractId)}`, { expect: 'none' })
+}
+
+/** 只解析不存档：multipart `file`（txt/docx/文本型 pdf），文件名与正文由服务端规范化。 */
+export function parseContractFile(file: File): Promise<ParseResult> {
+  const body = new FormData()
+  body.append('file', file, file.name)
+  // 不手写 Content-Type：浏览器要自己带 multipart 边界
+  return http.post<ParseResult>('/contracts/parse', body)
+}
+
+// ---------------------------------------------------------------- 核对（异步 job）
+//
+// 核对一律 202 + 轮询 `/jobs/{id}`：条款审查常需几十秒，长连接会被中间层掐断，
+// 而 `queued/running/failed` 必须让用户看得见（006 §2「核对采用异步」）。
+
+export function postCheck(payload: CheckIn): Promise<JobView> {
+  return http.post<JobView>('/checks', payload)
+}
+
+export function fetchJob(jobId: string): Promise<JobView> {
+  return http.get<JobView>(`/jobs/${encodeURIComponent(jobId)}`)
+}
+
+export function fetchTask(taskId: string): Promise<TaskDetail> {
+  return http.get<TaskDetail>(`/tasks/${encodeURIComponent(taskId)}`)
+}
+
+export function postAnswers(
+  taskId: string,
+  payload: { answers: Record<string, string>; skip: boolean },
+): Promise<JobView> {
+  return http.post<JobView>(`/tasks/${encodeURIComponent(taskId)}/answers`, payload)
+}
+
+export function postOptionalFacts(taskId: string, facts: Record<string, string>): Promise<JobView> {
+  return http.post<JobView>(`/tasks/${encodeURIComponent(taskId)}/optional-facts`, { facts })
+}
+
+export function postQuestion(taskId: string, question: string): Promise<JobView> {
+  // 只发问题：上下文由服务端按 `_qa_context` 生成，客户端不得注入合同正文（006 §2）
+  return http.post<JobView>(`/tasks/${encodeURIComponent(taskId)}/qa`, { question })
+}
+
+export function downloadReport(taskId: string): Promise<Blob> {
+  return http.get<Blob>(`/tasks/${encodeURIComponent(taskId)}/report`, { expect: 'blob' })
+}
+
+// ---------------------------------------------------------------- 历史
+
+export type HistoryFilter = 'all' | 'risk' | 'degraded'
+
+export function fetchHistory(
+  query: { filter?: HistoryFilter; page?: number; page_size?: number } = {},
+): Promise<HistoryPage> {
+  return http.get<HistoryPage>('/history', {
+    query: {
+      filter: query.filter ?? 'all',
+      page: query.page ?? 1,
+      page_size: query.page_size ?? 20,
+    },
+  })
+}
+
+export function fetchTrend(): Promise<TrendView> {
+  return http.get<TrendView>('/history/trend')
+}
+
+export function deleteHistoryEntry(taskId: string): Promise<void> {
+  return http.delete<void>(`/history/${encodeURIComponent(taskId)}`, { expect: 'none' })
 }
 
 // ---------------------------------------------------------------- settings

@@ -243,3 +243,288 @@ export interface EvaluationView {
   variants: EvalVariant[]
   history: EvalHistoryRow[]
 }
+
+// ---------------------------------------------------------------- 核对结果（006「结果 DTO」）
+//
+// 结果页的**唯一展示真源**：计数、分级、排序、分组键都在服务端算好，这里只描述形状。
+// 前端不得自己数「几条风险」或重排条目（005 第 6 节 / 006 非目标）。
+
+export interface StatuteView {
+  id: string
+  found: boolean
+  /** 常驻可读法名条号（如《劳动合同法》第十七条）；查不到时是固定文案，绝不是内部 ID。 */
+  label: string
+  text: string | null
+  effective_date: string | null
+  source_url: string | null
+}
+
+export interface FindingProcessView {
+  source_label: string
+  grade: string
+  note: string
+}
+
+export type FindingPath = 'consensus' | 'rule' | 'clause'
+
+export interface FindingView {
+  item_id: string
+  path: FindingPath
+  impact: string | null
+  certainty: string | null
+  /** 常驻提示（如「模型自提，待人工确认」），属结论而非过程。 */
+  display_marker: string | null
+  finding: string
+  clause_ref: string
+  evidence_text: string
+  span_preview: string
+  span_expansible: boolean
+  need_facts: string[]
+  statutes: StatuteView[]
+  /** 第三层：过程开关关闭时必为 null（服务端不返回，前端不补算）。 */
+  process: FindingProcessView | null
+}
+
+export interface VerdictView {
+  status: string
+  headline: string
+  risk_count: number
+  review_count: number
+  conclusion_details: string[]
+  process_details: string[]
+  caveat: string
+}
+
+export interface LimitsView {
+  unmet_lines: string[]
+  field_missing_lines: string[]
+  premise_missing_lines: string[]
+  premise_count: number
+  statutory_na_line: string | null
+}
+
+export interface MissingTermItem {
+  term_id: string
+  name: string
+  status: string
+  text: string
+  statute: StatuteView
+}
+
+export interface MissingTermsView {
+  summary: string
+  short_note: string | null
+  /** 覆盖率口径，仅过程开关开启时非空。 */
+  written_count: number | null
+  absent_count: number
+  unseen_count: number
+  manual_count: number
+  items: MissingTermItem[]
+  manual_names: string[]
+}
+
+export interface SuggestionView {
+  text: string
+  citation_text: string
+  display_disclaimer: string | null
+  sources: StatuteView[]
+}
+
+export interface ProcessView {
+  cited_statute_count: number
+  /** 旧记录没有耗时就是 null；前端不得显示成 0。 */
+  latency_s: number | null
+  latency_text: string
+  details: string[]
+  finding_help: string
+  clause_review_note: string | null
+  verify_ok: boolean
+  traceability_text: string
+  ask_rounds: number
+  ask_text: string
+  degraded_visible: boolean
+  extract_note: string | null
+  questions: string[]
+  task_id: string
+  token_in: number
+  token_out: number
+  run_detail: string
+}
+
+export interface TaskHead {
+  task_id: string
+  enterprise_id: string
+  contract_id: string
+  contract_name: string
+  contract_chars: number
+  created_at: string | null
+  model: string
+  model_first: boolean
+  clause_review: boolean
+  /** true=已存入企业档案；false=仅自己可见（历史页不显示）。 */
+  shared: boolean
+}
+
+export interface AskItemView {
+  slot_id: string
+  question: string
+  source: string
+  hint: string | null
+}
+
+export interface OptionalFieldView {
+  field_id: string
+  label: string
+  hint: string | null
+  question: string | null
+}
+
+export interface WorkflowView {
+  state: 'awaiting_facts' | 'ready' | 'history'
+  effective_contract_id: string
+  ask_rounds: number
+  questions: string[]
+  ask_items: AskItemView[]
+  optional_fields: OptionalFieldView[]
+}
+
+export interface RefusalView {
+  layer: string
+  reason: string
+  message: string
+  guidance: string
+}
+
+export interface FactRow {
+  label: string
+  value: string
+}
+
+export interface CaseItemView {
+  title: string
+  holding: string
+  source: string
+  dispute_type: string
+  source_url: string | null
+}
+
+export interface CaseBlockView {
+  note: string
+  summary: string
+  items: CaseItemView[]
+}
+
+export interface TaskDetail {
+  task: TaskHead
+  verdict: VerdictView
+  findings: FindingView[]
+  limits: LimitsView
+  missing_terms: MissingTermsView
+  suggestions: SuggestionView[]
+  suggestion_empty_text: string | null
+  facts: FactRow[]
+  cases: CaseBlockView
+  process: ProcessView | null
+  refusal: RefusalView | null
+  workflow: WorkflowView
+  disclaimer: string
+}
+
+export interface QaProcessView {
+  agent_trace: string[]
+  token_in: number
+  token_out: number
+  detail_text: string
+}
+
+export interface QaResult {
+  task_id: string
+  parent_task_id: string
+  refusal: RefusalView | null
+  empty_text: string | null
+  errors: string[]
+  sources: StatuteView[]
+  suggestions: SuggestionView[]
+  process: QaProcessView | null
+}
+
+export interface HistorySummary {
+  task_id: string
+  contract_name: string
+  created_at: string | null
+  verdict: VerdictView
+  suggestion_count: number
+  latency_s: number | null
+  latency_text: string
+  refused: boolean
+  verify_ok: boolean
+  degraded_visible: boolean
+  ask_rounds: number
+}
+
+export interface HistoryPage extends Page<HistorySummary> {
+  /** 200 条窗口内的条数，不是全库总量。 */
+  total_all: number
+  deleted_count: number
+  window_size: number
+}
+
+export interface TrendPoint {
+  order: number
+  label: string
+  date: string
+  risk_item_count: number
+  suggestion_count: number
+}
+
+export interface TrendView {
+  recent: number
+  average: number
+  max: number
+  window_size: number
+  note: string
+  points: TrendPoint[]
+}
+
+// ---------------------------------------------------------------- 异步核对（/checks 与 /jobs）
+
+export interface CheckIn {
+  text?: string | null
+  contract_name?: string | null
+  contract_id?: string | null
+  clause_review?: boolean | null
+  archive: boolean
+}
+
+export interface ParseResult {
+  filename: string
+  text: string
+  char_count: number
+}
+
+export interface JobErrorView {
+  code: string
+  message: string
+  details: Record<string, unknown> | null
+  action: { type: string; label: string } | null
+}
+
+export interface JobView {
+  job_id: string
+  kind: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  task_id: string | null
+  /** 形状按 kind 区分：check/recheck 是 TaskDetail，qa 是 QaResult。 */
+  result: TaskDetail | QaResult | null
+  error: JobErrorView | null
+}
+
+/** 判别 job.result 是哪种结果：结果页与问答面板共用，避免每处各写一份断言。 */
+export function isTaskDetail(result: TaskDetail | QaResult | null): result is TaskDetail {
+  return result !== null && typeof result === 'object' && 'verdict' in result
+}
+
+export function isQaResult(result: TaskDetail | QaResult | null): result is QaResult {
+  return result !== null && typeof result === 'object' && 'parent_task_id' in result
+}
+

@@ -3,8 +3,6 @@
  *
  * 守卫只负责体验：未登录去登录页，普通用户进管理端点去 403 提示页。
  * 真正的边界在 FastAPI 的 `permissions.py`，绕过守卫直接调接口一样会被拒绝。
- *
- * `/check` 与 `/history` 属于批次 5，这里先占位（侧栏分组与旧界面一致，点击不会 404）。
  */
 
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
@@ -31,11 +29,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/check',
     name: 'check',
-    component: () => import('@/components/PendingView.vue'),
-    props: {
-      title: '合同核对',
-      note: '合同核对、三层结果与问答在批次 5 交付。当前版本可先使用企业档案、合同管理与设置。',
-    },
+    component: () => import('@/views/CheckView.vue'),
     meta: { layout: 'shell', title: '合同核对' },
   },
   {
@@ -53,12 +47,14 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/history',
     name: 'history',
-    component: () => import('@/components/PendingView.vue'),
-    props: {
-      title: '历史记录',
-      note: '历史列表、筛选、趋势与删除在批次 5 交付。',
-    },
+    component: () => import('@/views/HistoryView.vue'),
     meta: { layout: 'shell', title: '历史记录' },
+  },
+  {
+    path: '/history/:taskId',
+    name: 'history-detail',
+    component: () => import('@/views/HistoryDetailView.vue'),
+    meta: { layout: 'shell', title: '记录详情' },
   },
   {
     path: '/settings',

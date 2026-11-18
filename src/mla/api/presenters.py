@@ -85,6 +85,8 @@ SHOW_QUERY_PATH_KEY = "ui.show_query_path"
 DISCLAIMER_FALLBACK = "非法律意见，仅供参考；重大争议请咨询专业人士。"
 CASE_NOTE = "同类情形通常如何认定，不构成本案结论。"
 RESULT_DISCLAIMER = "以上为风险提示与依据定位，不构成法律意见；条款效力以仲裁机构或法院裁判为准。"
+#: 顶部结论的常驻提醒（005 第一层「原结论提醒」）：不随过程开关变化。
+VERDICT_CAVEAT = "结论不代表合规，请结合事实复核。"
 CLAUSE_SPAN_LIMIT = 80
 #: 旧路径合并列表的来源徽标（档位 0 = 规则判定，1/2/3 = 条款审查 A/B/C）。
 FINDING_SOURCE_BADGES: tuple[str, ...] = ("规则判定·确定性", "模型审查·A", "模型审查·B", "模型审查·C")
@@ -764,6 +766,7 @@ def task_detail(
             review_count=int(verdict.review_count),
             conclusion_details=first_details,
             process_details=list(process_details) if show_process else [],
+            caveat=VERDICT_CAVEAT,
         ),
         findings=findings_of(task, repo, show_process=show_process),
         limits=limits_of(task, repo),
@@ -863,6 +866,7 @@ def history_summary(task: CheckTask, *, show_process: bool = False) -> HistorySu
             review_count=int(verdict.review_count),
             conclusion_details=first_details,
             process_details=list(process_details) if show_process else [],
+            caveat=VERDICT_CAVEAT,
         ),
         suggestion_count=len(task.suggestions or []),
         latency_s=task.latency_s,
@@ -966,6 +970,7 @@ __all__ = [
     "OPTIONAL_CACHE_LIMIT",
     "RESULT_DISCLAIMER",
     "SHOW_QUERY_PATH_KEY",
+    "VERDICT_CAVEAT",
     "check_state",
     "clause_review_note",
     "degraded_visible",

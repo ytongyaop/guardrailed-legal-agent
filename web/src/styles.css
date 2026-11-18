@@ -168,6 +168,286 @@ body {
   color: var(--mla-text-muted);
 }
 
+/* ---------------------------------------------------------------- 核对页与结果（规格 005 三层） */
+
+.check-layout {
+  display: grid;
+  grid-template-columns: minmax(340px, 1fr) minmax(520px, 1.9fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1180px) {
+  .check-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.check-side,
+.check-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* 左列的表单卡片与右列结果卡片之间不需要额外上边距（gap 已负责） */
+.check-side .page-card + .page-card,
+.check-main .page-card + .page-card {
+  margin-top: 0;
+}
+
+.source-switch {
+  margin-bottom: 12px;
+}
+
+.hidden-file {
+  display: none;
+}
+
+.check-options {
+  margin: 12px 0 4px;
+}
+
+.job-progress {
+  padding: 4px 0 8px;
+}
+
+.job-status {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: #1e40af;
+}
+
+.section-title {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.impact-title {
+  margin: 16px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mla-text-muted);
+}
+
+.result-verdict {
+  margin-bottom: 16px;
+}
+
+.verdict-headline {
+  margin: 4px 0 6px;
+  font-size: 21px;
+  line-height: 1.35;
+}
+
+.verdict-danger {
+  color: #c45656;
+}
+
+.verdict-success {
+  color: #2f9e6e;
+}
+
+.verdict-caveat {
+  margin: 0;
+  font-size: 12px;
+  color: var(--mla-text-muted);
+}
+
+.finding-card {
+  padding: 10px 12px;
+  border: 1px solid var(--mla-border);
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.finding-card + .finding-card {
+  margin-top: 10px;
+}
+
+.finding-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.finding-claim,
+.finding-span,
+.finding-reason {
+  margin: 4px 0;
+  font-size: 14px;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.finding-statutes {
+  margin: 6px 0 4px;
+  font-size: 13px;
+}
+
+.statute-label {
+  color: #1e40af;
+}
+
+.finding-caption {
+  margin: 2px 0;
+  font-size: 12px;
+  color: var(--mla-text-muted);
+}
+
+.fold-box {
+  margin: 6px 0;
+  border: 1px solid var(--mla-border);
+  border-radius: 4px;
+  background: #fafbfc;
+}
+
+.fold-box-summary {
+  padding: 6px 10px;
+  font-size: 13px;
+  color: #1e40af;
+  cursor: pointer;
+  user-select: none;
+}
+
+.fold-box-body {
+  padding: 0 12px 10px;
+}
+
+.fold-text {
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.fold-meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--mla-text-muted);
+  word-break: break-all;
+}
+
+.fold-link {
+  margin-left: 6px;
+  color: #1e40af;
+}
+
+.suggestion-list {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+.suggestion + .suggestion {
+  margin-top: 10px;
+}
+
+.suggestion-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.missing-term {
+  margin-bottom: 10px;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.facts dt {
+  color: var(--mla-text-muted);
+}
+
+.facts dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.case-item + .case-item {
+  margin-top: 10px;
+}
+
+.case-title {
+  margin: 0;
+  font-size: 14px;
+}
+
+.process-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.process-metric {
+  min-width: 108px;
+  padding: 8px 12px;
+  border: 1px solid var(--mla-border);
+  border-radius: 6px;
+  background: #fafbfc;
+}
+
+.process-metric-value {
+  display: block;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.process-metric-label {
+  font-size: 12px;
+  color: var(--mla-text-muted);
+}
+
+.process-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.disclaimer {
+  margin: 16px 0 0;
+  font-size: 12px;
+  color: var(--mla-text-muted);
+  line-height: 1.7;
+}
+
+.result-card {
+  min-height: 240px;
+}
+
+.history-name {
+  margin: 0 0 2px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.history-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.trend-chart {
+  width: 100%;
+  height: 280px;
+}
+
+.qa-sources {
+  margin-top: 12px;
+}
+
 /* ---------------------------------------------------------------- 登录与初始化 */
 
 .bare-page {

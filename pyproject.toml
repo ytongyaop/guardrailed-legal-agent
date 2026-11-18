@@ -50,7 +50,17 @@ mla = "mla.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mla = ["data/**/*.jsonl", "data/**/*.yaml", "data/**/*.txt", "data/**/*.json", "data/**/*.md"]
+# `api/static/**` 是前端构建产物（006 §5：静态产物随 wheel 打包，`web/dist` 只在源码态用）。
+# 构建 wheel/exe 前必须先跑 `npm --prefix web run build` 并把产物放进 `src/mla/api/static/`。
+mla = [
+    "data/**/*.jsonl",
+    "data/**/*.yaml",
+    "data/**/*.txt",
+    "data/**/*.json",
+    "data/**/*.md",
+    "api/static/*",
+    "api/static/**/*",
+]
 
 [tool.setuptools.exclude-package-data]
 # 评测/向量缓存是可再生的运行期产物，不进 wheel

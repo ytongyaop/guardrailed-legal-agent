@@ -110,6 +110,7 @@ async function submitRegister(): Promise<void> {
                   v-model="loginForm.username"
                   placeholder="请输入用户名"
                   autocomplete="username"
+                  data-testid="login-username"
                 />
               </el-form-item>
               <el-form-item label="密码">
@@ -119,10 +120,11 @@ async function submitRegister(): Promise<void> {
                   placeholder="请输入密码"
                   autocomplete="current-password"
                   show-password
+                  data-testid="login-password"
                 />
               </el-form-item>
               <error-notice v-if="loginError" :error="loginError" />
-              <el-button type="primary" :loading="submitting" @click="submitLogin">
+              <el-button type="primary" :loading="submitting" data-testid="login-submit" @click="submitLogin">
                 登录
               </el-button>
             </el-form>

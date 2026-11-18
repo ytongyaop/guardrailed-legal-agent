@@ -88,7 +88,12 @@ async function submit(): Promise<void> {
           <error-notice v-if="error" :error="error" />
           <el-form label-position="top" @submit.prevent="submit">
             <el-form-item label="管理员账号">
-              <el-input v-model="form.username" placeholder="请输入管理员账号" autocomplete="username" />
+              <el-input
+                v-model="form.username"
+                placeholder="请输入管理员账号"
+                autocomplete="username"
+                data-testid="setup-username"
+              />
             </el-form-item>
             <el-form-item label="登录密码">
               <el-input
@@ -96,6 +101,7 @@ async function submit(): Promise<void> {
                 type="password"
                 :placeholder="`至少 ${MIN_PASSWORD_LEN} 位`"
                 autocomplete="new-password"
+                data-testid="setup-password"
               />
             </el-form-item>
             <el-form-item label="确认密码">
@@ -104,13 +110,20 @@ async function submit(): Promise<void> {
                 type="password"
                 placeholder="再输入一次"
                 autocomplete="new-password"
+                data-testid="setup-confirm"
               />
             </el-form-item>
             <el-form-item label="企业名称">
-              <el-input v-model="form.enterprise_name" placeholder="可留空，稍后在企业档案里补" />
+              <el-input
+                v-model="form.enterprise_name"
+                placeholder="可留空，稍后在企业档案里补"
+                data-testid="setup-enterprise"
+              />
             </el-form-item>
             <el-alert v-if="hint" class="error-notice" type="error" :title="hint" :closable="false" />
-            <el-button type="primary" :loading="submitting" @click="submit">创建并进入</el-button>
+            <el-button type="primary" :loading="submitting" data-testid="setup-submit" @click="submit">
+              创建并进入
+            </el-button>
           </el-form>
           <p class="form-hint">{{ PASSWORD_REMINDER }}</p>
         </template>

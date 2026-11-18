@@ -37,3 +37,8 @@ src/mla/data/evalsets/*_history.jsonl
 # 前端依赖与构建产物（web/ 源码与 lockfile 入库，见 006 §5）
 web/node_modules/
 web/dist/
+
+# Playwright 运行产物（报告与失败截图不入库）
+web/test-results/
+web/playwright-report/
+web/blob-report/

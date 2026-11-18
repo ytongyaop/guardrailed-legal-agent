@@ -150,6 +150,22 @@ def test_task_detail_matches_snapshot(spec: FixtureSpec, replayed) -> None:
 
 
 @pytest.mark.parametrize("spec", FIXTURES, ids=[spec.name for spec in FIXTURES])
+def test_verdict_caveat_comes_from_server(spec: FixtureSpec, replayed) -> None:
+    """`VerdictView.caveat` 必须是服务端常量（006 结果 DTO 表），前端不得另写一份。
+
+    四个夹具走两条不同渲染路径（模型主导 / 旧 `merge_findings`），这里逐个确认：
+    结论提醒与路径无关、与过程开关无关，且不是空串——空串会让前端"看起来没有提醒"。
+    """
+    api, _state, build = replayed
+    _task, stored = build(spec)
+    detail = _get_detail(api.client, stored.task_id)
+
+    caveat = detail["verdict"]["caveat"]
+    assert caveat == presenters.VERDICT_CAVEAT, f"{spec.name}: verdict.caveat 不是服务端常量"
+    assert caveat.strip(), f"{spec.name}: verdict.caveat 不能为空"
+
+
+@pytest.mark.parametrize("spec", FIXTURES, ids=[spec.name for spec in FIXTURES])
 def test_process_switch_only_adds_third_layer(spec: FixtureSpec, replayed) -> None:
     """打开 `ui.show_query_path` 只增第三层：第一二层逐条不变。"""
     api, state, build = replayed
@@ -171,6 +187,8 @@ def test_process_switch_only_adds_third_layer(spec: FixtureSpec, replayed) -> No
     assert on["verdict"]["risk_count"] == off["verdict"]["risk_count"]
     assert on["verdict"]["review_count"] == off["verdict"]["review_count"]
     assert on["verdict"]["conclusion_details"] == off["verdict"]["conclusion_details"]
+    # 结论提醒属第一层：开关只加第三层，`caveat` 前后都是同一个服务端常量
+    assert on["verdict"]["caveat"] == off["verdict"]["caveat"] == presenters.VERDICT_CAVEAT
     assert on["limits"] == off["limits"]
     assert on["suggestions"] == off["suggestions"]
     assert on["facts"] == off["facts"]
