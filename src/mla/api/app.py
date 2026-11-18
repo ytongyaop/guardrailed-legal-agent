@@ -7,6 +7,10 @@
 - 核对链路是异步的：进程内一个 `JobStore`（`ThreadPoolExecutor(max_workers=1)`），
   job 与会话只放内存，重启即失效（006 §2 / §4）；
 - 未知 `/api/*` 由框架 404 收敛成 006 的 JSON 错误体；SPA 静态托管留到批次 5。
+
+开发态不在这里做静态托管或代理：后端只提供 `/api`，页面由 `npm --prefix web run dev` 提供，
+Vite 把 `/api` 代理到 `http://127.0.0.1:8000`（`changeOrigin: false`，保证 `Origin` 与 `Host`
+一致，不被 `_same_origin` 拒绝）。生产态的静态托管与 SPA 回退在批次 5 接入。
 """
 
 from __future__ import annotations
