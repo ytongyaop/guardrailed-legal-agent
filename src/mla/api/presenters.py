@@ -755,6 +755,7 @@ def task_detail(
             model=str(task.model or ""),
             model_first=bool(task.model_first),
             clause_review=bool(task.clause_review),
+            shared=bool(task.shared),
         ),
         verdict=VerdictView(
             status=str(verdict.status),

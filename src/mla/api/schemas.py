@@ -541,6 +541,7 @@ class TaskHead(BaseModel):
     model: str
     model_first: bool
     clause_review: bool
+    shared: bool  # True=已存入企业档案；False=仅自己可见（历史页不显示）
 
 
 class AskItemView(BaseModel):
@@ -673,6 +674,7 @@ class CheckIn(BaseModel):
     contract_name: str | None = None
     contract_id: str | None = None
     clause_review: bool | None = None
+    archive: bool = True  # 重新核对的存档开关（POST /checks 里叫 archive，落库字段叫 shared）
 
 
 class AnswersIn(BaseModel):

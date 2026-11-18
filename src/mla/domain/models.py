@@ -341,6 +341,12 @@ class CheckTask:
     token_in: int = 0
     token_out: int = 0
     deleted: bool = False  # 软删：历史页不显示，操作日志仍留痕
+    # 存档开关：True=存入企业档案（历史可见、同企业可读）；False=只有属主凭任务链接可读。
+    # 旧记录迁移后一律为 True（向后兼容，不重算、不回填）。
+    shared: bool = True
+    # 任务属主（user_id）：服务层落库时从 `user` 取，供「不存档任务只给属主」判权。
+    # 旧记录迁移后为空串，读取属主时回退查操作日志（见 `SqliteRepository.task_owner`）。
+    owner_id: str = ""
     created_at: datetime | None = None
     finished_at: date | None = None
 

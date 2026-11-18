@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   rule_checks TEXT,
   clause_review INTEGER DEFAULT 0, model TEXT, model_first INTEGER DEFAULT 0,
   clause_retry_calls INTEGER DEFAULT 0, clause_retry_items INTEGER DEFAULT 0,
-  clause_retry_passed INTEGER DEFAULT 0
+  clause_retry_passed INTEGER DEFAULT 0, shared INTEGER DEFAULT 1, owner_id TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS logs (
   log_id TEXT PRIMARY KEY, task_id TEXT, user_id TEXT, action TEXT, detail TEXT, created_at TEXT
@@ -107,6 +107,10 @@ TASK_MIGRATIONS: dict[str, str] = {
     "clause_retry_calls": "INTEGER DEFAULT 0",
     "clause_retry_items": "INTEGER DEFAULT 0",
     "clause_retry_passed": "INTEGER DEFAULT 0",
+    # 存档开关：旧库补列时默认 1，等于「旧记录全部存入企业档案」，行为不变
+    "shared": "INTEGER DEFAULT 1",
+    # 任务属主：显式记 user_id。旧库补列后为空串，读取时回退查 logs（兼容迁移前记录）
+    "owner_id": "TEXT DEFAULT ''",
 }
 
 # 旧库迁移（users 表）：早期版本的 users 表没有 onboarded 列，启动时按需补。
@@ -585,8 +589,9 @@ class SqliteRepository:
             "questions,ask_rounds,refused,boundary_layer,boundary_reason,ask_history,errors,"
             "contract_id,contract_name,contract_chars,deleted,case_refs,agent_trace,clause_findings,"
             "undetermined,rule_coverage,missing_terms,ask_items,unmet,statutory_na,clause_review,model,"
-            "model_first,rule_checks,clause_retry_calls,clause_retry_items,clause_retry_passed)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "model_first,rule_checks,clause_retry_calls,clause_retry_items,clause_retry_passed,shared,"
+            "owner_id)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task.task_id,
                 task.enterprise_id,
@@ -639,24 +644,71 @@ class SqliteRepository:
                 int(task.clause_retry_calls),
                 int(task.clause_retry_items),
                 int(task.clause_retry_passed),
+                int(task.shared),
+                task.owner_id,
             ),
         )
         self._conn.commit()
 
     def list_tasks(
-        self, enterprise_id: str = "", limit: int = 50, include_deleted: bool = False
+        self,
+        enterprise_id: str = "",
+        limit: int = 50,
+        include_deleted: bool = False,
+        shared_only: bool = True,
     ) -> list[CheckTask]:
+        """企业内的任务列表（新→旧）。
+
+        `shared_only=True`（默认）只给「存入企业档案」的记录，历史页与趋势据此统计；
+        `shared_only=False` 才连同「不存档」记录一起返回（目前只有测试与运维诊断用）。
+        默认值保证旧行为不变：旧记录迁移后 `shared` 一律为 1。
+        """
         # 企业隔离：没有企业 ID 不等于“查全部”，而是没有可见记录（防止跨账号泄漏）
         if not enterprise_id:
             return []
         where = "enterprise_id=?"
         if not include_deleted:
             where += " AND deleted=0"
+        if shared_only:
+            where += " AND shared=1"
         rows = self._conn.execute(
             f"SELECT * FROM tasks WHERE {where} ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (enterprise_id, limit),
         ).fetchall()
         return [self._row_to_task(r) for r in rows]
+
+    def get_task(self, task_id: str) -> CheckTask | None:
+        """按任务号单条查询，**不按企业过滤**：鉴权在 API 层做（属主 / 同企业 + 存档）。
+
+        历史详情与报告下载用本方法取代「扫最近 5000 条再挑」；软删记录照常返回，
+        由调用方按 `deleted` 决定 404。空任务号返回 None。
+        """
+        if not task_id:
+            return None
+        row = self._conn.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        return self._row_to_task(row) if row else None
+
+    def task_owner(self, task_id: str) -> str:
+        """按任务号取属主：先读任务行的显式 `owner_id`，为空时回退查操作日志。
+
+        `owner_id` 是落库时写入的属主（`_run` 从 `user.user_id` 取），管理员替属主
+        「跳过追问」补存时也保持原属主，不会被最后操作的人覆盖。
+        迁移前的旧记录 `owner_id` 为空串，此时回退到 `logs`：`persist` 每次落库都写一条
+        `核对 / 问答` 日志，取最早一条的 `user_id`（旧行为的兼容口，仅对旧记录生效）。
+        两处都查不到返回空串，调用方按「非属主」处理——此时只有存档记录才对同企业可见。
+        """
+        if not task_id:
+            return ""
+        row = self._conn.execute("SELECT owner_id FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        if row is not None:
+            explicit = str(row["owner_id"] or "").strip()
+            if explicit:
+                return explicit
+        legacy = self._conn.execute(
+            "SELECT user_id FROM logs WHERE task_id=? AND user_id<>'' ORDER BY rowid LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        return str(legacy[0] or "") if legacy else ""
 
     def delete_task(self, task_id: str, enterprise_id: str = "") -> None:
         """软删：历史页不显示，但操作日志与记录本身保留（审计可追溯）。
@@ -898,6 +950,8 @@ class SqliteRepository:
             contract_name=row["contract_name"] or "",
             contract_chars=int(row["contract_chars"] or 0),
             deleted=bool(row["deleted"]),
+            shared=bool(row["shared"]) if row["shared"] is not None else True,
+            owner_id=str(row["owner_id"] or ""),
             undetermined=_undetermined_from_row(row),
             unmet=_unmet_from_row(row),
             statutory_na=int(row["statutory_na"] or 0),

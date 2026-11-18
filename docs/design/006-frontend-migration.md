@@ -54,7 +54,7 @@ web/tests/                          # Vitest；Playwright 仅开发依赖
 | `MissingTermsView` | `{summary:s,short_note:s\|null,written_count:i\|null,absent_count:i,unseen_count:i,manual_count:i,items:{term_id:s,name:s,status:s,text:s,statute:StatuteView}[],manual_names:s[]}`；`written_count` 仅过程开关开启时非空，缺失/未见/人工计数始终独立 |
 | `SuggestionView` | `{text:s,citation_text:s,display_disclaimer:s\|null,sources:StatuteView[]}`；正文与依据常驻，回退免责声明不重复 |
 | `ProcessView` | `{cited_statute_count:i,latency_s:f\|null,latency_text:s,details:s[],finding_help:s,clause_review_note:s\|null,verify_ok:b,traceability_text:s,ask_rounds:i,ask_text:s,degraded_visible:b,extract_note:s\|null,questions:s[],task_id:s,token_in:i,token_out:i,run_detail:s}`；缺耗时保持 `null`，不得伪造 0；`finding_help` 按新旧路径复用原帮助文案 |
-| `TaskDetail` | `{task:{task_id:s,enterprise_id:s,contract_id:s,contract_name:s,contract_chars:i,created_at:s\|null,model:s,model_first:b,clause_review:b},verdict:VerdictView,findings:FindingView[],limits:LimitsView,missing_terms:MissingTermsView,suggestions:SuggestionView[],suggestion_empty_text:s\|null,facts:{label:s,value:s}[],cases:{note:s,summary:s,items:{title:s,holding:s,source:s,dispute_type:s,source_url:s\|null}[]},process:ProcessView\|null,refusal:{layer:s,reason:s,message:s,guidance:s}\|null,workflow:Workflow,disclaimer:s}` |
+| `TaskDetail` | `{task:{task_id:s,enterprise_id:s,contract_id:s,contract_name:s,contract_chars:i,created_at:s\|null,model:s,model_first:b,clause_review:b,shared:b},verdict:VerdictView,findings:FindingView[],limits:LimitsView,missing_terms:MissingTermsView,suggestions:SuggestionView[],suggestion_empty_text:s\|null,facts:{label:s,value:s}[],cases:{note:s,summary:s,items:{title:s,holding:s,source:s,dispute_type:s,source_url:s\|null}[]},process:ProcessView\|null,refusal:{layer:s,reason:s,message:s,guidance:s}\|null,workflow:Workflow,disclaimer:s}`；`task.shared=false` 表示“仅自己可见”，前端据此显示“已存入企业档案 / 仅自己可见” |
 | `Workflow` | `{state:awaiting_facts\|ready\|history,effective_contract_id:s,ask_rounds:i,questions:s[],ask_items:{slot_id:s,question:s,source:s,hint:s\|null}[],optional_fields:{field_id:s,label:s,hint:s\|null,question:s\|null}[]}`；可选字段由服务端 `candidate_fields+suggest_optional` 生成并按任务缓存，历史态不返回可选补充或问答能力 |
 | `QaResult` | `{task_id:s,parent_task_id:s,refusal:TaskDetail.refusal\|null,empty_text:s\|null,errors:s[],sources:StatuteView[],suggestions:SuggestionView[],process:{agent_trace:s[],token_in:i,token_out:i,detail_text:s}\|null}` |
 | `HistorySummary` | `{task_id:s,contract_name:s,created_at:s\|null,verdict:VerdictView,suggestion_count:i,latency_s:f\|null,latency_text:s,refused:b,verify_ok:b,degraded_visible:b,ask_rounds:i}` |
@@ -74,7 +74,7 @@ web/tests/                          # Vitest；Playwright 仅开发依赖
 | `GET /contracts` | `q:s,page=1,page_size=50` | `Page<ContractSummary>` 加 `total_all`；摘要 `{contract_id,filename,char_count:i,uploaded_at}`，文件名已规范化 |
 | `POST /contracts/parse` | multipart `file`（txt/docx/文本型 pdf，上限 200 MiB）**或** JSON `{filename:s,text:s}`；只解析不存档 | `{filename:s,text:s,char_count:i}`；核对成功后按现逻辑自动存档 |
 | `GET/DELETE /contracts/{contract_id}` | — | `{contract_id,enterprise_id,filename,text,uploaded_at}` / `204` |
-| `POST /checks` | `{text:s\|null,contract_name:s\|null,contract_id:s\|null,clause_review:b\|null}`，二选一；企业事实由服务端读取 | `202 Job`；首次调用保持 `save=False,max_ask_rounds=1`，新合同按 `_check_form` 存档 |
+| `POST /checks` | `{text:s\|null,contract_name:s\|null,contract_id:s\|null,clause_review:b\|null,archive:b}`，二选一；`archive` 省略时默认 `true`（存入企业档案），企业事实由服务端读取 | `202 Job`；首次调用保持 `save=False,max_ask_rounds=1`，新合同按 `_check_form` 存档 |
 | `GET /jobs/{job_id}` | 仅任务属主 | `{job_id:s,kind:check\|recheck\|qa,status:queued\|running\|succeeded\|failed,task_id:s\|null,result:TaskDetail\|QaResult\|null,error:ErrorBody\|null}` |
 | `GET /tasks/{task_id}` | 当前内存任务或本企业历史任务 | `TaskDetail`；`include_process` 由服务端读取全局设置，客户端不得覆盖 |
 | `POST /tasks/{task_id}/answers` | `{answers:{slot_id:s:value:s},skip:b}` | `202 Job`；提交则合并事实重跑，跳过则 `persist` 原任务，均保持原合同与条款开关 |
@@ -132,14 +132,23 @@ web/tests/                          # Vitest；Playwright 仅开发依赖
 
 ### 5. 数据与构建迁移
 
-- `users/enterprises/contracts/tasks/logs/settings` 六表结构、任务 JSON、软删和企业隔离均不变；无表/列迁移，旧记录缺字段按无处理、不回填不重算。
+- `users/enterprises/contracts/tasks/logs/settings` 六表结构、任务 JSON、软删和企业隔离均不变；唯一例外是 `tasks` 新增 `shared`、`owner_id` 两列（§7 的存档开关与属主，旧记录补列即 `1` / 空串）。旧记录缺字段按无处理、不回填不重算。
 - `settings` **无新增键**：沿用 `ui.show_query_path`，仅 "1" 为开；会话、CSRF、job 不落 settings，模型 Key 仍只在环境变量或 `auth.json`。
 - `web/` 源码、lockfile 入 git；`web/node_modules/` 与 `src/mla/api/static/` 不入 git。静态产物随 wheel 打包，构建 wheel/exe 前必须先跑前端构建；不得把 `node_modules` 打入包。
 - 删除 Streamlit UI 后移除其专用依赖与 AppTest；领域/服务测试保留，UI 断言先迁移到 API/Vue。`.streamlit/secrets.toml.example` 的 embedding 指引仍保留，不能随 UI 一并删除。
 
 ### 6. 不做什么
 
-不改 `domain/`、图、规则、法源、提示词、模型调用、`services/tasks.py` 的判定编排与数据模型；不做多用户并发优化、云部署、开放 CORS、移动端适配、OCR、用户级界面偏好或中间版本发布；不在前端实现 `summarize_verdict/sort_items/merge_findings`，不借迁移修模型漏检/幻觉，不删除 embedding 的 secrets 兼容。
+不改 `domain/`、图、规则、法源、提示词、模型调用、`services/tasks.py` 的判定编排与数据模型（唯一例外见 §7）；不做多用户并发优化、云部署、开放 CORS、移动端适配、OCR、用户级界面偏好或中间版本发布；不在前端实现 `summarize_verdict/sort_items/merge_findings`，不借迁移修模型漏检/幻觉，不删除 embedding 的 secrets 兼容。
+
+### 7. 范围外改动：核对结果存档开关
+
+这是 0.4.0 **唯一**超出“只换 UI”的改动，由产品需求驱动（核对结果要么存入企业档案，要么只给自己看），不属于前端迁移本身：
+
+- 落点四处：`domain/models.py` 的 `CheckTask.shared` 与 `CheckTask.owner_id`、`adapters/persist.py` 的 `shared` / `owner_id` 两列与 `list_tasks(shared_only) / get_task() / task_owner()`、`services/tasks.py` 的 `run_check(shared=)`（属主由现有 `user` 填入）、API 的 `POST /checks:archive` 与 `TaskDetail.task.shared`；
+- 可见性：`archive=true`（默认）→ 历史页可见、同企业同事可读；`archive=false` → 任务照常落库、历史不出现、同企业其他人（含管理员）404，只有属主凭任务链接可读、可下载报告；
+- 属主来源：`owner_id` 随任务落库（首次核对取 `user.user_id`，追问 / 补充重跑继承原任务属主），管理员替属主操作也改不掉；迁移前的旧记录该列为空，读取时回退查操作日志；
+- 向后兼容：迁移只补列（`shared INTEGER DEFAULT 1`、`owner_id TEXT DEFAULT ''`），旧记录一律视为已存档，不重算、不回填，历史窗口口径仍是最近 200 条；追问 / 补充重跑继承原任务的 `shared`，不会被默认值改回 `true`。
 
 ## 验收标准
 

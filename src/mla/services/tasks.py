@@ -142,6 +142,8 @@ def run_check(
     contract_id: str = "",
     llm: LLMConfig | None = None,
     clause_review: bool | None = None,
+    shared: bool = True,
+    owner_id: str = "",
 ) -> CheckTask:
     """核对模式：跑图 → 组装任务 → 落库 + 日志。
 
@@ -149,6 +151,11 @@ def run_check(
     这样内核不会在同一轮里反复自问；`save=False` 时只算不落库（首轮试探性追问用）。
     `clause_review` 是界面开关的显式覆盖：None 走配置（`MLA_CLAUSE_REVIEW`），
     True / False 由调用方（界面勾选框）决定，默认不改变既有行为。
+    `shared` 是「存入企业档案」开关（默认 True）：False 时任务照常落库，但不进历史、
+    同企业其他人不可读，只有属主凭任务链接可看。追问 / 补充重跑必须继承原任务的值，
+    不能在这里默认成 True（否则一次重跑就把「不存档」洗成「存档」）。
+    `owner_id` 是任务属主：为空时取 `user.user_id`（首次核对）；追问 / 补充重跑要传原任务
+    的属主，这样管理员代操作产生的新记录仍归原属主，而不是「谁点的归谁」。
 
     门禁：模型是核对的大脑，没有可用模型就拒绝执行（抛 `NoModelError`），
     不跑图、不落库、不写日志；`MLA_ALLOW_NO_LLM=1` 时放行，走与改造前一致的旧路径。
@@ -175,6 +182,8 @@ def run_check(
         contract_chars=len(contract_text),
         contract_id=contract_id,
         clause_review=clause_review,
+        shared=shared,
+        owner_id=owner_id,
     )
 
 
@@ -288,6 +297,8 @@ def _run(
     contract_chars: int = 0,
     contract_id: str = "",
     clause_review: bool | None = None,
+    shared: bool = True,
+    owner_id: str = "",
 ) -> CheckTask:
     started = time.perf_counter()
     final = build_graph(deps).invoke(init)
@@ -365,6 +376,9 @@ def _run(
         contract_name=contract_name,
         contract_chars=contract_chars,
         contract_id=contract_id,
+        shared=shared,
+        # 属主随任务落库：管理员替属主补存 / 重跑时沿用的是原任务属主
+        owner_id=owner_id or user.user_id,
         created_at=datetime.now(),
     )
     if repo is not None and save:

@@ -28,7 +28,10 @@ FILTERS = ("all", "risk", "degraded")
 
 
 def _check_tasks(repo: SqliteRepository, enterprise_id: str) -> list[CheckTask]:
-    """窗口内的核对记录（问答记录不进历史列表，与旧界面一致）。"""
+    """窗口内的核对记录（问答与「不存档」记录都不进历史，与旧界面一致）。
+
+    `list_tasks` 默认 `shared_only=True`：只统计「存入企业档案」的任务，历史窗口口径仍是 200 条。
+    """
     return [task for task in repo.list_tasks(enterprise_id, limit=WINDOW_SIZE) if task.mode is TaskMode.CHECK]
 
 

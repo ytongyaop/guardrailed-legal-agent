@@ -47,7 +47,7 @@ from ..schemas import AnswersIn, CheckIn, JobView, OptionalFactsIn, QaIn, TaskDe
 
 router = APIRouter()
 
-#: 历史详情/报告按任务号反查时扫描的窗口：仓储协议没有 `get_task`，批次 3 不改适配器。
+#: `DELETE /history/{id}` 按任务号反查时扫描的窗口（详情 / 报告已改走 `get_task` 单条查询）。
 HISTORY_SCAN_LIMIT = 5000
 
 
@@ -60,7 +60,11 @@ def job_store(request: Request) -> JobStore:
 
 
 def find_history_task(repo: SqliteRepository, task_id: str, enterprise_id: str) -> CheckTask | None:
-    """在本企业历史里按任务号找（软删的不算）；空企业等于没有可见记录。"""
+    """在本企业历史里按任务号找（软删与「不存档」都不算）；空企业等于没有可见记录。
+
+    只给 `DELETE /history/{task_id}` 用：历史页能看到什么，就能删什么。
+    详情 / 报告走 `repo.get_task` 单条查询，不再扫这个窗口。
+    """
     if not enterprise_id:
         return None
     for task in repo.list_tasks(enterprise_id, limit=HISTORY_SCAN_LIMIT):
@@ -69,10 +73,29 @@ def find_history_task(repo: SqliteRepository, task_id: str, enterprise_id: str) 
     return None
 
 
+def task_visible(task: CheckTask, user: User, owner_id: str) -> bool:
+    """落库任务的可见性矩阵：属主恒可读；同企业只读得到「存入企业档案」的记录。
+
+    未存档（`shared=False`）的任务只给属主，同企业其他人（含管理员）一律当不存在，
+    避免「不存档」被同事从任务链接读出来。
+    """
+    if owner_id and owner_id == user.user_id:
+        return True
+    if not task.shared:
+        return False
+    return bool(user.enterprise_id) and task.enterprise_id == user.enterprise_id
+
+
 def can_read_session(session: TaskSession, user: User) -> bool:
-    """内存任务只给属主或**同企业管理员**：未落库的任务没有企业隔离做兜底。"""
+    """内存任务：属主恒可读；存档任务给同企业管理员；**不存档任务只给属主**。
+
+    未落库的任务没有企业隔离做兜底，所以同企业只放宽到管理员（沿用原口径）；
+    但「不存档」是用户明确的选择，管理员也不能读。
+    """
     if session.owner_id == user.user_id:
         return True
+    if not session.task.shared:
+        return False
     return is_admin(user) and session.task.enterprise_id == user.enterprise_id
 
 
@@ -85,14 +108,20 @@ def resolve_readable_task(
     """取一个可读任务：返回（任务, 是否历史, 本次会话的条款开关）。
 
     越权与不存在都返回 404，不区分——避免探测他人任务是否存在。
+    内存会话读不到**不代表**落库记录读不到：存档任务仍按「同企业」开放给同事，
+    所以会话分支不放行时继续查库，而不是直接 404。
+    落库任务按「属主 / 同企业且存档」判权；软删、问答记录与未知任务号同样 404。
     """
     session = job_store(request).session(task_id)
-    if session is not None:
-        if not can_read_session(session, user):
-            raise ApiError(404, NOT_FOUND, "任务不存在")
+    if session is not None and can_read_session(session, user):
         return session.task, False, session.clause_review
-    task = find_history_task(repo, task_id, user.enterprise_id)
-    if task is None or task.mode is not TaskMode.CHECK:
+    task = repo.get_task(task_id)
+    if (
+        task is None
+        or task.mode is not TaskMode.CHECK
+        or task.deleted
+        or not task_visible(task, user, repo.task_owner(task_id))
+    ):
         raise ApiError(404, NOT_FOUND, "任务不存在")
     return task, True, None
 
@@ -149,6 +178,8 @@ def post_checks(
     session_clause_review = (
         bool(clause_review) if clause_review is not None else bool(load_config().clause_review.enabled)
     )
+    # 存档开关：默认 True（存入企业档案）；False 时任务仍落库，但不进历史、同企业不可读。
+    archive = bool(payload.archive)
     store = job_store(request)
 
     def work(worker_repo: SqliteRepository) -> JobOutcome:
@@ -163,6 +194,7 @@ def post_checks(
             contract_name=contract_name,
             contract_id=contract_id,
             clause_review=clause_review,
+            shared=archive,
         )
         final_contract_id = contract_id
         if not final_contract_id:
@@ -250,7 +282,7 @@ def post_answers(
     repo: RepoDep,
     request: Request,
 ) -> JobView:
-    """追问作答：提交则合并事实重跑，跳过则把首轮结果补存；两者都保持原合同与条款开关。"""
+    """追问作答：提交则合并事实重跑，跳过则把首轮结果补存；两者都保持原合同、条款与存档开关。"""
     store = job_store(request)
     session = store.session(task_id)
     if session is None or not can_read_session(session, auth.user):
@@ -296,6 +328,9 @@ def post_answers(
                 contract_name=session.contract_name,
                 contract_id=session.contract_id,
                 clause_review=session.clause_review,
+                shared=session.task.shared,  # 重跑继承原任务的存档开关，不能被默认值洗成 True
+                # 属主也继承：管理员代属主重跑时，新记录仍归原属主
+                owner_id=session.task.owner_id,
             )
             detail = presenters.task_detail(
                 task,
@@ -371,6 +406,8 @@ def post_optional_facts(
             contract_name=contract_name,
             contract_id=contract_id,
             clause_review=session.clause_review,
+            shared=session.task.shared,  # 同上：可选事实重跑也不改存档开关
+            owner_id=session.task.owner_id,  # 同上：属主也不改
         )
         detail = presenters.task_detail(
             task,
