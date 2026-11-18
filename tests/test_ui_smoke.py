@@ -23,6 +23,9 @@ from mla.domain.models import Role, User  # noqa: E402
 from mla.services.auth import hash_password  # noqa: E402
 
 APP = str(Path(__file__).resolve().parents[1] / "src" / "mla" / "ui" / "app.py")
+# 结果页免责等文案的唯一实现在 `api/presenters.py`（旧界面 import 后使用），
+# 文案守卫要同时扫两份源码——文案可以搬家，但不能消失。
+PRESENTERS = str(Path(__file__).resolve().parents[1] / "src" / "mla" / "api" / "presenters.py")
 
 
 def _fresh_app(tmp_path, monkeypatch) -> AppTest:
@@ -101,8 +104,12 @@ def test_admin_eval_design_notes_removed() -> None:
 
 
 def test_required_copy_is_present() -> None:
-    """必留文案守卫：免责、转介、边界声明、评测口径不能被删。"""
-    text = Path(APP).read_text(encoding="utf-8")
+    """必留文案守卫：免责、转介、边界声明、评测口径不能被删。
+
+    批次 3 起部分文案（结果页免责、案例说明等）只在 `presenters` 里实现，界面 import 使用；
+    因此守卫同时扫两份源码：**搬家可以，删除不行**。
+    """
+    text = Path(APP).read_text(encoding="utf-8") + Path(PRESENTERS).read_text(encoding="utf-8")
     for required in (
         "非法律意见",
         "12348",

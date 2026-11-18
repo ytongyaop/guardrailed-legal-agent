@@ -4,6 +4,8 @@
 - 启动时执行一次 `ensure_runtime_ready()`（幂等），每个请求的仓储由 `deps.get_repo` 负责关闭；
 - 所有请求先经过 `_request_context`：生成 `request_id`，并在带 `Origin` 时做同源校验
   （公开写操作没有 CSRF token，同源就是它们唯一的跨站防线）；
+- 核对链路是异步的：进程内一个 `JobStore`（`ThreadPoolExecutor(max_workers=1)`），
+  job 与会话只放内存，重启即失效（006 §2 / §4）；
 - 未知 `/api/*` 由框架 404 收敛成 006 的 JSON 错误体；SPA 静态托管留到批次 5。
 """
 
@@ -19,7 +21,8 @@ from starlette.responses import Response
 
 from . import deps
 from .errors import CSRF_FAILED, error_response, install_error_handlers, new_request_id
-from .routes import admin, auth, contracts, enterprise, settings, setup, stubs
+from .jobs import JobStore
+from .routes import admin, auth, checks, contracts, enterprise, history, report, settings, setup
 from .sessions import DEFAULT_ABSOLUTE, DEFAULT_IDLE, SessionConfig
 
 #: 只绑定回环地址：本机以外的访问一律不开放（006 §4）。
@@ -50,6 +53,9 @@ def create_app(
     # 启动一次：运行目录引导 + 会话表。放在工厂里而不是 lifespan 里，是为了让
     # `TestClient(app)` 不进入上下文管理器时行为也一致（批次 3 之前不会用到 lifespan）。
     app.state.api = deps.build_api_state(db_path=db_path, clock=clock, config=config)
+    state = app.state.api
+    # 核对链路的内存任务登记：单 worker、进程重启即失（006 §2「核对采用异步」）。
+    app.state.jobs = JobStore(db_path=state.db_path, paths=state.paths)
 
     @app.middleware("http")
     async def _request_context(request: Request, call_next: RequestResponseEndpoint) -> Response:
@@ -66,7 +72,7 @@ def create_app(
         return response
 
     install_error_handlers(app)
-    for module in (setup, auth, enterprise, contracts, settings, admin, stubs):
+    for module in (setup, auth, enterprise, contracts, settings, admin, checks, history, report):
         app.include_router(module.router, prefix=API_PREFIX)
     return app
 

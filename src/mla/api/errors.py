@@ -34,9 +34,6 @@ FILE_PARSE_ERROR = "FILE_PARSE_ERROR"  # 422
 MODEL_KEY_INVALID = "MODEL_KEY_INVALID"  # 422
 MODEL_PROBE_FAILED = "MODEL_PROBE_FAILED"  # 502
 INTERNAL_ERROR = "INTERNAL_ERROR"  # 500
-# 批次 2 专用占位码：未实现的端点先返回 501，批次 3 落地真实实现后本码消失。
-# 它不在 006 的错误码表里，因为 006 描述的是完工态；只在批次 2 的中间态出现。
-NOT_IMPLEMENTED = "NOT_IMPLEMENTED"  # 501
 
 ActionType = Literal["open_settings", "contact_admin", "retry", "none"]
 

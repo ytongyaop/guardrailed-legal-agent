@@ -59,7 +59,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
     ),
     "contract_parse": _cap("contract_parse", (("POST", "/contracts/parse"),)),
-    # 批次 3 的核对链路：先按同一张表注册占位路由（501），鉴权口径与真实实现一致
+    # 核对链路：挂载在 `routes/checks.py`（异步 job）与 `routes/history.py`、`routes/report.py`
     "check": _cap(
         "check",
         (

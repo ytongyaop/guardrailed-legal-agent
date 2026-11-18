@@ -12,7 +12,7 @@ from mla.adapters.llm import ProbeResult
 from mla.api.routes import contracts as contracts_routes
 from mla.api.routes import settings as settings_routes
 
-from .api_helpers import ADMIN_PASSWORD, csrf_of, error_of, register, send, setup_admin
+from .api_helpers import ADMIN_PASSWORD, csrf_of, error_of, register, setup_admin
 
 pytestmark = pytest.mark.no_llm
 
@@ -160,11 +160,3 @@ def test_request_ids_are_unique_per_request(api) -> None:
     assert first.headers["X-Request-ID"] != second.headers["X-Request-ID"]
     missing = api.client.get("/api/nope")
     assert missing.json()["request_id"] == missing.headers["X-Request-ID"]
-
-
-def test_stub_capability_is_501(api) -> None:
-    """批次 3 的占位端点：鉴权通过后明确返回 501 `NOT_IMPLEMENTED`。"""
-    state = setup_admin(api.client)
-    response = send(api.client, "GET", "/history", csrf_token=csrf_of(state))
-    assert response.status_code == 501
-    assert error_of(response)["code"] == "NOT_IMPLEMENTED"

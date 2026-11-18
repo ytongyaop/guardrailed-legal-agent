@@ -8,8 +8,9 @@
 - `permissions.py`：`tests/api/fixtures/permissions.json` 的能力矩阵，鉴权由它驱动；
 - `errors.py`：006 §2 的统一错误体 `{error:{code,message,details,action},request_id}`；
 - `schemas.py`：请求 / 响应 DTO；
-- `routes/`：setup / auth / enterprise / contracts / settings / admin，另有 `stubs.py` 占位
-  批次 3 的核对与历史端点（先注册、统一 501，鉴权口径与真实实现相同）。
+- `presenters.py`：`CheckTask → 三层 DTO`，只调用现有领域函数，不重写计数/分级/排序；
+- `jobs.py`：进程内 `ThreadPoolExecutor(max_workers=1)` 的任务登记（重启即失）；
+- `routes/`：setup / auth / enterprise / contracts / settings / admin / checks / history / report。
 
-不做什么：不开放 CORS、不托管前端静态产物（批次 5）、不实现核对全链路（批次 3）。
+不做什么：不开放 CORS、不托管前端静态产物（批次 5）。
 """

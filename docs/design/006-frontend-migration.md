@@ -190,3 +190,4 @@ web/tests/                          # Vitest；Playwright 仅开发依赖
 9. **OpenAPI 文档端点默认关闭**：`docs_url/redoc_url/openapi_url` 全部置空以减少暴露面。若批次 4/5 需要用 OpenAPI 生成前端类型定义，应改为仅在开发态开启（环境变量控制），生产保持关闭。
 10. **超大上传的拒绝时机**：`POST /contracts/parse` 的 200 MiB 上限在读完整请求体后才由框架判定（413），无法在流式解析前拒绝分块传输。要硬上限需自写流式解析或在前置反代限制；单机场景下当前实现可接受，接口口径按"整包上限"记录。
 11. **`total_all` 是窗口内条数**：`GET /history` 与 `GET /admin/logs` 返回的 `total_all` 是各自窗口（200 条 / 500 条）内的总数，不是全库总量。前端展示时应与 `window_size` 一起解释，不能当作全量计数。
+12. **UI 间接依赖 pydantic**：`ui/app.py` 从 `api.presenters` 导入展示 helper，后者依赖 `api.schemas`（pydantic）。已在 `ui` extra 声明该依赖；批次 6 删除 UI 后此依赖随之消失。若希望彻底解耦，可把共享 helper 下沉到独立模块，但考虑到 UI 即将移除，当前为最小修复。同批发现 `ui` extra 早先也缺 `python-docx`（`services/report.py` 顶层导入），已一并补上。

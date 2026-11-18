@@ -25,22 +25,43 @@ import streamlit as st
 from mla.adapters.files import normalize_contract_name, parse_contract_bytes
 from mla.adapters.llm import DeepSeekLLM, ProbeResult
 from mla.adapters.persist import SqliteRepository
+from mla.api.presenters import (
+    CASE_NOTE,
+    CLAUSE_HELP,
+    CLAUSE_SPAN_LIMIT,
+    CONSENSUS_HELP,
+    CONSENSUS_RULE_BADGE,
+    DISCLAIMER_FALLBACK,
+    FINDING_SOURCE_BADGES,
+    RESULT_DISCLAIMER,
+    SHOW_QUERY_PATH_KEY,
+    clause_review_note,
+    degraded_visible,
+    fact_display_name,
+    include_process,
+    latency_text,
+    limits_of,
+    missing_term_groups,
+    missing_term_text,
+    missing_terms_summary,
+    run_detail,
+    source_label,
+    split_verdict_details,
+)
 from mla.config import LLMConfig, data_path, load_config
 from mla.domain.asking import candidate_fields
 from mla.domain.field_catalog import field_hint, field_name, field_question
 from mla.domain.grading import CERTAINTY_CONFLICT, CERTAINTY_PENDING, display_of, sort_items
 from mla.domain.models import (
-    MISSING_TERM_UNJUDGED_ID,
     ContractRecord,
     Enterprise,
-    MissingStatus,
     Role,
     TaskMode,
     User,
 )
 from mla.domain.policy import ACCEPTANCE, MAX_ASK_CANDIDATES
 from mla.domain.slots import DEFAULT_SLOTS, derive_slots
-from mla.domain.verdict import NOT_REVIEWED_MARKERS, Verdict, summarize_verdict
+from mla.domain.verdict import Verdict, summarize_verdict
 from mla.services.asking import suggest_optional
 from mla.services.auth import (
     MIN_PASSWORD_LEN,
@@ -78,9 +99,9 @@ st.set_page_config(
     layout="wide",
 )
 
-DISCLAIMER_FALLBACK = "非法律意见，仅供参考；重大争议请咨询专业人士。"
-CASE_NOTE = "同类情形通常如何认定，不构成本案结论。"
-# 条款审查（存在性域）：等级徽标、片段截断与免责文案集中在此，结果页与历史详情共用。
+# 文案与阈值常量只有 `mla.api.presenters` 一份真源：这里 import 后照旧按原名使用，
+# 避免 API 与旧界面各写一份（批次 6 删旧界面时这些名字自然消失）。
+# 条款审查（存在性域）：等级徽标与片段截断集中在下面几行，结果页与历史详情共用。
 # **旧路径专用（`model_first=False`，回滚兼容）**：新路径按影响度分组、只标确定性，不出 A/B/C；
 # 等级文案只说"与法条存在冲突"，不判"违法/无效"——与 RESULT_DISCLAIMER 的免责口径一致，
 # 也与 prompt 里"不要写该条款违法/无效"的硬性要求对齐。
@@ -89,37 +110,10 @@ CLAUSE_GRADES: tuple[tuple[str, str, str], ...] = (
     ("B", "B 显著失衡", "orange"),
     ("C", "C 待确认", "gray"),
 )
-CLAUSE_SPAN_LIMIT = 80
-# 合并展示的来源徽标：档位 0 = 规则确定性判定，1/2/3 = 条款审查的 A/B/C 级；
-# **旧路径专用（`model_first=False`，回滚兼容）**：新路径不出现 A/B/C（V18 只约束新路径）；
-# 排序口径与 Word 报告共用 `merge_findings`，避免界面与报告两处漂移。
-FINDING_SOURCE_BADGES: tuple[str, ...] = (
-    "规则判定·确定性",
-    "模型审查·A",
-    "模型审查·B",
-    "模型审查·C",
-)
 FINDING_SOURCE_COLORS: tuple[str, ...] = ("blue", "red", "orange", "gray")
-# 模型主导路径（规格 003 P1-3）里程序追加的数值复核条目：它不是模型结论，徽标必须能区分出来。
-# 数值校验条目在外层显示"确定冲突"（程序算出的不一致），所以徽标只标来源、不再说"需人工"。
-CONSENSUS_RULE_BADGE = "程序数值校验"
 # 分级两层（规格 003 第 3.4 节 / P2-5）：主分层按影响度分组，次分层只标确定性；
 # 内部 A/B/C 不再对外出现——A 级与规则数值校验条目为"确定冲突"，B / C 级为"待确认"。
 IMPACT_TITLES: tuple[tuple[str, str], ...] = (("高", "高影响"), ("中", "中影响"), ("低", "低影响"))
-CONSENSUS_HELP = (
-    "按影响度分组：高 / 中 / 低（影响度由合同要素决定）。每组内先列确定冲突，再列待确认。"
-    "确定冲突：与法条明文冲突，或数值校验与法条不一致；待确认：需补充事实或含裁量，需人工判断。"
-)
-# **旧路径专用（`model_first=False`，回滚兼容）**：新路径用上面的 CONSENSUS_HELP，不出 A/B/C。
-CLAUSE_HELP = "等级含义：A 与法条明文冲突，B 显著失衡，C 待确认；只表示与法条存在冲突的风险。"
-CLAUSE_NOT_REVIEWED_NOTE = "本次未做条款级审查，条款级风险未覆盖。"
-CLAUSE_CLEAR_NOTE = "本次条款级审查未发现可疑条款。"
-# 出现这些诊断说明审查没跑起来或整批输出不可用，只能说“未做”，不能说“未发现”
-# （见 _clause_review_note）；关键字表与顶部结论共用 `domain/verdict.py` 同一张，避免两套口径。
-# 结果页底部常驻免责：核对与问答共用一句，不依赖本次是否启用条款审查，也不判“违法/无效”。
-RESULT_DISCLAIMER = "以上为风险提示与依据定位，不构成法律意见；条款效力以仲裁机构或法院裁判为准。"
-# 必备条款汇总句末尾的分母说明：KPI 用 6/8，汇总句合计 9 类，不点明容易被读成矛盾。
-MISSING_TERMS_BASE_NOTE = "（第（九）类为兜底条款，不参与覆盖率）"
 LOGO = Path(__file__).parent / "assets" / "logo.svg"
 
 
@@ -225,15 +219,6 @@ def _trend_chart(frame) -> alt.Chart:
     )
 
 
-def source_label(repo: SqliteRepository, source_id: str) -> str:
-    """LCL-19 → 《劳动合同法》第十九条（查不到就原样显示）。"""
-    statute = repo.get_statute(source_id)
-    if statute is None:
-        return source_id
-    short = statute.law_name.replace("中华人民共和国", "")
-    return f"《{short}》{statute.article_no}"
-
-
 def _statute_meta(statute) -> str:
     """法条元信息一行：施行日期 + 来源链接；内部 ID 不对用户显示。"""
     meta = f"施行日期：{statute.effective_date or '未记录'}"
@@ -260,18 +245,6 @@ def _facts_from_enterprise(repo: SqliteRepository, user: User) -> dict[str, str]
 
 
 QUESTION_TO_SLOT = {s.question: s.slot_id for s in DEFAULT_SLOTS}
-
-# 企业档案录入、但不参与规则判定的两项：没有槽位，界面仍要显示中文名而不是原始 id
-ARCHIVE_FIELD_NAMES: dict[str, str] = {
-    "working_hours": "工时制度",
-    "social_insurance": "社保缴纳",
-}
-
-
-def fact_display_name(field_id: str) -> str:
-    """事实字段显示名：先查档案专用名，再走字段目录，都没命中就原样显示 id。"""
-    return ARCHIVE_FIELD_NAMES.get(field_id) or field_name(field_id)
-
 
 SLOT_HINTS = {
     "employer_type": "例如：有限责任公司 / 个体工商户 / 个人独资企业",
@@ -927,28 +900,9 @@ def _ask_panel(repo: SqliteRepository, user: User, pending: dict, ent_facts: dic
         st.rerun()
 
 
-def _show_degraded_badge(task) -> bool:
-    """是否显示“已降级”告警徽标。
-
-    “未配置 Key”属预期配置状态，只给中性提示；调用失败 / 超时 / 回退才告警。
-    其他历史降级原因（如补问超限）保持原有提示，宁可多提示不漏提示。
-    """
-    if not task.degraded:
-        return False
-    errors = [str(e) for e in (task.errors or [])]
-    if any(("回退" in e or "失败" in e or "超时" in e) for e in errors):
-        return True
-    if any("未配置 Key" in e for e in errors):
-        return False
-    return True
-
-
-def _run_detail(task) -> str:
-    """运行详情一行：任务编号与 Token 用量，只在折叠区出现，不占正文。"""
-    parts = [f"任务 {task.task_id}"]
-    if task.token_in or task.token_out:
-        parts.append(f"Token 输入 {task.token_in} · 输出 {task.token_out}")
-    return " · ".join(parts)
+# 旧函数名保留为别名：页面调用点一字不改，实现在 `mla.api.presenters` 只有一份。
+_show_degraded_badge = degraded_visible
+_run_detail = run_detail
 
 
 def _grade_badge(grade: str) -> str:
@@ -957,41 +911,6 @@ def _grade_badge(grade: str) -> str:
         if key == grade:
             return f":{color}-badge[{label}]"
     return f":gray-badge[{grade or '未定级'}]"
-
-
-def _group_undetermined(rows, reason: str) -> list[tuple[tuple[str, ...], list]]:
-    """把同一类“判不了”的规则按缺失字段归组，排序固定，保证每次渲染顺序一致。"""
-    grouped: dict[tuple[str, ...], list] = {}
-    for row in rows or []:
-        if str(getattr(row, "reason", "")) != reason:
-            continue
-        grouped.setdefault(tuple(row.missing_fields), []).append(row)
-    return [(fields, sorted(grouped[fields], key=lambda r: r.rule_id)) for fields in sorted(grouped)]
-
-
-def _field_label(fields: tuple[str, ...]) -> str:
-    """缺失字段的中文名；字段为空（值或阈值解析不了）时给个不露 id 的说法。"""
-    return "、".join(fact_display_name(f) for f in fields) or "相关事实"
-
-
-def _rule_names(rows: list) -> str:
-    return "、".join(str(r.name) for r in rows)
-
-
-def _unmet_line(row, repo: SqliteRepository) -> str:
-    """一条"合同未约定"：缺了哪项约定、因此判不了哪条要求、依据在哪。"""
-    fields = "、".join(fact_display_name(f) for f in row.fields) or "相关事项"
-    return f"未约定{fields}，无法判断是否满足“{row.name}”（依据 {source_label(repo, row.statute_id)}）"
-
-
-def _render_unmet_terms(task, repo: SqliteRepository) -> None:
-    """合同未约定区块：法律要求约定却没写的项目，逐条一行（不进“需补充事实”）。"""
-    rows = sorted(list(getattr(task, "unmet", None) or []), key=lambda r: r.rule_id)
-    if not rows:
-        return
-    st.markdown("**合同未约定**")
-    for row in rows:
-        st.caption(_unmet_line(row, repo))
 
 
 def _statute_source(repo: SqliteRepository, statute_id: str) -> str:
@@ -1118,48 +1037,17 @@ def _render_impact_groups(items, repo: SqliteRepository, *, show_process: bool) 
             _render_consensus_item(item, repo, show_process=show_process)
 
 
-def _clause_review_note(task, clause_review: bool | None = None) -> str:
-    """合并列表末尾的一句覆盖说明：条款审查做没做、有没有命中。
-
-    `clause_review` 是本次运行的开关（当前会话有记录时传真实值），历史记录留空则读
-    任务里落库的 `clause_review`——落库缺失（本篇之前的旧记录）按“未覆盖”处理：
-    宁可口径保守，也不声称审查过而实际没做。
-    """
-    if list(getattr(task, "clause_findings", None) or []):
-        return ""
-    notes = [
-        str(e) for e in (getattr(task, "errors", None) or []) if "条款审查" in str(e) or "条款判定" in str(e)
-    ]
-    # 只有“没跑起来 / 整批输出不可用”才算没做；“未命中候选”“逐条丢弃”都算跑过、没发现可疑条款。
-    if any(marker in note for note in notes for marker in NOT_REVIEWED_MARKERS):
-        return CLAUSE_NOT_REVIEWED_NOTE
-    if clause_review is None:
-        enabled = bool(getattr(task, "clause_review", False))
-    else:
-        enabled = bool(clause_review)
-    return CLAUSE_CLEAR_NOTE if enabled else CLAUSE_NOT_REVIEWED_NOTE
-
-
-def _missing_clause_text(repo: SqliteRepository, term) -> str:
-    """条文定位写成“第十七条第三项”；取不到条文号时退回条款序号原文。"""
-    statute = repo.get_statute(term.statute_id)
-    article = statute.article_no if statute is not None else ""
-    body = str(term.clause_no or "").strip("（）() ")
-    if article and body:
-        return f"{article}第{body}项"
-    return str(term.clause_no or "")
+# 旧函数名保留为别名：判定"做没做条款审查"的口径与 API 共用 presenters 一份实现。
+_clause_review_note = clause_review_note
 
 
 def _render_missing_term(term, repo: SqliteRepository, *, absent: bool) -> None:
     """单类必备条款：状态文案 + 条文定位 + 可展开的法条原文；内部编号不显示。"""
-    where = _missing_clause_text(repo, term)
+    text = missing_term_text(repo, term)
     if absent:
-        st.error(f"缺失：未见{term.name}的约定（{where}）", icon=":material/error:")
+        st.error(text, icon=":material/error:")
     else:
-        st.warning(
-            f"未见{term.name}的约定（{where}），请人工确认",
-            icon=":material/help:",
-        )
+        st.warning(text, icon=":material/help:")
     statute = repo.get_statute(term.statute_id)
     if statute is None:
         st.caption("依据条文未在法源库中找到，请人工核对。")
@@ -1174,32 +1062,23 @@ def _render_missing_terms(task, repo: SqliteRepository, *, show_written: bool) -
     """必备条款完整性：先说缺了哪些，再分缺失 / 未见 / 需人工确认；不判条款效力。
 
     计数与冲突/待确认完全分开：这里只数“第十七条九类必备条款写没写”，不并进结论条数。
-    `已写 x 类` 是覆盖率口径，按规格 005 只在开关打开时出现（缺失/未见/需人工确认三项常驻）。
+    汇总句与四态分组来自 `presenters`（与 API 同一份），`已写 x 类` 只按开关出现。
     """
-    terms = list(getattr(task, "missing_terms", None) or [])
-    if not terms:
+    if not list(getattr(task, "missing_terms", None) or []):
         return
-    written = sum(
-        1 for t in terms if t.status is MissingStatus.WRITTEN and t.term_id != MISSING_TERM_UNJUDGED_ID
-    )
-    absent = [t for t in terms if t.status is MissingStatus.ABSENT]
-    unseen = [t for t in terms if t.status is MissingStatus.UNSEEN]
-    manual = [t for t in terms if t.status is MissingStatus.MANUAL]
     st.markdown("#### :material/checklist: 必备条款完整性")
-    if not absent and not unseen and not written:
+    summary = missing_terms_summary(task, show_written=show_written)
+    if not summary:
         st.caption("正文过短，未做必备条款判定。")
         return
-    counts: list[str] = []
-    if show_written:
-        counts.append(f"已写 {written} 类")
-    counts.extend([f"缺失 {len(absent)} 类", f"未见 {len(unseen)} 类", f"需人工确认 {len(manual)} 类"])
-    st.caption(f"本次检查《劳动合同法》第十七条九类必备条款：{'，'.join(counts)}。{MISSING_TERMS_BASE_NOTE}")
-    for term in absent:
+    st.caption(summary)
+    groups = missing_term_groups(task)
+    for term in groups.absent:
         _render_missing_term(term, repo, absent=True)
-    for term in unseen:
+    for term in groups.unseen:
         _render_missing_term(term, repo, absent=False)
-    if manual:
-        st.caption(f"需人工确认 {len(manual)} 类：" + "、".join(t.name for t in manual))
+    if groups.manual:
+        st.caption(f"需人工确认 {len(groups.manual)} 类：" + "、".join(t.name for t in groups.manual))
 
 
 def _optional_picks(task, repo: SqliteRepository) -> list[str]:
@@ -1357,47 +1236,14 @@ def _render_verdict(verdict: Verdict, details: list[str]) -> None:
 
 
 # ---------------- 三层信息架构（规格 005） ----------------
-# 开关只加第三层，不改第一二层：键名与取值口径见规格 005 第 4 节（只有 "1" 为开）。
-SHOW_QUERY_PATH_KEY = "ui.show_query_path"
+# 开关只加第三层，不改第一二层：键名与读取口径在 `presenters`（与 API 同一份），
+# 这里只留设置页文案；旧函数名保留为别名，调用点不动。
 SHOW_QUERY_PATH_LABEL = "显示查询路径与判定来源"
 SHOW_QUERY_PATH_HELP = "显示耗时、覆盖率、判定来源、补问与运行详情；不影响核对结论。"
 PROCESS_SECTION_TITLE = "#### :material/route: 查询路径与判定来源"
 
-
-def show_query_path(repo: SqliteRepository) -> bool:
-    """第三层是否渲染：只有落库值恰为 "1" 为开；`0` / 空串 / 缺键 / 未知值都是关。
-
-    读取不回写：缺键就是关，不补一条 `0` 进 settings 表，旧库与新库因此完全同构。
-    """
-    return repo.get_setting(SHOW_QUERY_PATH_KEY) == "1"
-
-
-def _is_process_detail(row: str) -> bool:
-    """覆盖明细里哪些行属第三层（规格 005 第 2 节）。
-
-    移走的只有五类：`规则 x/y 可判定`、条款审查运行状态、缺事实无法判定数、
-    `必备条款 x/8 已写`；其余行是结论计数与限制提示（如“合同正文较短”），留在第一层。
-    """
-    text = str(row or "")
-    if text.startswith("规则 ") or text.startswith("必备条款 "):
-        return True
-    if text.startswith("条款审查") and any(k in text for k in ("已运行", "未运行", "未完成")):
-        return True
-    return "因缺少事实无法判定" in text
-
-
-def split_verdict_details(details: list[str]) -> tuple[list[str], list[str]]:
-    """把 `Verdict.details` 分成（第一层, 第三层）：只归类，不改写任何原文。"""
-    first: list[str] = []
-    process: list[str] = []
-    for row in details or []:
-        (process if _is_process_detail(row) else first).append(row)
-    return first, process
-
-
-def _latency_text(task) -> str:
-    """耗时：只有真跑过才有值；旧任务缺字段写“未记录”，不伪造 `0.00 秒`。"""
-    return f"{task.latency_s:.2f} 秒" if task.latency_s is not None else "未记录"
+show_query_path = include_process
+_latency_text = latency_text
 
 
 def _render_process_layer(task, repo: SqliteRepository, *, details: list[str], clause_review) -> None:
@@ -1483,10 +1329,8 @@ def _render_task(
 
     model_first = bool(getattr(task, "model_first", False))
     findings = list(task.clause_findings or [])
-    # 判不了的规则先分好组：两个区块共用同一份分组，顺序固定、与开关无关。
-    field_groups = _group_undetermined(task.undetermined, "field_missing")
-    premise_groups = _group_undetermined(task.undetermined, "premise_missing")
-    unmet = list(getattr(task, "unmet", None) or [])
+    # 限制提示的文案与分组来自 `presenters`（与 API 同一份），这里只负责长什么样。
+    limits = limits_of(task, repo)
     missing_terms = list(getattr(task, "missing_terms", None) or [])
 
     # ---- 第一层 结论：核对结论（条目内容、分级与顺序与改造前逐条相同）----
@@ -1506,24 +1350,30 @@ def _render_task(
                 _render_clause_finding(entry, repo, rank=rank, show_process=show_process)
 
     # ---- 第一层 结论：合同未约定 / 需补充事实 / 法定兜底（原有内容，一处一次）----
-    if unmet or field_groups or premise_groups or task.statutory_na:
+    if (
+        limits.unmet_lines
+        or limits.field_missing_lines
+        or limits.premise_missing_lines
+        or limits.statutory_na_line
+    ):
         with st.container(border=True):
-            _render_unmet_terms(task, repo)
-            if field_groups or premise_groups:
+            if limits.unmet_lines:
+                st.markdown("**合同未约定**")
+                for line in limits.unmet_lines:
+                    st.caption(line)
+            if limits.field_missing_lines or limits.premise_missing_lines:
                 st.markdown("**需补充事实**")
-                for fields, rows in field_groups:
-                    st.caption(
-                        f"因缺少“{_field_label(fields)}”，以下 {len(rows)} 条规则无法判定："
-                        f"{_rule_names(rows)}"
-                    )
-                if premise_groups:
-                    premise_count = sum(len(rows) for _, rows in premise_groups)
-                    with st.expander(f"另有 {premise_count} 条规则因前提未确定而未判定", expanded=False):
-                        for fields, rows in premise_groups:
-                            label = _field_label(fields)
-                            st.caption(f"因缺少“{label}”，以下 {len(rows)} 条规则未判定：{_rule_names(rows)}")
-            if task.statutory_na:
-                st.caption(f"另有 {task.statutory_na} 条规则因合同未约定而适用法定标准。")
+                for line in limits.field_missing_lines:
+                    st.caption(line)
+                if limits.premise_missing_lines:
+                    with st.expander(
+                        f"另有 {limits.premise_count} 条规则因前提未确定而未判定",
+                        expanded=False,
+                    ):
+                        for line in limits.premise_missing_lines:
+                            st.caption(line)
+            if limits.statutory_na_line:
+                st.caption(limits.statutory_na_line)
 
     # ---- 第一层 结论：必备条款完整性（独立计数，不并入冲突或待确认）----
     if missing_terms:

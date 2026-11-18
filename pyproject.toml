@@ -28,7 +28,16 @@ Repository = "https://github.com/ytongyaop/guardrailed-legal-agent"
 Issues = "https://github.com/ytongyaop/guardrailed-legal-agent/issues"
 
 [project.optional-dependencies]
-ui = ["streamlit>=1.40,<2.0", "pandas>=1.5", "altair>=5.0"]
+# `ui` 也声明 pydantic 与 python-docx：`ui/app.py` 从 `api.presenters` 导入展示 helper，
+# 后者依赖 api.schemas；`ui/app.py` 直接 import `services.report`（顶层 `from docx import Document`）。
+# 批次 6 删除 UI 后这两条依赖随之消失（见 docs/design/006 未决 12）。
+ui = [
+    "streamlit>=1.40,<2.0",
+    "pandas>=1.5",
+    "altair>=5.0",
+    "pydantic>=2.0,<3.0",
+    "python-docx>=1.1,<2.0",
+]
 files = ["python-docx>=1.1,<2.0", "pypdf>=4.0,<7.0"]
 # 0.4.0 Web 层（规格 006）：FastAPI 只做同源 API，不引入 CORS / 模板引擎
 web = ["fastapi>=0.163,<0.200", "uvicorn[standard]>=0.54,<1.0", "python-multipart>=0.0.33,<0.1"]
