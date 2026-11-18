@@ -41,6 +41,7 @@ from mla.api.presenters import (
     include_process,
     latency_text,
     limits_of,
+    missing_short_note,
     missing_term_groups,
     missing_term_text,
     missing_terms_summary,
@@ -1069,7 +1070,7 @@ def _render_missing_terms(task, repo: SqliteRepository, *, show_written: bool) -
     st.markdown("#### :material/checklist: 必备条款完整性")
     summary = missing_terms_summary(task, show_written=show_written)
     if not summary:
-        st.caption("正文过短，未做必备条款判定。")
+        st.caption(missing_short_note(task))
         return
     st.caption(summary)
     groups = missing_term_groups(task)

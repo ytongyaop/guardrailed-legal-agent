@@ -12,7 +12,7 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
 import ResultView from '@/components/result/ResultView.vue'
-import { LABOR_ARTICLE, detail, detailWithProcess } from './fixtures'
+import { LABOR_ARTICLE, detail, detailWithProcess, finding } from './fixtures'
 
 function mountResult(overrides: Parameters<typeof detail>[0] = {}) {
   return mount(ResultView, { props: { detail: detail(overrides) } })
@@ -83,6 +83,73 @@ describe('默认态（过程开关关闭：process=null）', () => {
     expect(terms.text()).not.toContain('已写')
   })
 
+  it('正文过短：必备条款只给一句合体说明，不再另起「需人工确认 N 类」', () => {
+    const wrapper = mountResult({
+      missing_terms: {
+        summary: '',
+        short_note: '正文过短，未做必备条款判定；以下 1 类需人工确认：社会保险。',
+        written_count: null,
+        absent_count: 0,
+        unseen_count: 0,
+        manual_count: 1,
+        items: [],
+        manual_names: ['社会保险'],
+      },
+    })
+    const terms = wrapper.find('[data-testid="missing-terms"]')
+    expect(terms.find('[data-testid="missing-short-note"]').text()).toContain(
+      '正文过短，未做必备条款判定；以下 1 类需人工确认：社会保险。',
+    )
+    // 类名已在那句里，再列一行「需人工确认 1 类」会读成自相矛盾
+    expect(terms.find('[data-testid="missing-manual"]').exists()).toBe(false)
+  })
+
+  it('条号与片段都为空的条目只给灰色说明，不伪造片段', () => {
+    const wrapper = mountResult({
+      findings: [
+        finding({
+          item_id: 'RC-1',
+          path: 'consensus',
+          certainty: '确定冲突',
+          clause_ref: '',
+          evidence_text: '',
+          span_preview: '',
+          finding: '数值与第 41 条不一致，请核对合同约定',
+        }),
+      ],
+    })
+    const card = wrapper.find('[data-testid="finding-card"]')
+    expect(card.find('[data-testid="finding-span-none"]').text()).toBe('（程序数值校验，无对应条款片段）')
+    expect(card.text()).not.toContain('条款片段（正文第')
+    // 理由与依据照常给，不用灰色说明顶替结论
+    expect(card.text()).toContain('数值与第 41 条不一致')
+    expect(card.find('[data-testid="finding-statutes"]').exists()).toBe(true)
+  })
+
+  it('依据全空时整张「依据」卡片不渲染，不留空壳', () => {
+    const wrapper = mountResult({
+      facts: [],
+      cases: {
+        note: '同类情形通常如何认定，不构成本案结论。',
+        summary: '共 0 条官方案例，本次匹配 0 条',
+        items: [],
+      },
+    })
+    expect(wrapper.find('[data-testid="evidence-layer"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="facts-fold"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="cases-fold"]').exists()).toBe(false)
+  })
+
+  it('任务元信息只留存档状态，时间收进「详情」并精确到秒', () => {
+    const wrapper = mountResult()
+    expect(wrapper.find('[data-testid="task-meta"]').text()).toBe('已存入企业档案')
+    const fold = wrapper.find('[data-testid="task-detail-fold"]')
+    expect(fold.exists()).toBe(true)
+    expect((fold.element as HTMLDetailsElement).open).toBe(false)
+    expect(fold.text()).toContain('2026-11-18 09:30:00')
+    expect(fold.text()).not.toContain('T09:30')
+  })
+
   it('结论提醒常驻，免责声明只出现一次且在最后', () => {
     const wrapper = mountResult()
     expect(wrapper.find('[data-testid="verdict-caveat"]').text()).toContain('结论不代表合规')
@@ -91,6 +158,18 @@ describe('默认态（过程开关关闭：process=null）', () => {
     const root = wrapper.element as HTMLElement
     const last = root.lastElementChild
     expect(last?.getAttribute('data-testid')).toBe('disclaimer')
+  })
+
+  it('运行诊断原样展示：有诊断才出现，失败不静默', () => {
+    expect(mountResult().find('[data-testid="result-errors"]').exists()).toBe(false)
+    const wrapper = mountResult({
+      errors: ['本次结果未能存入历史（OperationalError），历史页看不到这条记录，请重新核对一次'],
+    })
+    const node = wrapper.find('[data-testid="result-errors"]')
+    expect(node.exists()).toBe(true)
+    expect(node.text()).toContain('未能存入历史')
+    // 诊断不挤占结论层：结论句照常由服务端给
+    expect(wrapper.find('[data-testid="verdict-headline"]').exists()).toBe(true)
   })
 
   it('按影响度分组，组内保持服务端顺序', () => {

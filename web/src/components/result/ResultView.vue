@@ -5,7 +5,7 @@
  * | 层 | 内容 | 开关 |
  * | --- | --- | --- |
  * | 第一层 结论 | 结论句 + 第一层明细 + 提醒；条目（条号常驻、原文折叠）；限制提示；必备条款独立计数；处理建议正文 + 导出 Word | 常驻 |
- * | 第二层 依据 | 依据事实（折叠）、类案参照（折叠） | 常驻 |
+ * | 第二层 依据 | 依据事实（折叠）、类案参照（折叠） | 有内容才挂载 |
  * | 第三层 过程 | 引用数、耗时、覆盖明细、来源/等级、补问、降级、运行详情 | `detail.process !== null` 才挂载 |
  *
  * 三条硬规则：
@@ -16,7 +16,7 @@
 import { computed } from 'vue'
 
 import type { CaseItemView, FindingView, TaskDetail } from '@/api/types'
-import { safeSourceUrl } from '@/utils/format'
+import { formatDateTime, safeSourceUrl } from '@/utils/format'
 import FindingCard from './FindingCard.vue'
 import FoldBox from './FoldBox.vue'
 import MissingTermsBlock from './MissingTermsBlock.vue'
@@ -40,6 +40,10 @@ const impactGroups = computed(() =>
 )
 
 const limits = computed(() => props.detail.limits)
+/** 第二层「依据」：事实与类案都为空时整张卡片不渲染（空卡片看起来像加载失败）。 */
+const hasEvidence = computed(
+  () => props.detail.facts.length > 0 || props.detail.cases.items.length > 0,
+)
 const hasLimits = computed(
   () =>
     limits.value.unmet_lines.length > 0 ||
@@ -78,8 +82,11 @@ function caseLink(item: CaseItemView): string | null {
       <!-- ---- 第一层 结论 ---- -->
       <section class="result-verdict" :data-status="detail.verdict.status">
         <p class="page-caption" data-testid="task-meta">
-          {{ detail.task.contract_name }} · {{ detail.task.created_at ?? '时间未记录' }} ·
           {{ detail.task.shared ? '已存入企业档案' : '仅自己可见' }}
+        </p>
+        <!-- 运行诊断（如「结果未能存入历史」）：有就说，没有不占位 -->
+        <p v-if="detail.errors.length" class="page-caption" data-testid="result-errors">
+          {{ detail.errors.join(' · ') }}
         </p>
         <h2 :class="['verdict-headline', `verdict-${verdictTone}`]" data-testid="verdict-headline">
           {{ detail.verdict.headline }}
@@ -90,6 +97,11 @@ function caseLink(item: CaseItemView): string | null {
         <p v-if="detail.verdict.caveat" class="verdict-caveat" data-testid="verdict-caveat">
           {{ detail.verdict.caveat }}
         </p>
+        <!-- 任务元信息收进折叠：合同名与核对时间不打扰结论句 -->
+        <fold-box title="详情" testid="task-detail-fold">
+          <p class="page-caption">合同：{{ detail.task.contract_name || '未记录合同名' }}</p>
+          <p class="page-caption">核对时间：{{ formatDateTime(detail.task.created_at) }}</p>
+        </fold-box>
       </section>
 
       <el-card class="page-card" shadow="never" data-testid="findings">
@@ -143,8 +155,8 @@ function caseLink(item: CaseItemView): string | null {
         </div>
       </el-card>
 
-      <!-- ---- 第二层 依据（默认折叠，条号在折叠器外） ---- -->
-      <el-card class="page-card" shadow="never" data-testid="evidence-layer">
+      <!-- ---- 第二层 依据（默认折叠，条号在折叠器外；全空则整张卡片不渲染） ---- -->
+      <el-card v-if="hasEvidence" class="page-card" shadow="never" data-testid="evidence-layer">
         <h3 class="section-title">依据</h3>
         <fold-box v-if="detail.facts.length" :title="`依据事实（${detail.facts.length} 项）`" testid="facts-fold">
           <dl class="facts">
@@ -154,7 +166,7 @@ function caseLink(item: CaseItemView): string | null {
             </template>
           </dl>
         </fold-box>
-        <fold-box title="类案参照" testid="cases-fold">
+        <fold-box v-if="detail.cases.items.length" title="类案参照" testid="cases-fold">
           <p class="page-caption">{{ detail.cases.note }} {{ detail.cases.summary }}</p>
           <div v-for="item in detail.cases.items" :key="item.title" class="case-item">
             <p class="case-title"><strong>{{ item.title }}</strong></p>

@@ -3,7 +3,8 @@
 一条主链路走通即覆盖四件事：
 
 1. `202 + job_id`，状态机只有 queued/running/succeeded/failed；
-2. 首轮核对沿用旧 `_check_form` 的 `save=False`：**任务不落库**，但新合同按原逻辑存档；
+2. 下面这份合同缺阻断事实、**会触发追问**，所以首轮核对沿用 `save=False`：任务先不落库，
+   新合同按原逻辑存档（无追问时核对完成即落库，见 `test_check_persist.py`）；
 3. `POST /tasks/{id}/answers` 跳过追问时把首轮结果补存，历史立刻可见；
 4. 任务与 job 的属主边界：同企业非属主读不到内存任务，同企业管理员可以。
 """
@@ -44,7 +45,7 @@ def _post_check(client: TestClient, state: dict, **payload) -> dict:
 
 
 def test_check_job_flow_does_not_persist_first_call(api, monkeypatch) -> None:
-    """首轮核对：任务只在内存，合同入库；轮询拿到的结果就是结果页 DTO。"""
+    """首轮核对（有追问）：任务只在内存，合同入库；轮询拿到的结果就是结果页 DTO。"""
     enable_fake_model(monkeypatch)
     state = setup_admin(api.client)
 
@@ -65,7 +66,7 @@ def test_check_job_flow_does_not_persist_first_call(api, monkeypatch) -> None:
     assert result["workflow"]["state"] in {"ready", "awaiting_facts"}
     assert result["findings"], "这份合同至少有规则命中的条目"
 
-    # 首轮 save=False：任务不落库，合同按 `_check_form` 存档
+    # 首轮 save=False + 有追问：任务不落库，合同按 `_check_form` 存档
     assert count_rows(api.db_path, "tasks") == 0
     assert count_rows(api.db_path, "contracts") == 1
 

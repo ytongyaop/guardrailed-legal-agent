@@ -334,6 +334,32 @@ def test_missing_terms_counts_are_independent(repo: SqliteRepository) -> None:
     assert detail.verdict.review_count == verdict.review_count
 
 
+def test_missing_terms_short_text_merges_manual_into_one_sentence(repo: SqliteRepository) -> None:
+    """正文过短：不并列「未做判定」与「需人工确认 N 类」，合成一句话（类名在同一句里）。"""
+    names = ["用人单位名称、住所与负责人", "劳动合同期限"]
+    terms = [
+        MissingTerm(
+            term_id=f"MT-{index}",
+            name=name,
+            clause_no="（一）",
+            statute_id="LCL-17",
+            status=MissingStatus.MANUAL,
+            certainty="低",
+            note="正文过短，需人工确认",
+        )
+        for index, name in enumerate(names, start=1)
+    ]
+    task = CheckTask(task_id="T-short", mode=TaskMode.CHECK, missing_terms=terms)
+    parsed = presenters.missing_terms_of(task, repo, show_written=False)
+    assert parsed.summary == ""
+    assert parsed.short_note == (
+        "正文过短，未做必备条款判定；以下 2 类需人工确认：用人单位名称、住所与负责人、劳动合同期限。"
+    )
+    # 短文本态只是不另起一行，不是把「需人工确认」的类数抹成 0
+    assert parsed.manual_count == 2
+    assert parsed.manual_names == names
+
+
 def test_model_first_findings_follow_domain_sort(repo: SqliteRepository) -> None:
     """模型主导路径的条目顺序 = `sort_items`（前端不得重排），影响度/确定性来自 `display_of`。"""
     task = _model_first_task()

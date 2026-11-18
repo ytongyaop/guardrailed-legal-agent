@@ -5,6 +5,9 @@
  * 汇总句、三态计数与每条的文案都由服务端 `MissingTermsView` 给出：
  * `written_count` 属覆盖率口径，只有过程开关打开时才非空（这里只用它判断是否显示）。
  * 法条定位写在每条正文里；原文按第二层折叠。
+ *
+ * 正文过短时服务端把「未做判定 + 以下 N 类需人工确认」并成一句放在 `short_note`，
+ * 类名已经在这句里，因此这种情况不再单独渲染「需人工确认 N 类」那一行（否则读起来自相矛盾）。
  */
 import { computed } from 'vue'
 
@@ -15,6 +18,8 @@ const props = defineProps<{ terms: MissingTermsView }>()
 
 const absent = computed<MissingTermItem[]>(() => props.terms.items.filter((item) => item.status === '缺失'))
 const unseen = computed<MissingTermItem[]>(() => props.terms.items.filter((item) => item.status === '未见'))
+/** 只有拿到实质汇总句时才单独列「需人工确认」：短文本态的类名已在 short_note 里。 */
+const showManualLine = computed(() => props.terms.manual_count > 0 && props.terms.summary !== '')
 const hasContent = computed(
   () =>
     props.terms.summary !== '' ||
@@ -29,7 +34,7 @@ const hasContent = computed(
   <el-card v-if="hasContent" class="page-card" shadow="never" data-testid="missing-terms">
     <h3 class="section-title">必备条款完整性</h3>
     <p v-if="terms.summary" class="page-caption" data-testid="missing-summary">{{ terms.summary }}</p>
-    <p v-else-if="terms.short_note" class="page-caption">{{ terms.short_note }}</p>
+    <p v-else-if="terms.short_note" class="page-caption" data-testid="missing-short-note">{{ terms.short_note }}</p>
 
     <div v-for="item in absent" :key="item.term_id" class="missing-term">
       <el-alert type="error" :closable="false" show-icon :title="item.text" />
@@ -47,7 +52,7 @@ const hasContent = computed(
       </fold-box>
     </div>
 
-    <p v-if="terms.manual_count > 0" class="page-caption" data-testid="missing-manual">
+    <p v-if="showManualLine" class="page-caption" data-testid="missing-manual">
       需人工确认 {{ terms.manual_count }} 类：{{ terms.manual_names.join('、') }}
     </p>
   </el-card>

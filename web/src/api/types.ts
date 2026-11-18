@@ -427,6 +427,8 @@ export interface TaskDetail {
   process: ProcessView | null
   refusal: RefusalView | null
   workflow: WorkflowView
+  /** 本次运行的诊断（含「结果未能存入历史」）：原样展示，前端不补算。 */
+  errors: string[]
   disclaimer: string
 }
 

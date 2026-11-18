@@ -451,7 +451,8 @@ onBeforeUnmount(() => {
             <el-input
               v-model="input.text"
               type="textarea"
-              :rows="9"
+              :rows="16"
+              class="contract-input"
               placeholder="把劳动合同正文粘贴到这里……"
               data-testid="contract-text"
             />
@@ -476,7 +477,8 @@ onBeforeUnmount(() => {
               v-if="input.text"
               v-model="input.text"
               type="textarea"
-              :rows="9"
+              :rows="16"
+              class="contract-input"
               data-testid="parsed-text"
             />
           </template>

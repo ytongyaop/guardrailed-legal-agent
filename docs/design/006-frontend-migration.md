@@ -74,7 +74,7 @@ web/tests/                          # Vitest；Playwright 仅开发依赖
 | `GET /contracts` | `q:s,page=1,page_size=50` | `Page<ContractSummary>` 加 `total_all`；摘要 `{contract_id,filename,char_count:i,uploaded_at}`，文件名已规范化 |
 | `POST /contracts/parse` | multipart `file`（txt/docx/文本型 pdf，上限 200 MiB）**或** JSON `{filename:s,text:s}`；只解析不存档 | `{filename:s,text:s,char_count:i}`；核对成功后按现逻辑自动存档 |
 | `GET/DELETE /contracts/{contract_id}` | — | `{contract_id,enterprise_id,filename,text,uploaded_at}` / `204` |
-| `POST /checks` | `{text:s\|null,contract_name:s\|null,contract_id:s\|null,clause_review:b\|null,archive:b}`，二选一；`archive` 省略时默认 `true`（存入企业档案），企业事实由服务端读取 | `202 Job`；首次调用保持 `save=False,max_ask_rounds=1`，新合同按 `_check_form` 存档 |
+| `POST /checks` | `{text:s\|null,contract_name:s\|null,contract_id:s\|null,clause_review:b\|null,archive:b}`，二选一；`archive` 省略时默认 `true`（存入企业档案），企业事实由服务端读取 | `202 Job`；首次调用保持 `max_ask_rounds=1`；**无追问时核对完成即落库**（`shared` 跟随 `archive`），有追问时在作答或跳过时落库；新合同按 `_check_form` 存档 |
 | `GET /jobs/{job_id}` | 仅任务属主 | `{job_id:s,kind:check\|recheck\|qa,status:queued\|running\|succeeded\|failed,task_id:s\|null,result:TaskDetail\|QaResult\|null,error:ErrorBody\|null}` |
 | `GET /tasks/{task_id}` | 当前内存任务或本企业历史任务 | `TaskDetail`；`include_process` 由服务端读取全局设置，客户端不得覆盖 |
 | `POST /tasks/{task_id}/answers` | `{answers:{slot_id:s:value:s},skip:b}` | `202 Job`；提交则合并事实重跑，跳过则 `persist` 原任务，均保持原合同与条款开关 |
@@ -188,7 +188,7 @@ web/tests/                          # Vitest；Playwright 仅开发依赖
 
 ## 未决问题
 
-1. `_check_form` 首次 `run_check(save=False)` 后，若 `task.questions` 为空，当前代码没有显式 `persist`；本规格为保持现状未擅自补存。需确认这是有意行为还是迁移前应单独修复的缺陷，不能用前端迁移顺手改变。
+1. ~~首次核对无追问不落库~~ **已修（0.4.0）**：无追问时核对完成即落库（操作日志一并写入），有追问时保持“答完或跳过才落库”；落库失败写进结果 `errors` 并在界面显示。
 2. 网页端不提供"管理员重置他人口令"：现有 Streamlit 管理端也没有该功能，口令重置继续只走 `python -m mla admin reset`。迁移不新增此能力。
 3. 性能对比需要一台固定 Windows 机器和可重复的旧版启动环境；批 1 若采不到可信旧基线，AC-08 不能宣称通过，需先确定基准机器而不能用主观感受代替。
 4. **报告分项计数不自洽（既有缺陷）**：`services/report.py` 的 `judged = violated + compliant + not_applicable`，导致「可判定 + 不适用 + 无法判定」三个数之和大于规则总数。批次 3 原样继承该输出；修它属判定口径变更，需与 005 的 `verdict.details` 快照一并评估，不在 0.4.0 范围。

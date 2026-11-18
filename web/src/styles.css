@@ -4,6 +4,8 @@
   --mla-sidebar-width: 236px;
   --mla-border: #e4e7ed;
   --mla-text-muted: #6b7280;
+  /* 卡片/区块之间的统一间距：结果页一屏尽量多放两条结论 */
+  --mla-block-gap: 12px;
 }
 
 * {
@@ -101,7 +103,7 @@ body {
 }
 
 .page-card + .page-card {
-  margin-top: 16px;
+  margin-top: var(--mla-block-gap);
 }
 
 .page-caption {
@@ -139,6 +141,11 @@ body {
   min-height: 280px;
 }
 
+/* 合同正文输入框：长合同要能看清（约 360px / 16 行），超出部分滚动 */
+.contract-input textarea {
+  min-height: 360px;
+}
+
 /* ---------------------------------------------------------------- 提示 */
 
 .runtime-notice {
@@ -173,7 +180,7 @@ body {
 .check-layout {
   display: grid;
   grid-template-columns: minmax(340px, 1fr) minmax(520px, 1.9fr);
-  gap: 16px;
+  gap: var(--mla-block-gap);
   align-items: start;
 }
 
@@ -187,7 +194,7 @@ body {
 .check-main {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--mla-block-gap);
   min-width: 0;
 }
 
@@ -226,14 +233,14 @@ body {
 }
 
 .impact-title {
-  margin: 16px 0 8px;
+  margin: var(--mla-block-gap) 0 6px;
   font-size: 13px;
   font-weight: 600;
   color: var(--mla-text-muted);
 }
 
 .result-verdict {
-  margin-bottom: 16px;
+  margin-bottom: var(--mla-block-gap);
 }
 
 .verdict-headline {
@@ -264,7 +271,7 @@ body {
 }
 
 .finding-card + .finding-card {
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .finding-head {
@@ -417,7 +424,7 @@ body {
 }
 
 .disclaimer {
-  margin: 16px 0 0;
+  margin: var(--mla-block-gap) 0 0;
   font-size: 12px;
   color: var(--mla-text-muted);
   line-height: 1.7;

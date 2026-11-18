@@ -102,6 +102,8 @@ CLAUSE_NOT_REVIEWED_NOTE = "本次未做条款级审查，条款级风险未覆�
 CLAUSE_CLEAR_NOTE = "本次条款级审查未发现可疑条款。"
 MISSING_TERMS_BASE_NOTE = "（第（九）类为兜底条款，不参与覆盖率）"
 MISSING_SHORT_NOTE = "正文过短，未做必备条款判定。"
+#: 正文过短时的合体句：不并列「未做判定」与「需人工确认 N 类」两段（2026-11-18 界面修复）。
+MISSING_SHORT_MANUAL = "正文过短，未做必备条款判定；以下 {n} 类需人工确认：{names}。"
 SUGGESTION_EMPTY = "本次没有可给出的建议（无依据不生成）。"
 SUGGESTION_NO_MODEL = "未配置大模型：本次不生成处理建议（规则核对结论不受影响）。"
 EMPTY_QA_TEXT = (
@@ -471,6 +473,19 @@ def missing_terms_summary(task: CheckTask, *, show_written: bool) -> str:
     return f"本次检查{MISSING_TERMS_STATUTE}：{'，'.join(counts)}。{MISSING_TERMS_BASE_NOTE}"
 
 
+def missing_short_note(task: CheckTask) -> str:
+    """正文过短（必备条款整体落回“需人工确认”）时的一句话说明。
+
+    把待人工确认的类名并进同一句：界面上不再出现「未做判定」与「需人工确认 N 类」
+    两段并列（两段并列会被读成自相矛盾）。
+    """
+    groups = missing_term_groups(task)
+    names = "、".join(term.name for term in groups.manual)
+    if not names:
+        return MISSING_SHORT_NOTE
+    return MISSING_SHORT_MANUAL.format(n=len(groups.manual), names=names)
+
+
 def missing_terms_of(task: CheckTask, repo: Repository, *, show_written: bool) -> MissingTermsView:
     """必备条款完整性：缺失/未见/需人工确认各自计数，独立于冲突与待确认条数。"""
     terms = list(task.missing_terms or [])
@@ -480,7 +495,7 @@ def missing_terms_of(task: CheckTask, repo: Repository, *, show_written: bool) -
     summary = missing_terms_summary(task, show_written=show_written)
     return MissingTermsView(
         summary=summary,
-        short_note=None if summary else MISSING_SHORT_NOTE,
+        short_note=None if summary else missing_short_note(task),
         written_count=groups.written_count if show_written else None,
         absent_count=len(groups.absent),
         unseen_count=len(groups.unseen),
@@ -782,6 +797,7 @@ def task_detail(
         ),
         refusal=refusal_of(task),
         workflow=workflow_of(task, repo, history=history),
+        errors=[str(e) for e in (task.errors or [])],
         disclaimer=RESULT_DISCLAIMER,
     )
 
@@ -989,6 +1005,7 @@ __all__ = [
     "latency_text",
     "limits_of",
     "missing_clause_text",
+    "missing_short_note",
     "missing_term_groups",
     "missing_term_text",
     "missing_terms_of",

@@ -188,6 +188,7 @@ export function detail(overrides: Partial<TaskDetail> = {}): TaskDetail {
       ask_items: [],
       optional_fields: [],
     },
+    errors: [],
     disclaimer: '以上为风险提示与依据定位，不构成法律意见；条款效力以仲裁机构或法院裁判为准。',
     ...overrides,
   }

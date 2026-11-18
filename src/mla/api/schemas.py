@@ -610,6 +610,8 @@ class TaskDetail(BaseModel):
     process: ProcessView | None = None
     refusal: RefusalView | None = None
     workflow: WorkflowView
+    #: 本次运行的诊断（抽取回退、条款审查未启用、结果未能入库等）：原样展示，前端不补算
+    errors: list[str] = Field(default_factory=list)
     disclaimer: str
 
 

@@ -59,7 +59,7 @@ def _post_check(client: TestClient, state: dict, **payload: Any) -> str:
 
 
 def _skip(client: TestClient, state: dict, task_id: str) -> dict[str, Any]:
-    """跳过追问 = 把首轮结果补存（落库的唯一入口，异步）。"""
+    """跳过追问 = 把首轮结果补存（有追问时首轮未落库，这里是补存入口；异步）。"""
     response = client.post(
         f"/api/tasks/{task_id}/answers",
         json={"answers": {}, "skip": True},

@@ -7,7 +7,9 @@
 - `NoModelError` 在入队前先拦一次（409 `NO_MODEL`），worker 内再拦一次（job.status=failed +
   `error.code=NO_MODEL`），两条路径都发生在任何落库之前，不会生成残缺任务；
 - 首次核对沿用旧 `_check_form`：`save=False`、`max_ask_rounds=1`，新合同（粘贴/上传）核对时
-  按原逻辑自动存档，追问触发时任务只留在内存会话里（历史不落库，见 006 未决问题 1）。
+  按原逻辑自动存档；`run_check` 内部不落库，落库只由这里的一个出口决定：
+  **无追问**（核对就是最终结果）立刻落库，否则「看完就走」的记录会整条丢失；
+  **有追问**先留在内存会话里，等用户作答重跑或点「跳过」时由 `/answers` 落库。
 """
 
 from __future__ import annotations
@@ -49,6 +51,11 @@ router = APIRouter()
 
 #: `DELETE /history/{id}` 按任务号反查时扫描的窗口（详情 / 报告已改走 `get_task` 单条查询）。
 HISTORY_SCAN_LIMIT = 5000
+
+#: 首轮结果落库失败时的提示：写进任务诊断里，界面能看见，不许静默丢掉整份结果。
+#: 文案刻意避开「失败 / 回退 / 超时」三个词——`presenters.process_of` 拿它们判定「抽取已回退」，
+#: 落库问题不该被读成模型抽取降级（真正的抽取降级由抽取器自己写诊断）。
+SAVE_FAILED_NOTE = "本次结果未能存入历史（{reason}），历史页看不到这条记录，请重新核对一次"
 
 
 # ---------------------------------------------------------------- 公共小工具（history / report 共用）
@@ -139,6 +146,20 @@ def _job_view(job: Job) -> JobView:
 
 
 # ---------------------------------------------------------------- 核对
+def save_first_round(repo: SqliteRepository, task: CheckTask, user: User) -> None:
+    """首轮结果落库（无追问时的唯一出口）：落库 + 操作日志，失败只记诊断不抛。
+
+    有追问时不走这里：作答重跑由 `run_check` 自己落库、跳过追问由 `/answers` 补存，
+    那两处都已落库，这里再写就是重复写。
+    失败不能吞掉（否则用户以为存了、历史里却没有），也不能让已经算好的结论整份丢掉：
+    把原因写进 `task.errors`，随结果 DTO 回给界面。
+    """
+    try:
+        persist(task, user=user, repo=repo, verify_ok=bool(task.verify_ok))
+    except Exception as exc:  # noqa: BLE001 - 落库失败是「结果仍可看」的场景，不该升级成 job 失败
+        task.errors.append(SAVE_FAILED_NOTE.format(reason=type(exc).__name__))
+
+
 @router.post(
     "/checks",
     status_code=202,
@@ -208,6 +229,10 @@ def post_checks(
                     text=text,
                 )
             )
+        if not task.questions:
+            # 无追问 = 这次核对就是最终结果：立刻落库，避免「看完就走」的记录丢失。
+            # 有追问时先不落库，等用户作答重跑或点「跳过」再存（单一出口见模块文档）。
+            save_first_round(worker_repo, task, user)
         session = TaskSession(
             task=task,
             owner_id=user.user_id,

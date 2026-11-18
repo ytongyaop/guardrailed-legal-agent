@@ -6,6 +6,9 @@
  * - **常驻**：确定性徽标、`display_marker`（模型自提提示）、条款片段与理由、法名条号、原文折叠入口；
  * - **第三层**（`finding.process` 非空才出现）：来源徽标、内部 A/B/C 等级、共识 `note`。
  *
+ * 「条款片段」一行不伪造内容：条号与片段都为空（程序数值校验条目）时，只写一行灰色说明，
+ * 让读者知道这条结论本来就没有对应的合同原文，而不是以为界面漏渲染了。
+ *
  * 不在这里数条数、不在这里排序：条目顺序与 `impact` / `certainty` 全部来自服务端。
  */
 import { computed } from 'vue'
@@ -21,6 +24,10 @@ const isConflict = computed(() => certainty.value === '确定冲突')
 const isRule = computed(() => props.finding.path === 'rule')
 const showSpan = computed(
   () => props.finding.evidence_text !== '' && props.finding.clause_ref !== '',
+)
+/** 条号与片段都为空：程序数值校验类条目没有对应合同原文，只给一行灰色说明。 */
+const noSpan = computed(
+  () => props.finding.clause_ref === '' && props.finding.span_preview === '',
 )
 const note = computed(() => {
   const process = props.finding.process
@@ -57,6 +64,9 @@ const note = computed(() => {
     <template v-else>
       <p v-if="showSpan" class="finding-span">
         条款片段（正文第 {{ finding.clause_ref }} 段）：{{ finding.span_preview }}
+      </p>
+      <p v-else-if="noSpan" class="finding-caption" data-testid="finding-span-none">
+        （程序数值校验，无对应条款片段）
       </p>
       <fold-box v-if="finding.span_expansible" title="查看条款原文" testid="span-fold">
         <p class="fold-text">{{ finding.evidence_text }}</p>

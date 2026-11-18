@@ -12,6 +12,13 @@ export function safeSourceUrl(value: string | null | undefined): string | null {
   }
 }
 
+/** 结果页的核对时间：`2026-11-18 20:31:54`，去掉微秒（对读者无意义的精度）。 */
+export function formatDateTime(value: string | null | undefined): string {
+  if (!value) return '时间未记录'
+  const matched = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})/.exec(value)
+  return matched ? `${matched[1]} ${matched[2]}` : value
+}
+
 /** 评测指标：浮点保留 4 位，整数原样。 */
 export function formatMetricValue(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(4)
