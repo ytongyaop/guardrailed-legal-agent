@@ -1,0 +1,33 @@
+{
+  "task": {
+    "model_first": true,
+    "clause_review": true,
+    "contract_chars": 90,
+    "facts": {
+      "written_contract": "是",
+      "employer_type": "有限责任公司"
+    },
+    "item_count": 0,
+    "clause_finding_count": 0,
+    "suggestion_count": 0
+  },
+  "verdict": {
+    "status": "partial",
+    "risk_count": 0,
+    "review_count": 0,
+    "headline": "未发现硬性风险，但覆盖不完整",
+    "details": [
+      "规则 8/16 可判定",
+      "条款审查已运行",
+      "4 条规则因缺少事实无法判定",
+      "合同正文较短，结论可能不完整"
+    ]
+  },
+  "sorted_items": [],
+  "merge_findings": [],
+  "fixture": "model_first_empty",
+  "note": "模型主导，零条目：证明「没查出来（覆盖不完整）」与「没问题（clean）」在 verdict 上必须分成两种说法。",
+  "contract": "contract_quiet.txt",
+  "report": "model_first_empty.report.txt",
+  "spec": "docs/design/006-frontend-migration.md 批次 1（冻结基线）"
+}

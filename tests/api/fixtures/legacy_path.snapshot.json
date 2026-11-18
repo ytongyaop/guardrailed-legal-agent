@@ -1,0 +1,171 @@
+{
+  "task": {
+    "model_first": false,
+    "clause_review": true,
+    "contract_chars": 377,
+    "facts": {
+      "probation_months": "6",
+      "term_years": "2.00",
+      "term_type": "固定期限",
+      "noncompete_years": "3",
+      "ot_hours_month": "40",
+      "employer_type": "有限责任公司",
+      "written_contract": "是"
+    },
+    "item_count": 3,
+    "clause_finding_count": 3,
+    "suggestion_count": 0
+  },
+  "verdict": {
+    "status": "risk",
+    "risk_count": 5,
+    "review_count": 0,
+    "headline": "发现 5 条与法条存在冲突的事项",
+    "details": [
+      "规则 11/16 可判定",
+      "条款审查已运行",
+      "条款审查发现 2 条明确冲突或显著失衡",
+      "1 条条款待人工确认",
+      "4 条规则因缺少事实无法判定",
+      "合同正文较短，结论可能不完整"
+    ]
+  },
+  "sorted_items": [
+    {
+      "item_id": "R-PROBATION-2M",
+      "finding": "合同期限一年以上不满三年，试用期不得超过 2 个月（实际 6月，限值 2月）",
+      "impact": "中",
+      "certainty": "待确认",
+      "sort_key": [
+        1,
+        1,
+        0,
+        0
+      ],
+      "grade": "",
+      "source": "",
+      "element_id": "",
+      "clause_ref": "",
+      "kind": "风险",
+      "severity": "硬性",
+      "source_id": "LCL-19",
+      "statute_ids": [],
+      "evidence_text": "",
+      "note": "",
+      "rule_id": "R-PROBATION-2M"
+    },
+    {
+      "item_id": "R-NONCOMPETE-TERM-2Y",
+      "finding": "竞业限制期限不得超过 2 年（实际 3年，限值 2年）",
+      "impact": "中",
+      "certainty": "待确认",
+      "sort_key": [
+        1,
+        1,
+        0,
+        0
+      ],
+      "grade": "",
+      "source": "",
+      "element_id": "",
+      "clause_ref": "",
+      "kind": "风险",
+      "severity": "硬性",
+      "source_id": "LCL-24",
+      "statute_ids": [],
+      "evidence_text": "",
+      "note": "",
+      "rule_id": "R-NONCOMPETE-TERM-2Y"
+    },
+    {
+      "item_id": "R-OT-MONTH-36H",
+      "finding": "延长工作时间每月不得超过 36 小时（实际 40小时，限值 36小时）",
+      "impact": "中",
+      "certainty": "待确认",
+      "sort_key": [
+        1,
+        1,
+        0,
+        0
+      ],
+      "grade": "",
+      "source": "",
+      "element_id": "",
+      "clause_ref": "",
+      "kind": "风险",
+      "severity": "硬性",
+      "source_id": "LL-41",
+      "statute_ids": [],
+      "evidence_text": "",
+      "note": "",
+      "rule_id": "R-OT-MONTH-36H"
+    }
+  ],
+  "merge_findings": [
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "R-NONCOMPETE-TERM-2Y",
+      "finding": "竞业限制期限不得超过 2 年（实际 3年，限值 2年）",
+      "rule_id": "R-NONCOMPETE-TERM-2Y",
+      "source_id": "LCL-24"
+    },
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "R-OT-MONTH-36H",
+      "finding": "延长工作时间每月不得超过 36 小时（实际 40小时，限值 36小时）",
+      "rule_id": "R-OT-MONTH-36H",
+      "source_id": "LL-41"
+    },
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "R-PROBATION-2M",
+      "finding": "合同期限一年以上不满三年，试用期不得超过 2 个月（实际 6月，限值 2月）",
+      "rule_id": "R-PROBATION-2M",
+      "source_id": "LCL-19"
+    },
+    {
+      "rank": 1,
+      "kind": "clause_finding",
+      "paragraph": 5,
+      "grade": "A",
+      "trigger_id": "TR-PROBATION-TERM-EXCEED",
+      "source": "trigger",
+      "reason": "A 级示例理由（TR-PROBATION-TERM-EXCEED）",
+      "statute_ids": [
+        "LCL-19"
+      ]
+    },
+    {
+      "rank": 1,
+      "kind": "clause_finding",
+      "paragraph": 7,
+      "grade": "A",
+      "trigger_id": "TR-WAGE-DELAY",
+      "source": "trigger",
+      "reason": "A 级示例理由（TR-WAGE-DELAY）",
+      "statute_ids": [
+        "WPR-7"
+      ]
+    },
+    {
+      "rank": 3,
+      "kind": "clause_finding",
+      "paragraph": 15,
+      "grade": "C",
+      "trigger_id": "TR-ARBITRATION-WAIVER",
+      "source": "trigger",
+      "reason": "C 级示例理由（TR-ARBITRATION-WAIVER）",
+      "statute_ids": [
+        "LDA-5"
+      ]
+    }
+  ],
+  "fixture": "legacy_path",
+  "note": "旧路径（model_first=False）：items 只有规则条目，条款结论另行叠加，两者由 merge_findings 按「规则 → A → B → C」合并排序。",
+  "contract": "contract_mixed.txt",
+  "report": "legacy_path.report.txt",
+  "spec": "docs/design/006-frontend-migration.md 批次 1（冻结基线）"
+}

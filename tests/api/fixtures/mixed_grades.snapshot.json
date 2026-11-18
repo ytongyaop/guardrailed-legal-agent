@@ -1,0 +1,185 @@
+{
+  "task": {
+    "model_first": true,
+    "clause_review": true,
+    "contract_chars": 377,
+    "facts": {
+      "probation_months": "6",
+      "term_years": "2.00",
+      "term_type": "固定期限",
+      "noncompete_years": "3",
+      "ot_hours_month": "40",
+      "employer_type": "有限责任公司",
+      "written_contract": "是"
+    },
+    "item_count": 4,
+    "clause_finding_count": 1,
+    "suggestion_count": 0
+  },
+  "verdict": {
+    "status": "risk",
+    "risk_count": 3,
+    "review_count": 1,
+    "headline": "发现 3 条与法条存在冲突的事项",
+    "details": [
+      "规则 11/16 可判定",
+      "条款审查已运行",
+      "1 条待确认",
+      "4 条规则因缺少事实无法判定",
+      "合同正文较短，结论可能不完整"
+    ]
+  },
+  "sorted_items": [
+    {
+      "item_id": "RC-R-NONCOMPETE-TERM-2Y",
+      "finding": "数值与第 24 条不一致，请核对合同约定",
+      "impact": "中",
+      "certainty": "确定冲突",
+      "sort_key": [
+        1,
+        0,
+        1,
+        0
+      ],
+      "grade": "C",
+      "source": "rule_check",
+      "element_id": "",
+      "clause_ref": "",
+      "kind": "待确认",
+      "severity": "参考",
+      "source_id": "LCL-24",
+      "statute_ids": [
+        "LCL-24"
+      ],
+      "evidence_text": "",
+      "note": "数值与第 24 条不一致，请核对合同约定",
+      "rule_id": "R-NONCOMPETE-TERM-2Y"
+    },
+    {
+      "item_id": "RC-R-OT-MONTH-36H",
+      "finding": "数值与第 41 条不一致，请核对合同约定",
+      "impact": "中",
+      "certainty": "确定冲突",
+      "sort_key": [
+        1,
+        0,
+        1,
+        0
+      ],
+      "grade": "C",
+      "source": "rule_check",
+      "element_id": "",
+      "clause_ref": "",
+      "kind": "待确认",
+      "severity": "参考",
+      "source_id": "LL-41",
+      "statute_ids": [
+        "LL-41"
+      ],
+      "evidence_text": "",
+      "note": "数值与第 41 条不一致，请核对合同约定",
+      "rule_id": "R-OT-MONTH-36H"
+    },
+    {
+      "item_id": "RC-R-PROBATION-2M",
+      "finding": "数值与第 19 条不一致，请核对合同约定",
+      "impact": "中",
+      "certainty": "确定冲突",
+      "sort_key": [
+        1,
+        0,
+        1,
+        0
+      ],
+      "grade": "C",
+      "source": "rule_check",
+      "element_id": "",
+      "clause_ref": "",
+      "kind": "待确认",
+      "severity": "参考",
+      "source_id": "LCL-19",
+      "statute_ids": [
+        "LCL-19"
+      ],
+      "evidence_text": "",
+      "note": "数值与第 19 条不一致，请核对合同约定",
+      "rule_id": "R-PROBATION-2M"
+    },
+    {
+      "item_id": "CF-15-TR-ARBITRATION-WAIVER",
+      "finding": "C 级示例理由（TR-ARBITRATION-WAIVER）",
+      "impact": "中",
+      "certainty": "待确认",
+      "sort_key": [
+        1,
+        1,
+        0,
+        15
+      ],
+      "grade": "C",
+      "source": "trigger",
+      "element_id": "EL-12",
+      "clause_ref": "15",
+      "kind": "待确认",
+      "severity": "参考",
+      "source_id": "LDA-5",
+      "statute_ids": [
+        "LDA-5"
+      ],
+      "evidence_text": "因本合同发生的争议，双方应友好协商，不得向劳动争议仲裁委员会申请仲裁。",
+      "note": "无相关数值校验",
+      "rule_id": ""
+    }
+  ],
+  "merge_findings": [
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "CF-15-TR-ARBITRATION-WAIVER",
+      "finding": "C 级示例理由（TR-ARBITRATION-WAIVER）",
+      "rule_id": "",
+      "source_id": "LDA-5"
+    },
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "RC-R-NONCOMPETE-TERM-2Y",
+      "finding": "数值与第 24 条不一致，请核对合同约定",
+      "rule_id": "R-NONCOMPETE-TERM-2Y",
+      "source_id": "LCL-24"
+    },
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "RC-R-OT-MONTH-36H",
+      "finding": "数值与第 41 条不一致，请核对合同约定",
+      "rule_id": "R-OT-MONTH-36H",
+      "source_id": "LL-41"
+    },
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "RC-R-PROBATION-2M",
+      "finding": "数值与第 19 条不一致，请核对合同约定",
+      "rule_id": "R-PROBATION-2M",
+      "source_id": "LCL-19"
+    },
+    {
+      "rank": 3,
+      "kind": "clause_finding",
+      "paragraph": 15,
+      "grade": "C",
+      "trigger_id": "TR-ARBITRATION-WAIVER",
+      "source": "trigger",
+      "reason": "C 级示例理由（TR-ARBITRATION-WAIVER）",
+      "statute_ids": [
+        "LDA-5"
+      ]
+    }
+  ],
+  "fixture": "mixed_grades",
+  "note": "同一影响度内混合确定性：中影响组里既有程序数值复核条目（确定冲突、来源序号 1、段落 0），也有模型 C 级结论（待确认、来源序号 0、段落 15），专门锁四键排序里「确定性 → 来源 → 段落号」这三键。",
+  "contract": "contract_mixed.txt",
+  "report": "mixed_grades.report.txt",
+  "spec": "docs/design/006-frontend-migration.md 批次 1（冻结基线）"
+}

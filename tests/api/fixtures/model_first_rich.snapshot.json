@@ -1,0 +1,423 @@
+{
+  "task": {
+    "model_first": true,
+    "clause_review": true,
+    "contract_chars": 377,
+    "facts": {
+      "probation_months": "6",
+      "term_years": "2.00",
+      "term_type": "固定期限",
+      "noncompete_years": "3",
+      "ot_hours_month": "40",
+      "employer_type": "有限责任公司",
+      "written_contract": "是"
+    },
+    "item_count": 9,
+    "clause_finding_count": 7,
+    "suggestion_count": 0
+  },
+  "verdict": {
+    "status": "risk",
+    "risk_count": 5,
+    "review_count": 4,
+    "headline": "发现 5 条与法条存在冲突的事项",
+    "details": [
+      "规则 11/16 可判定",
+      "条款审查已运行",
+      "条款审查发现 6 条明确冲突或显著失衡",
+      "4 条待确认",
+      "4 条规则因缺少事实无法判定",
+      "合同正文较短，结论可能不完整"
+    ]
+  },
+  "sorted_items": [
+    {
+      "item_id": "CF-5-TR-PROBATION-TERM-EXCEED",
+      "finding": "A 级示例理由（TR-PROBATION-TERM-EXCEED）",
+      "impact": "高",
+      "certainty": "确定冲突",
+      "sort_key": [
+        0,
+        0,
+        0,
+        5
+      ],
+      "grade": "A",
+      "source": "trigger",
+      "element_id": "EL-3",
+      "clause_ref": "5",
+      "kind": "风险",
+      "severity": "硬性",
+      "source_id": "LCL-19",
+      "statute_ids": [
+        "LCL-19"
+      ],
+      "evidence_text": "双方约定试用期六个月，试用期工资按基本工资的百分之六十发放。",
+      "note": "数值校验一致",
+      "rule_id": ""
+    },
+    {
+      "item_id": "CF-7-TR-WAGE-DELAY",
+      "finding": "A 级示例理由（TR-WAGE-DELAY）",
+      "impact": "高",
+      "certainty": "确定冲突",
+      "sort_key": [
+        0,
+        0,
+        0,
+        7
+      ],
+      "grade": "A",
+      "source": "trigger",
+      "element_id": "EL-6",
+      "clause_ref": "7",
+      "kind": "风险",
+      "severity": "硬性",
+      "source_id": "WPR-7",
+      "statute_ids": [
+        "WPR-7"
+      ],
+      "evidence_text": "月工资为人民币 6000 元，甲方因资金周转可延迟至次月月底发放上月工资。",
+      "note": "缺事实，未做数值校验",
+      "rule_id": ""
+    },
+    {
+      "item_id": "CF-11-TR-NONCOMPETE-ALL-STAFF",
+      "finding": "A 级示例理由（TR-NONCOMPETE-ALL-STAFF）",
+      "impact": "高",
+      "certainty": "确定冲突",
+      "sort_key": [
+        0,
+        0,
+        0,
+        11
+      ],
+      "grade": "A",
+      "source": "trigger",
+      "element_id": "EL-9",
+      "clause_ref": "11",
+      "kind": "风险",
+      "severity": "硬性",
+      "source_id": "LCL-23",
+      "statute_ids": [
+        "LCL-23"
+      ],
+      "evidence_text": "竞业限制期限为三年，乙方离职后不得从事同行业工作，甲方无需支付竞业限制补偿。",
+      "note": "无相关数值校验",
+      "rule_id": ""
+    },
+    {
+      "item_id": "CF-5-TR-PROBATION-WAGE-BASE",
+      "finding": "B 级示例理由（TR-PROBATION-WAGE-BASE）",
+      "impact": "高",
+      "certainty": "待确认",
+      "sort_key": [
+        0,
+        1,
+        0,
+        5
+      ],
+      "grade": "B",
+      "source": "trigger",
+      "element_id": "EL-3",
+      "clause_ref": "5",
+      "kind": "风险",
+      "severity": "硬性",
+      "source_id": "LCL-20",
+      "statute_ids": [
+        "LCL-20"
+      ],
+      "evidence_text": "双方约定试用期六个月，试用期工资按基本工资的百分之六十发放。",
+      "note": "无相关数值校验",
+      "rule_id": ""
+    },
+    {
+      "item_id": "CF-9-TR-OVERTIME-WAIVER",
+      "finding": "B 级示例理由（TR-OVERTIME-WAIVER）",
+      "impact": "高",
+      "certainty": "待确认",
+      "sort_key": [
+        0,
+        1,
+        0,
+        9
+      ],
+      "grade": "B",
+      "source": "trigger",
+      "element_id": "EL-5",
+      "clause_ref": "9",
+      "kind": "风险",
+      "severity": "硬性",
+      "source_id": "LCL-31",
+      "statute_ids": [
+        "LCL-31"
+      ],
+      "evidence_text": "乙方每月加班时间不超过四十小时，加班费已包含在月工资中。",
+      "note": "无相关数值校验",
+      "rule_id": ""
+    },
+    {
+      "item_id": "RC-R-NONCOMPETE-TERM-2Y",
+      "finding": "数值与第 24 条不一致，请核对合同约定",
+      "impact": "中",
+      "certainty": "确定冲突",
+      "sort_key": [
+        1,
+        0,
+        1,
+        0
+      ],
+      "grade": "C",
+      "source": "rule_check",
+      "element_id": "",
+      "clause_ref": "",
+      "kind": "待确认",
+      "severity": "参考",
+      "source_id": "LCL-24",
+      "statute_ids": [
+        "LCL-24"
+      ],
+      "evidence_text": "",
+      "note": "数值与第 24 条不一致，请核对合同约定",
+      "rule_id": "R-NONCOMPETE-TERM-2Y"
+    },
+    {
+      "item_id": "RC-R-OT-MONTH-36H",
+      "finding": "数值与第 41 条不一致，请核对合同约定",
+      "impact": "中",
+      "certainty": "确定冲突",
+      "sort_key": [
+        1,
+        0,
+        1,
+        0
+      ],
+      "grade": "C",
+      "source": "rule_check",
+      "element_id": "",
+      "clause_ref": "",
+      "kind": "待确认",
+      "severity": "参考",
+      "source_id": "LL-41",
+      "statute_ids": [
+        "LL-41"
+      ],
+      "evidence_text": "",
+      "note": "数值与第 41 条不一致，请核对合同约定",
+      "rule_id": "R-OT-MONTH-36H"
+    },
+    {
+      "item_id": "CF-15-TR-ARBITRATION-WAIVER",
+      "finding": "C 级示例理由（TR-ARBITRATION-WAIVER）",
+      "impact": "中",
+      "certainty": "待确认",
+      "sort_key": [
+        1,
+        1,
+        0,
+        15
+      ],
+      "grade": "C",
+      "source": "trigger",
+      "element_id": "EL-12",
+      "clause_ref": "15",
+      "kind": "待确认",
+      "severity": "参考",
+      "source_id": "LDA-5",
+      "statute_ids": [
+        "LDA-5"
+      ],
+      "evidence_text": "因本合同发生的争议，双方应友好协商，不得向劳动争议仲裁委员会申请仲裁。",
+      "note": "无相关数值校验",
+      "rule_id": ""
+    },
+    {
+      "item_id": "CF-13-TR-CONTRACT-COPY-INVALID",
+      "finding": "B 级示例理由（TR-CONTRACT-COPY-INVALID）",
+      "impact": "低",
+      "certainty": "待确认",
+      "sort_key": [
+        2,
+        1,
+        0,
+        13
+      ],
+      "grade": "B",
+      "source": "trigger",
+      "element_id": "EL-1",
+      "clause_ref": "13",
+      "kind": "风险",
+      "severity": "硬性",
+      "source_id": "LCL-16",
+      "statute_ids": [
+        "LCL-16"
+      ],
+      "evidence_text": "乙方所持的合同文本无效，合同仅由用人单位持有。",
+      "note": "无相关数值校验",
+      "rule_id": ""
+    }
+  ],
+  "merge_findings": [
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "CF-11-TR-NONCOMPETE-ALL-STAFF",
+      "finding": "A 级示例理由（TR-NONCOMPETE-ALL-STAFF）",
+      "rule_id": "",
+      "source_id": "LCL-23"
+    },
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "CF-5-TR-PROBATION-TERM-EXCEED",
+      "finding": "A 级示例理由（TR-PROBATION-TERM-EXCEED）",
+      "rule_id": "",
+      "source_id": "LCL-19"
+    },
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "CF-7-TR-WAGE-DELAY",
+      "finding": "A 级示例理由（TR-WAGE-DELAY）",
+      "rule_id": "",
+      "source_id": "WPR-7"
+    },
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "CF-13-TR-CONTRACT-COPY-INVALID",
+      "finding": "B 级示例理由（TR-CONTRACT-COPY-INVALID）",
+      "rule_id": "",
+      "source_id": "LCL-16"
+    },
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "CF-5-TR-PROBATION-WAGE-BASE",
+      "finding": "B 级示例理由（TR-PROBATION-WAGE-BASE）",
+      "rule_id": "",
+      "source_id": "LCL-20"
+    },
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "CF-9-TR-OVERTIME-WAIVER",
+      "finding": "B 级示例理由（TR-OVERTIME-WAIVER）",
+      "rule_id": "",
+      "source_id": "LCL-31"
+    },
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "CF-15-TR-ARBITRATION-WAIVER",
+      "finding": "C 级示例理由（TR-ARBITRATION-WAIVER）",
+      "rule_id": "",
+      "source_id": "LDA-5"
+    },
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "RC-R-NONCOMPETE-TERM-2Y",
+      "finding": "数值与第 24 条不一致，请核对合同约定",
+      "rule_id": "R-NONCOMPETE-TERM-2Y",
+      "source_id": "LCL-24"
+    },
+    {
+      "rank": 0,
+      "kind": "item",
+      "item_id": "RC-R-OT-MONTH-36H",
+      "finding": "数值与第 41 条不一致，请核对合同约定",
+      "rule_id": "R-OT-MONTH-36H",
+      "source_id": "LL-41"
+    },
+    {
+      "rank": 1,
+      "kind": "clause_finding",
+      "paragraph": 5,
+      "grade": "A",
+      "trigger_id": "TR-PROBATION-TERM-EXCEED",
+      "source": "trigger",
+      "reason": "A 级示例理由（TR-PROBATION-TERM-EXCEED）",
+      "statute_ids": [
+        "LCL-19"
+      ]
+    },
+    {
+      "rank": 1,
+      "kind": "clause_finding",
+      "paragraph": 7,
+      "grade": "A",
+      "trigger_id": "TR-WAGE-DELAY",
+      "source": "trigger",
+      "reason": "A 级示例理由（TR-WAGE-DELAY）",
+      "statute_ids": [
+        "WPR-7"
+      ]
+    },
+    {
+      "rank": 1,
+      "kind": "clause_finding",
+      "paragraph": 11,
+      "grade": "A",
+      "trigger_id": "TR-NONCOMPETE-ALL-STAFF",
+      "source": "trigger",
+      "reason": "A 级示例理由（TR-NONCOMPETE-ALL-STAFF）",
+      "statute_ids": [
+        "LCL-23"
+      ]
+    },
+    {
+      "rank": 2,
+      "kind": "clause_finding",
+      "paragraph": 5,
+      "grade": "B",
+      "trigger_id": "TR-PROBATION-WAGE-BASE",
+      "source": "trigger",
+      "reason": "B 级示例理由（TR-PROBATION-WAGE-BASE）",
+      "statute_ids": [
+        "LCL-20"
+      ]
+    },
+    {
+      "rank": 2,
+      "kind": "clause_finding",
+      "paragraph": 9,
+      "grade": "B",
+      "trigger_id": "TR-OVERTIME-WAIVER",
+      "source": "trigger",
+      "reason": "B 级示例理由（TR-OVERTIME-WAIVER）",
+      "statute_ids": [
+        "LCL-31"
+      ]
+    },
+    {
+      "rank": 2,
+      "kind": "clause_finding",
+      "paragraph": 13,
+      "grade": "B",
+      "trigger_id": "TR-CONTRACT-COPY-INVALID",
+      "source": "trigger",
+      "reason": "B 级示例理由（TR-CONTRACT-COPY-INVALID）",
+      "statute_ids": [
+        "LCL-16"
+      ]
+    },
+    {
+      "rank": 3,
+      "kind": "clause_finding",
+      "paragraph": 15,
+      "grade": "C",
+      "trigger_id": "TR-ARBITRATION-WAIVER",
+      "source": "trigger",
+      "reason": "C 级示例理由（TR-ARBITRATION-WAIVER）",
+      "statute_ids": [
+        "LDA-5"
+      ]
+    }
+  ],
+  "fixture": "model_first_rich",
+  "note": "模型主导路径的富任务：7 条模型结论，覆盖 高/中/低 三个影响度与确定冲突/待确认两档；另含程序追加的数值复核条目（source=rule_check）。",
+  "contract": "contract_mixed.txt",
+  "report": "model_first_rich.report.txt",
+  "spec": "docs/design/006-frontend-migration.md 批次 1（冻结基线）"
+}

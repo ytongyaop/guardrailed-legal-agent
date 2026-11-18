@@ -182,3 +182,6 @@ web/tests/                          # Vitest；Playwright 仅开发依赖
 1. `_check_form` 首次 `run_check(save=False)` 后，若 `task.questions` 为空，当前代码没有显式 `persist`；本规格为保持现状未擅自补存。需确认这是有意行为还是迁移前应单独修复的缺陷，不能用前端迁移顺手改变。
 2. 网页端不提供"管理员重置他人口令"：现有 Streamlit 管理端也没有该功能，口令重置继续只走 `python -m mla admin reset`。迁移不新增此能力。
 3. 性能对比需要一台固定 Windows 机器和可重复的旧版启动环境；批 1 若采不到可信旧基线，AC-08 不能宣称通过，需先确定基准机器而不能用主观感受代替。
+4. **报告分项计数不自洽（既有缺陷）**：`services/report.py` 的 `judged = violated + compliant + not_applicable`，导致「可判定 + 不适用 + 无法判定」三个数之和大于规则总数。批次 3 原样继承该输出；修它属判定口径变更，需与 005 的 `verdict.details` 快照一并评估，不在 0.4.0 范围。
+5. **`rule_check` 条目语义冲突（既有缺陷）**：`kind="待确认"` 而 `certainty="确定冲突"`。新前端一律以 `certainty` 与 `impact` 分组展示（与现有 `display_of` 一致），不读 `kind`；该字段含义待单独厘清。
+6. **基线快照的重录纪律**：见 `tests/api/fixtures/README.md`。任何重录必须单独提交并说明触发原因，不得为让断言变绿而重录。
