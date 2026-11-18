@@ -42,7 +42,6 @@ from ..domain.models import (
     CheckTask,
     ClauseFinding,
     MissingStatus,
-    TaskMode,
     User,
 )
 from ..domain.policy import MAX_ASK_CANDIDATES
@@ -952,15 +951,6 @@ def enterprise_facts(repo: Repository, user: User) -> dict[str, str]:
     return facts
 
 
-def check_state(task: CheckTask) -> str:
-    """内存任务的展示状态（`awaiting_facts` / `ready`）。"""
-    return workflow_state(task, history=False)
-
-
-def is_check_task(task: CheckTask) -> bool:
-    return task.mode is TaskMode.CHECK
-
-
 def _iso(value: date | datetime | str | None) -> str | None:
     if value is None:
         return None
@@ -986,7 +976,6 @@ __all__ = [
     "RESULT_DISCLAIMER",
     "SHOW_QUERY_PATH_KEY",
     "VERDICT_CAVEAT",
-    "check_state",
     "clause_review_note",
     "degraded_visible",
     "enterprise_facts",
@@ -999,7 +988,6 @@ __all__ = [
     "history_summary",
     "history_trend",
     "include_process",
-    "is_check_task",
     "is_process_detail",
     "latency_text",
     "limits_of",

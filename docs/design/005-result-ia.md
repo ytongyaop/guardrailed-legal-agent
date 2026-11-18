@@ -1,5 +1,7 @@
 # 005 结果页信息架构收敛（0.3.1）
 
+> 本文件记录的是 0.2.x–0.3.x 阶段的规格与验收。其中引用的 `tests/test_ui_*.py`、`ui/app.py` 等 Streamlit 文件已在 0.4.0（FastAPI + Vue 迁移）中删除，对应的新覆盖见 `tests/api/`、`web/tests/` 与 `tests/api/test_static.py`；按本文件命令复跑时请以现存的等价测试为准。
+
 基线：v0.3.0（`324b814`）。本文规定信息架构，Streamlit 仅用于验证，0.4.0 新前端须复现同一行为。
 行号以 v0.3.0 为准，实施时按函数与内容定位，不按行号机械修改。
 
@@ -110,7 +112,7 @@
 | AC-06 | 必备条款缺失/未见/人工计数独立且不变，未加入冲突或待确认；建议正文默认存在且无“处理建议”数量指标 | `python -m pytest tests/test_result_ia.py tests/test_ui_smoke.py -k "missing_terms or suggestions"` |
 | AC-07 | 缺少新列/新 JSON 键的旧任务可打开；缺失覆盖、附注、来源等按无处理，无异常、无补算 | 用旧 schema 建行、读库后交给 `_render_task`；`python -m pytest tests/test_result_ia.py tests/test_model_first.py -k legacy` |
 | AC-08 | 原免责声明仍位于最后且仅一次，免责及对外词未改，拒答原因仍默认可见 | `python -m pytest tests/test_result_ia.py tests/test_ui_smoke.py -k "disclaimer or required_copy or refused"`；`python scripts/check_ui_text.py` |
-| AC-09 | Word、历史列表与问答生成/隐私行为未受顺带修改 | `python -m pytest tests/test_report.py tests/test_history_filter.py tests/test_ui_smoke.py` |
+| AC-09 | Word、历史列表与问答生成/隐私行为未受顺带修改 | `python -m pytest tests/api/test_report.py tests/test_report.py tests/api/test_history.py tests/test_qa_agent.py tests/test_qa_privacy.py`（原 `tests/test_history_filter.py`、`tests/test_ui_smoke.py` 随旧 UI 于 0.4.0 批次 6 删除，此处为等价覆盖） |
 | AC-10 | 全部既有及新增测试通过，静态门禁通过；不得删除或跳过既有用例（当前 831 passed + 1 skipped，收集数 832）来变绿 | `python -m pytest` 退出码 0；随后 `ruff check src tests scripts`、`python -m pyright src`、`python scripts/check_ui_text.py`；CI 覆盖率仍按 `--cov-fail-under=75` |
 
 预计调整测试：`test_ui_smoke.py`（来源徽标/顶部覆盖断言改为开关态，补默认态断言）、`test_model_first.py`（程序校验与旧路径来源徽标改为开关态）、`test_ui_setup.py`（设置持久化与角色可用性）；新增 `test_result_ia.py`（两态、条号、快照、旧记录）。`test_verdict.py`、`test_grading.py`、`test_settings.py`、`test_persist.py`、`test_report.py` 只作回归，不应需要改断言。

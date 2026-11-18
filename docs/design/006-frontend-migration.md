@@ -161,8 +161,8 @@ web/tests/                          # Vitest；Playwright 仅开发依赖
 | AC-05 | 同一任务 API 与旧 `build_report_docx` 的全部段落、表格、法条、建议、免责一致，MIME/文件名正确 | `python -m pytest tests/api/test_report.py tests/test_report.py` |
 | AC-06 | 普通用户看不到/调不到模型设置和管理端；跨企业合同、任务、报告均 404；问答上下文不含正文；响应无秘密 | `python -m pytest tests/api/test_auth.py tests/api/test_permissions.py tests/test_qa_privacy.py`；Playwright 菜单用例 |
 | AC-07 | 初始化、注册/登录/登出、引导、企业、合同、追问/跳过、可选补充、问答、历史筛选分页软删、全部管理页签行为可走通 | `python -m pytest tests/api`；`npm --prefix web run test:e2e` |
-| AC-08 | 生产首屏和核对不劣于旧界面：同机同数据预热后 20 次，中位数与 P95 均不超过旧版 1.05 倍或旧值+250ms（取较宽者） | `python scripts/benchmark_frontend.py --runs 20`（默认输出 `_tmp/frontend-perf-v<版本>.json`），与冻结基线 `tests/api/fixtures/frontend-perf-v0.3.2.json` 对比 |
-| AC-09 | 单进程可服务 SPA/资源/API，刷新深层路由不 404，未知 API 为 JSON 404；静态产物和 lockfile 可复现 | `npm --prefix web ci`；`npm --prefix web run build`；`python -m pytest tests/api/test_static.py`；生产模式 Playwright 冒烟；CI 安装 wheel 后观察 `/`、深层路由与静态资源 |
+| AC-08 | 核对（服务层）不劣于 v0.3.2 冻结基线：同机预热后 20 次，中位数与 P95 不超过基线 1.05 倍或基线值+250ms（取较宽者）。**首屏对比不可重跑**（Streamlit 已于 0.4.0 移除），前端渲染性能由 E2E 与人工验证覆盖。 | `python scripts/benchmark_frontend.py --runs 20`（默认输出 `_tmp/frontend-perf-v<版本>.json`），与冻结基线 `tests/api/fixtures/frontend-perf-v0.3.2.json` 对比 |
+| AC-09 | 单进程可服务 SPA/资源/API，刷新深层路由不 404，未知 API 为 JSON 404；静态产物和 lockfile 可复现 | `npm --prefix web ci`；`npm --prefix web run build`；`python -m pytest tests/api/test_static.py`；生产模式 Playwright 冒烟；CI 断言 wheel 内含 `api/static/index.html`；路由与静态资源行为由 `tests/api/test_static.py` 与 Playwright E2E 覆盖（不在 wheel 安装态重复起服务） |
 | AC-10 | 全部现有非 Streamlit 测试与新增测试通过，静态门禁和 CI 覆盖率不降低；文案检查扩展到 Python DTO 与 Vue/TS | `python -m pytest --cov=mla --cov-report=term-missing --cov-fail-under=75`；`ruff check src tests scripts`；`python -m pyright src`；`python scripts/check_ui_text.py`；`npm --prefix web run typecheck`；依次运行 CI 的 `validate_statutes/validate_rules/validate_triggers/validate_missing_terms/validate_clause_gold/validate_elements` 六脚本 |
 
 ## 计划
