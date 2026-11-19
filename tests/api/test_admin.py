@@ -5,10 +5,14 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
 from mla.adapters.persist import SqliteRepository
+from mla.api.routes import admin as admin_routes
 from mla.domain.models import OperationLog
 
 from .api_helpers import csrf_of, error_of, register, setup_admin
@@ -205,10 +209,58 @@ def test_statutes_and_rules_are_readable(api, admin) -> None:
     assert rules["slots"][0]["type"] in {"阻断项", "参考项"}
 
 
-def test_evaluation_is_read_only_view_of_files(api, admin) -> None:
+EVAL_PAYLOAD: dict[str, object] = {
+    "generated_at": "2026-01-05T09:00:00",
+    "case_count": 2,
+    "variants": {
+        "rules_only": {
+            "metrics": {"accuracy": 1.0, "recall": 0.5},
+            "pass": {"accuracy": True, "recall": False},
+            "mismatches": [{"case_id": "c1", "kind": "violation"}],
+        }
+    },
+}
+
+
+def _eval_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """把评测文件指到本用例的临时目录。
+
+    `last_eval.json` / `eval_history.jsonl` 是 `scripts/run_eval.py` 的运行产物，
+    被 `.gitignore` 第 34-35 行忽略：CI 干净检出里没有，本地跑过评测才有。
+    因此测试必须自己造，不能读仓库里可能存在的文件。
+    """
+    eval_file = tmp_path / "last_eval.json"
+    eval_file.write_text(json.dumps(EVAL_PAYLOAD, ensure_ascii=False), encoding="utf-8")
+    history_file = tmp_path / "eval_history.jsonl"
+    history_file.write_text(json.dumps(EVAL_PAYLOAD, ensure_ascii=False) + "\n", encoding="utf-8")
+    monkeypatch.setattr(admin_routes, "EVAL_FILE", eval_file)
+    monkeypatch.setattr(admin_routes, "EVAL_HISTORY_FILE", history_file)
+
+
+def test_evaluation_is_read_only_view_of_files(
+    api, admin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _eval_artifacts(tmp_path, monkeypatch)
     response = api.client.get("/api/admin/evaluation")
     assert response.status_code == 200
     body = response.json()
     assert body["available"] is True
+    assert body["case_count"] == 2
+    assert body["generated_at"] == "2026-01-05T09:00:00"
     assert body["variants"], "评测文件里应至少有一个消融档位"
     assert set(body["variants"][0]) == {"variant", "metrics", "mismatches"}
+    assert body["variants"][0]["variant"] == "rules_only"
+    assert [row["key"] for row in body["variants"][0]["metrics"]] == ["accuracy", "recall"]
+    # 历史读的同样是被指过去的临时文件，而不是仓库里的 eval_history.jsonl
+    assert len(body["history"]) == 1
+    assert body["history"][0]["passed_text"] == "1/2"
+
+
+def test_evaluation_reports_missing_file(api, admin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """干净检出（没跑过评测）时不能 500，要给可执行的提示。"""
+    monkeypatch.setattr(admin_routes, "EVAL_FILE", tmp_path / "missing.json")
+    monkeypatch.setattr(admin_routes, "EVAL_HISTORY_FILE", tmp_path / "missing_history.jsonl")
+    body = api.client.get("/api/admin/evaluation").json()
+    assert body["available"] is False
+    assert body["variants"] == []
+    assert "还没有评测结果" in (body["message"] or "")
