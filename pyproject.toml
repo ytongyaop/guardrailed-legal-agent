@@ -41,6 +41,9 @@ web = [
     "python-docx>=1.1,<2.0",
 ]
 dev = ["pytest", "pytest-cov", "ruff", "pyright"]
+# 1.0.0 打包（`mla.spec` + `scripts/build_exe.ps1`）才需要的构建期依赖：
+# 只有打 exe 时才装，不进 `dev`（它跟开发/测试无关），也不进任何运行期 extra。
+package = ["pyinstaller>=6.0"]
 
 [project.scripts]
 mla = "mla.cli:main"
