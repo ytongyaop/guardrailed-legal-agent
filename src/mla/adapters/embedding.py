@@ -1,7 +1,9 @@
 """阿里云百炼（DashScope）文本向量适配：qwen3.7-text-embedding-flash。
 
 用原生接口而不是 OpenAI 兼容层，因为需要 `text_type=query/document` 区分，
-检索效果更好。Key 从环境变量 DASHSCOPE_API_KEY 或 .streamlit/secrets.toml 读取。
+检索效果更好。Key 不在这里解析，由 `config.load_config()` 合成后注入 `EmbeddingConfig`：
+优先级为 `DASHSCOPE_API_KEY` > 用户级 `auth.json` 的 `dashscope` 条目（设置页保存）
+> 旧 `.streamlit/secrets.toml`（兼容）。
 """
 
 from __future__ import annotations
@@ -17,7 +19,15 @@ BATCH_SIZE = 20
 
 
 class EmbeddingError(RuntimeError):
-    """向量服务调用失败（网络 / 鉴权 / 返回格式异常）。"""
+    """向量服务调用失败（网络 / 鉴权 / 返回格式异常）。
+
+    `status_code` 只在服务端给了 HTTP 状态码时非空：设置页的探针按它区分
+    「Key 无效」与「服务暂时不可用」，不必去猜异常文本。
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class DashScopeEmbedder:
@@ -64,7 +74,7 @@ class DashScopeEmbedder:
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")[:200]
-            raise EmbeddingError(f"HTTP {exc.code}：{detail}") from exc
+            raise EmbeddingError(f"HTTP {exc.code}：{detail}", status_code=int(exc.code)) from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise EmbeddingError(f"调用失败：{exc}") from exc
 

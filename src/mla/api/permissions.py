@@ -84,6 +84,8 @@ CAPABILITIES: dict[str, Capability] = {
             ("PUT", "/settings/model"),
             ("POST", "/settings/model/{provider}/test"),
             ("DELETE", "/settings/model/{provider}"),
+            ("PUT", "/settings/embedding"),
+            ("DELETE", "/settings/embedding"),
         ),
         admin=True,
     ),

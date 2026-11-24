@@ -203,6 +203,15 @@ export function clearModelKey(provider: string): Promise<ModelSettingsView> {
   return http.delete<ModelSettingsView>(`/settings/model/${encodeURIComponent(provider)}`)
 }
 
+/** 向量检索 Key（DashScope）：provider 固定，请求体只有 Key；探针通过才落盘。 */
+export function saveEmbeddingKey(key: string): Promise<ModelSettingsView> {
+  return http.put<ModelSettingsView>('/settings/embedding', { key })
+}
+
+export function clearEmbeddingKey(): Promise<ModelSettingsView> {
+  return http.delete<ModelSettingsView>('/settings/embedding')
+}
+
 // ---------------------------------------------------------------- admin
 
 export function fetchUsers(): Promise<AdminUser[]> {

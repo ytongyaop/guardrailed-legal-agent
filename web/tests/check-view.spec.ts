@@ -176,7 +176,26 @@ describe('发起核对', () => {
     expect(error.exists()).toBe(true)
     expect(error.text()).toContain('未配置模型，无法核对')
     expect(error.text()).toContain('去设置页配置 API Key')
+    // 错误体之外再给一张可操作的配置引导（两个 Key 的分工、获取入口、成本）
+    const guide = wrapper.find('[data-testid="model-setup-guide"]')
+    expect(guide.exists()).toBe(true)
+    expect(guide.text()).toContain('配置模型后才能核对')
+    expect(guide.text()).toContain('向量 Key（可选）')
     expect(wrapper.find('[data-testid="verdict-headline"]').exists()).toBe(false)
+  })
+
+  it('非 NO_MODEL 的失败不渲染配置引导', async () => {
+    mocked.postCheck.mockRejectedValue(
+      new ApiError({ status: 500, code: 'INTERNAL_ERROR', message: '服务器内部错误，请稍后重试' }),
+    )
+
+    const wrapper = await mountView()
+    await wrapper.find('textarea').setValue('合同正文')
+    await wrapper.find('[data-testid="start-check"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="job-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="model-setup-guide"]').exists()).toBe(false)
   })
 
   it('job 失败（worker 内拦到的 NO_MODEL）也按错误体展示', async () => {

@@ -6,6 +6,11 @@
 `MLA_LLM_API_KEY` > `<MLA_HOME>/auth.json`（阶段三另有最低优先级的旧库只读兜底，
 阶段四删除）。`.streamlit/secrets.toml` 不再参与 LLM Key，只保留 embedding 一侧。
 
+向量检索（embedding）的 Key 在这里合成，优先级为
+`DASHSCOPE_API_KEY` > `<MLA_HOME>/auth.json` 的 `dashscope` 条目 > 旧 secrets.toml（兼容）。
+合成放在 `load_config()` 里而不是单独的 resolver：检索、设置页、CLI 全都从这里取配置，
+分成两条路径就一定会有人在某一侧忘记接。
+
 相关环境变量：
     MLA_LLM_PROVIDER / MLA_LLM_MODEL / MLA_LLM_API_KEY / MLA_LLM_BASE_URL
     MLA_LLM_TIMEOUT（推理超时） / MLA_AUTH_CHECK_TIMEOUT（只用于 GET /models 校验）
@@ -191,11 +196,57 @@ def _secrets_section(name: str) -> dict:
     return section if isinstance(section, dict) else {}
 
 
+def _auth_file_key(home: Path) -> str:
+    """从 `<MLA_HOME>/auth.json` 的向量检索条目取 Key；读不到返回空串。
+
+    惰性导入适配层与服务层里的常量（**不在模块级 import**）：本模块是依赖图最底层
+    （`adapters.embedding` 等反过来依赖它），模块级引入上层会让将来任一处新增
+    `from ..config import ...` 直接成环。运行时再导入只多一次 `sys.modules` 查表。
+
+    Key 的**写入**入口仍然只有 `services.credentials`：这里只做配置合成时的读取。
+
+    凭据文件损坏时降级为「未配置」而不是抛错：向量 Key 是可选能力，而文件损坏会由
+    必需的大模型路径（`services.credentials.resolve_llm_config`）显式报出，不必在这里再炸一次
+    （与 `api.deps.model_configured` 对损坏文件的处理口径一致）。
+    """
+    from .adapters.auth_file import CredentialError, get_entry
+    from .services.credentials import DASHSCOPE_PROVIDER
+
+    try:
+        entry = get_entry(home, DASHSCOPE_PROVIDER)
+    except CredentialError:
+        return ""
+    return "" if entry is None else str(entry.get("key", "")).strip()
+
+
+def _embedding_api_key(e: Mapping[str, str], *, read_files: bool) -> str:
+    """向量检索 Key 的来源优先级（高 → 低）：
+
+    1. `DASHSCOPE_API_KEY` 环境变量；
+    2. `<MLA_HOME>/auth.json` 的 `dashscope` 条目（设置页「测试并保存」写的就是它）；
+    3. 旧 `.streamlit/secrets.toml` 的 `[embedding].api_key`（兼容旧部署，最低优先级）。
+
+    `read_files=False`（调用方传了显式 `env`）时只认第 1 级：`load_config(env=...)`
+    必须是纯函数，不读任何文件。判定口径与 `load_config()` 里 secrets 那一级一致。
+    """
+    from_env = (e.get("DASHSCOPE_API_KEY") or "").strip()
+    if from_env:
+        return from_env
+    if not read_files:
+        return ""
+    from_file = _auth_file_key(mla_home(e))
+    if from_file:
+        return from_file
+    return str(_secrets_section("embedding").get("api_key", "")).strip()
+
+
 def load_config(env: Mapping[str, str] | None = None) -> Config:
     """从环境变量加载配置（默认读 os.environ）。
 
     LLM 的 `api_key` 只取 `MLA_LLM_API_KEY`：完整优先级由
     `services.credentials.resolve_llm_config()` 负责，这里不做任何来源合成。
+    embedding 的 `api_key` 在这里合成三级来源（环境变量 > auth.json > 旧 secrets.toml，
+    见 `_embedding_api_key`）；传显式 `env` 时只读该映射，不碰文件。
     """
     e = _env(env)
     return Config(
@@ -212,8 +263,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         embedding=EmbeddingConfig(
             provider=e.get("MLA_EMBED_PROVIDER", "aliyun"),
             model=e.get("MLA_EMBED_MODEL", "qwen3.7-text-embedding-flash"),
-            api_key=e.get("DASHSCOPE_API_KEY", "")
-            or (str(_secrets_section("embedding").get("api_key", "")) if env is None else ""),
+            api_key=_embedding_api_key(e, read_files=env is None),
             base_url=e.get("MLA_EMBED_BASE_URL", "https://dashscope.aliyuncs.com"),
             dimension=int(e.get("MLA_EMBED_DIM", "1024")),
             timeout_s=int(e.get("MLA_EMBED_TIMEOUT", "30")),

@@ -36,6 +36,7 @@ from ..config import Config, LLMConfig, load_config, mla_home
 __all__ = [
     "CheckStatus",
     "CredentialError",
+    "DASHSCOPE_PROVIDER",
     "DEFAULT_PROVIDER",
     "KeySource",
     "KeyStatus",
@@ -57,8 +58,16 @@ SOURCE_NONE = "none"
 # 来源标识的合法取值（规格 002 第 4 章）：只有两级来源 + 未配置
 KeySource = Literal["environment", "auth_file", "none"]
 
-# 服务商 → 环境变量名。本版只有 DeepSeek；加第二家只需在这里多一行。
+# 服务商 → 环境变量名。本版大模型只有 DeepSeek；加第二家只需在这里多一行。
 _ENV_VARS: dict[str, str] = {"deepseek": "MLA_LLM_API_KEY"}
+
+#: 向量检索用的 provider：阿里云百炼（DashScope）。它**不是**大模型服务商，
+#: 只服务 embedding Key，所以不进 `_ENV_VARS` —— 那张表同时是 `list_key_status()`
+#: 与设置页「服务商」下拉的数据源，混进来会让 DashScope 出现在大模型 Key 的下拉里。
+DASHSCOPE_PROVIDER = "dashscope"
+
+#: 非大模型 provider → 环境变量名。与 `auth.json` 共用同一份文件与同一套读写 API。
+_EMBEDDING_ENV_VARS: dict[str, str] = {DASHSCOPE_PROVIDER: "DASHSCOPE_API_KEY"}
 
 _LABEL_AUTH_FILE = "用户凭据文件（auth.json）"
 _LABEL_NONE = "未配置"
@@ -98,8 +107,13 @@ def _home(home: Path | None) -> Path:
     return mla_home() if home is None else home
 
 
+def _env_var(provider: str) -> str:
+    """provider 对应的环境变量名；大模型与向量检索用同一套查询口径。"""
+    return _ENV_VARS.get(provider) or _EMBEDDING_ENV_VARS.get(provider, "")
+
+
 def _env_label(provider: str) -> str:
-    variable = _ENV_VARS.get(provider, "")
+    variable = _env_var(provider)
     return f"环境变量（{variable}）" if variable else "环境变量"
 
 
@@ -114,7 +128,7 @@ def resolve_key(
     只读：不创建 `auth.json`、不建 `MLA_HOME` 目录、不碰任何数据库。
     """
     e = os.environ if env is None else env
-    variable = _ENV_VARS.get(provider, "")
+    variable = _env_var(provider)
     if variable:
         value = (e.get(variable) or "").strip()
         if value:

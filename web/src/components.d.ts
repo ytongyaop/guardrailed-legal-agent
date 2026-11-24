@@ -46,6 +46,7 @@ declare module 'vue' {
     FindingCard: typeof import('./components/result/FindingCard.vue')['default']
     FoldBox: typeof import('./components/result/FoldBox.vue')['default']
     MissingTermsBlock: typeof import('./components/result/MissingTermsBlock.vue')['default']
+    ModelSetupGuide: typeof import('./components/ModelSetupGuide.vue')['default']
     NavSidebar: typeof import('./components/NavSidebar.vue')['default']
     OnboardingDialog: typeof import('./components/OnboardingDialog.vue')['default']
     OptionalFactsPanel: typeof import('./components/result/OptionalFactsPanel.vue')['default']

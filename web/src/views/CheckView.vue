@@ -34,6 +34,7 @@ import { ApiError } from '@/api/errors'
 import { isQaResult, isTaskDetail } from '@/api/types'
 import type { ContractDetail, ContractSummary, JobView } from '@/api/types'
 import ErrorNotice from '@/components/ErrorNotice.vue'
+import ModelSetupGuide from '@/components/ModelSetupGuide.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import AskPanel from '@/components/result/AskPanel.vue'
 import OptionalFactsPanel from '@/components/result/OptionalFactsPanel.vue'
@@ -66,6 +67,9 @@ const hasEnterprise = computed(() => (session.user?.enterprise_id ?? '') !== '')
 const busy = ref(false)
 const job = ref<JobView | null>(null)
 const jobFailure = ref<ApiError | null>(null)
+
+/** 服务端门禁回 `NO_MODEL`（入队前 409 或 worker 内 failed）：额外给一张配置引导卡。 */
+const needsModelSetup = computed(() => jobFailure.value?.code === 'NO_MODEL')
 const formNotice = ref('')
 const parseFailure = ref<ApiError | null>(null)
 const parsing = ref(false)
@@ -535,6 +539,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="check-main">
+        <model-setup-guide v-if="needsModelSetup" data-testid="model-setup-guide" />
         <el-card class="page-card result-card" shadow="never">
           <div v-if="restoring && detail === null" class="job-progress" data-testid="restore-loading">
             <p class="job-status">正在读取这次核对的结果……</p>

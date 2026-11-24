@@ -233,6 +233,12 @@ class ModelKeyIn(BaseModel):
     key: str
 
 
+class EmbeddingKeyIn(BaseModel):
+    """向量检索 Key 的保存请求：provider 固定为 DashScope，所以请求体只有 Key。"""
+
+    key: str
+
+
 # ---------------------------------------------------------------- admin
 
 

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,12 +15,14 @@ import pytest
 from mla.adapters.llm import ProbeResult
 from mla.api.routes import settings as settings_routes
 from mla.config import mla_home
+from mla.services.credentials import DASHSCOPE_PROVIDER
 
 from .api_helpers import csrf_of, error_of, login, register, setup_admin
 
 pytestmark = pytest.mark.no_llm
 
 DUMMY_KEY = "sk-dummy-" + "0" * 26
+OTHER_KEY = "sk-other-" + "1" * 26
 
 
 @pytest.fixture
@@ -207,3 +210,137 @@ def test_normal_user_cannot_touch_model_settings(api) -> None:
     error = error_of(response)
     assert error["code"] == "FORBIDDEN"
     assert error["action"]["type"] == "contact_admin"
+
+
+# ---------------------------------------------------------------- 向量检索 Key
+
+
+def _auth_file() -> Path:
+    return mla_home() / "auth.json"
+
+
+def test_put_embedding_key_probes_then_saves(api, admin, monkeypatch) -> None:
+    """探测通过才落盘：`auth.json` 多一条 `dashscope`，状态行变「已启用」。"""
+    calls: list[str] = []
+
+    def fake_probe(key: str) -> ProbeResult:
+        calls.append(key)
+        return ProbeResult(kind="ok", status_code=200, message="HTTP 200")
+
+    monkeypatch.setattr(settings_routes, "probe_embedding", fake_probe)
+    response = api.client.put(
+        "/api/settings/embedding",
+        json={"key": DUMMY_KEY},
+        headers={"X-CSRF-Token": admin},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert calls == [DUMMY_KEY]
+    assert body["embedding"]["configured"] is True
+    assert "已启用" in body["embedding"]["fallback_text"]
+    assert DUMMY_KEY not in response.text
+
+    stored = json.loads(_auth_file().read_text(encoding="utf-8"))
+    assert stored == {DASHSCOPE_PROVIDER: {"type": "api_key", "key": DUMMY_KEY}}
+
+
+def test_put_embedding_key_rejected_when_probe_says_auth(api, admin, monkeypatch) -> None:
+    """Key 不对：422 `MODEL_KEY_INVALID`，且绝不落盘（连文件都不创建）。"""
+    monkeypatch.setattr(
+        settings_routes, "probe_embedding", lambda key: ProbeResult(kind="auth", status_code=401)
+    )
+    response = api.client.put(
+        "/api/settings/embedding",
+        json={"key": DUMMY_KEY},
+        headers={"X-CSRF-Token": admin},
+    )
+    assert response.status_code == 422
+    assert error_of(response)["code"] == "MODEL_KEY_INVALID"
+    assert DUMMY_KEY not in response.text
+    assert not _auth_file().exists()
+
+
+def test_put_embedding_key_reports_network_failure(api, admin, monkeypatch) -> None:
+    """网络类失败：502 `MODEL_PROBE_FAILED`，同样不落盘。"""
+    monkeypatch.setattr(
+        settings_routes, "probe_embedding", lambda key: ProbeResult(kind="network", message="URLError")
+    )
+    response = api.client.put(
+        "/api/settings/embedding",
+        json={"key": DUMMY_KEY},
+        headers={"X-CSRF-Token": admin},
+    )
+    assert response.status_code == 502
+    assert error_of(response)["code"] == "MODEL_PROBE_FAILED"
+    assert not _auth_file().exists()
+
+
+def test_put_embedding_key_requires_non_empty_key(api, admin) -> None:
+    response = api.client.put(
+        "/api/settings/embedding",
+        json={"key": "   "},
+        headers={"X-CSRF-Token": admin},
+    )
+    assert response.status_code == 400
+    assert error_of(response)["details"] == {"fields": ["key"]}
+
+
+def test_delete_embedding_key_restores_bm25_fallback(api, admin) -> None:
+    """清除后回到关键词检索；只删 `dashscope`，大模型条目不受影响。"""
+    from mla.services.credentials import set_key
+
+    set_key("deepseek", DUMMY_KEY)
+    set_key(DASHSCOPE_PROVIDER, OTHER_KEY)
+    response = api.client.delete("/api/settings/embedding", headers={"X-CSRF-Token": admin})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["embedding"]["configured"] is False
+    assert "BM25" in body["embedding"]["fallback_text"]
+    stored = json.loads(_auth_file().read_text(encoding="utf-8"))
+    assert stored == {"deepseek": {"type": "api_key", "key": DUMMY_KEY}}
+
+
+def test_embedding_key_is_read_from_auth_file(api, admin) -> None:
+    """设置页保存的 Key 会被 `load_config()` 读回来（检索装配也从这里取值）。"""
+    from mla.config import load_config
+    from mla.services.credentials import set_key
+
+    assert load_config().embedding.api_key == ""
+    set_key(DASHSCOPE_PROVIDER, OTHER_KEY)
+    assert load_config().embedding.api_key == OTHER_KEY
+    assert api.client.get("/api/settings/model").json()["embedding"]["configured"] is True
+
+
+def test_embedding_env_var_beats_auth_file(api, monkeypatch) -> None:
+    """优先级：`DASHSCOPE_API_KEY` > auth.json 的 `dashscope` 条目。"""
+    from mla.config import load_config
+    from mla.services.credentials import set_key
+
+    set_key(DASHSCOPE_PROVIDER, OTHER_KEY)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-env-" + "2" * 26)
+    assert load_config().embedding.api_key == "sk-env-" + "2" * 26
+
+
+def test_embedding_env_var_skips_auth_file_read(api, monkeypatch) -> None:
+    """环境变量已给出 Key 时连文件都不读（探针与设置页都不会被坏文件拖住）。"""
+    from mla.adapters import auth_file
+    from mla.config import load_config
+
+    def boom(home: Path, provider: str):
+        raise AssertionError("环境变量已提供 Key，不应再读 auth.json")
+
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-env-" + "3" * 26)
+    monkeypatch.setattr(auth_file, "get_entry", boom)
+    assert load_config().embedding.api_key == "sk-env-" + "3" * 26
+
+
+def test_dashscope_is_not_a_model_provider(api, admin) -> None:
+    """两个 Key 不许串门：`dashscope` 不出现在模型服务商列表里，也存不进模型槽位。"""
+    response = api.client.put(
+        "/api/settings/model",
+        json={"provider": DASHSCOPE_PROVIDER, "key": DUMMY_KEY},
+        headers={"X-CSRF-Token": admin},
+    )
+    assert response.status_code == 404
+    body = api.client.get("/api/settings/model").json()
+    assert [item["provider"] for item in body["providers"]] == ["deepseek"]

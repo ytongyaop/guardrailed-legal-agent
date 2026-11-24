@@ -37,8 +37,9 @@ PROBATION_WAGE_RULE_ID = "R-PROBATION-WAGE-80"
 PROBATION_WAGE_TRIGGER_ID = "TR-PROBATION-WAGE-BASE"
 
 # 无模型门禁的提示语（唯一一处定义：CLI 打印、异常信息、测试断言都引用它）
-NO_MODEL_MESSAGE = "未配置模型，无法发起核对；请在设置页配置 API Key"
-NO_MODEL_QA_MESSAGE = "未配置模型，无法发起问答；请在设置页配置 API Key"
+# 只回答「缺什么 + 去哪配」；两个 Key 的分工、获取入口与成本说明放在前端引导卡片里。
+NO_MODEL_MESSAGE = "未配置模型 Key，无法发起核对。请到“设置”页填写并测试连接后重试。"
+NO_MODEL_QA_MESSAGE = "未配置模型 Key，无法发起问答。请到“设置”页填写并测试连接后重试。"
 
 
 class NoModelError(RuntimeError):

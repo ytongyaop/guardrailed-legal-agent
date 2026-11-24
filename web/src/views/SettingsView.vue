@@ -9,9 +9,11 @@ import { computed, onMounted, reactive, ref } from 'vue'
 
 import {
   changePassword,
+  clearEmbeddingKey,
   clearModelKey,
   fetchModelSettings,
   fetchUiSettings,
+  saveEmbeddingKey,
   saveModelKey,
   saveUiSettings,
   testModelKey,
@@ -29,12 +31,18 @@ const KEY_MISSING_IMPACT =
   '缺 Key 影响：处理建议不生成、生成式问答拒答、条款级审查不可用；确定性规则核对与必备条款缺项检测不依赖模型。'
 const KEY_STORAGE_NOTE =
   'DeepSeek Key 以明文保存在当前操作系统用户的凭据文件中，已收紧权限；不要分享该文件。'
+const EMBEDDING_IMPACT =
+  '这是可选配置：不配也能核对，只是检索退化为关键词匹配；配置后语义相近的法条也能被召回，建议配置。'
+const EMBEDDING_STORAGE_NOTE =
+  '阿里云百炼 Key 与上面的大模型 Key 存在同一个凭据文件里，同样不会回显。'
+const BAILIAN_CONSOLE_URL = 'https://bailian.console.aliyun.com/'
 
 const session = useSession()
 const admin = computed(() => isAdmin())
 
 const uiTask = useAsyncTask()
 const modelTask = useAsyncTask()
+const embeddingTask = useAsyncTask()
 const accountTask = useAsyncTask()
 
 const showQueryPath = ref(false)
@@ -48,6 +56,12 @@ const editing = ref(false)
 const clearVisible = ref(false)
 const modelFlash = ref('')
 const keyHint = ref('')
+
+const embeddingInput = ref('')
+const embeddingVisible = ref(false)
+const embeddingClearVisible = ref(false)
+const embeddingFlash = ref('')
+const embeddingHint = ref('')
 
 const account = reactive({ current_password: '', new_password: '', confirm_password: '' })
 const accountFlash = ref('')
@@ -124,6 +138,31 @@ function cancelEdit(): void {
   keyVisible.value = false
   editing.value = false
   keyHint.value = ''
+}
+
+async function saveEmbedding(): Promise<void> {
+  embeddingFlash.value = ''
+  embeddingHint.value = ''
+  if (!embeddingInput.value.trim()) {
+    embeddingHint.value = '请先粘贴 API Key'
+    return
+  }
+  const updated = await embeddingTask.run(() => saveEmbeddingKey(embeddingInput.value.trim()))
+  if (!updated) return
+  model.value = updated
+  embeddingInput.value = ''
+  embeddingVisible.value = false
+  embeddingFlash.value = '向量检索 Key 已保存，状态已更新。'
+}
+
+async function clearEmbedding(): Promise<void> {
+  embeddingFlash.value = ''
+  const updated = await embeddingTask.run(() => clearEmbeddingKey())
+  if (!updated) return
+  model.value = updated
+  embeddingClearVisible.value = false
+  embeddingInput.value = ''
+  embeddingFlash.value = '已清除向量检索 Key，检索退化为关键词匹配。'
 }
 
 async function submitPassword(): Promise<void> {
@@ -216,7 +255,64 @@ onMounted(() => {
         </template>
 
         <p class="form-hint">{{ KEY_STORAGE_NOTE }}</p>
-        <p v-if="model" class="form-hint">{{ model.embedding.fallback_text }}</p>
+
+        <h3 class="section-title">向量检索 Key（可选）</h3>
+        <p class="page-caption" data-testid="embedding-status">
+          {{ model?.embedding.fallback_text ?? '尚未读取到向量检索状态' }}
+        </p>
+        <p class="form-hint">{{ EMBEDDING_IMPACT }}</p>
+        <p class="form-hint">
+          获取地址：
+          <a :href="BAILIAN_CONSOLE_URL" target="_blank" rel="noopener">阿里云百炼控制台</a>
+        </p>
+        <error-notice v-if="embeddingTask.error.value" :error="embeddingTask.error.value" />
+        <el-alert
+          v-if="embeddingFlash"
+          class="error-notice"
+          type="success"
+          :title="embeddingFlash"
+          :closable="false"
+        />
+        <el-alert
+          v-if="embeddingHint"
+          class="error-notice"
+          type="error"
+          :title="embeddingHint"
+          :closable="false"
+        />
+        <el-form label-width="160px" class="form-narrow" @submit.prevent="saveEmbedding">
+          <el-form-item label="阿里云百炼 API Key">
+            <el-input
+              v-model="embeddingInput"
+              :type="embeddingVisible ? 'text' : 'password'"
+              placeholder="粘贴阿里云百炼 API Key"
+              autocomplete="off"
+              data-testid="embedding-key"
+            />
+          </el-form-item>
+          <el-form-item>
+            <el-checkbox v-model="embeddingVisible">显示</el-checkbox>
+          </el-form-item>
+          <div class="page-actions">
+            <el-button
+              type="primary"
+              :loading="embeddingTask.loading.value"
+              data-testid="save-embedding"
+              @click="saveEmbedding"
+            >
+              测试并保存
+            </el-button>
+            <el-button
+              v-if="model?.embedding.configured"
+              text
+              type="danger"
+              @click="embeddingClearVisible = true"
+            >
+              清除此 Key
+            </el-button>
+          </div>
+        </el-form>
+        <p class="form-hint">{{ EMBEDDING_STORAGE_NOTE }}</p>
       </template>
     </el-card>
 
@@ -294,6 +390,16 @@ onMounted(() => {
       <template #footer>
         <el-button type="primary" @click="clearVisible = false">取消清除</el-button>
         <el-button @click="clearKey">确认清除</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="embeddingClearVisible" title="确认清除" width="460px">
+      <p>
+        确认清除向量检索 Key？清除后检索退化为关键词匹配，核对仍可正常进行；需要语义检索时再填一次即可。
+      </p>
+      <template #footer>
+        <el-button type="primary" @click="embeddingClearVisible = false">取消清除</el-button>
+        <el-button @click="clearEmbedding">确认清除</el-button>
       </template>
     </el-dialog>
   </section>

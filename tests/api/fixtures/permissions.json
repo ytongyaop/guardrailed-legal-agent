@@ -78,7 +78,9 @@
       "GET /settings/model",
       "PUT /settings/model",
       "POST /settings/model/{provider}/test",
-      "DELETE /settings/model/{provider}"
+      "DELETE /settings/model/{provider}",
+      "PUT /settings/embedding",
+      "DELETE /settings/embedding"
     ],
     "admin_users": ["GET /admin/users", "DELETE /admin/users/{user_id}"],
     "admin_role": ["PATCH /admin/users/{user_id}/role"],

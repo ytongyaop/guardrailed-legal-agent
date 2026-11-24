@@ -10,13 +10,16 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
 
-from ...adapters.llm import DeepSeekLLM, ProbeResult
+from ...adapters.embedding import DashScopeEmbedder, EmbeddingError
+from ...adapters.llm import AUTH_FAILURE_CODES, DeepSeekLLM, ProbeResult
 from ...config import load_config
 from ...services.credentials import (
+    DASHSCOPE_PROVIDER,
     DEFAULT_PROVIDER,
     CheckStatus,
     CredentialError,
@@ -39,6 +42,7 @@ from ..errors import (
     make_action,
 )
 from ..schemas import (
+    EmbeddingKeyIn,
     EmbeddingView,
     ModelCheckView,
     ModelKeyIn,
@@ -65,6 +69,31 @@ STATUS_STALE_DAYS = 30
 def probe_key(key: str) -> ProbeResult:
     """一次 `GET /models` 校验。测试打桩本函数即可完全不联网。"""
     return DeepSeekLLM(load_config().llm).probe_models(key)
+
+
+#: 探测向量 Key 用的短文本：一条真实的检索式输入，与核对时的 `text_type` 一致
+EMBEDDING_PROBE_TEXT = "劳动用工"
+
+
+def probe_embedding(key: str) -> ProbeResult:
+    """调一次真实的 embed（`text_type="query"`、一条短文本），成功即 `ok`。
+
+    分类判据与 `probe_key` 同一套，只看状态码与异常类型、不看异常文本：
+    401 / 403 → `auth`；其他 HTTP 状态码 → `server`；拿不到状态码（网络、超时、
+    返回格式异常）→ `network`；调用成功 → `ok`。测试打桩本函数即可完全不联网。
+    """
+    token = (key or "").strip()
+    if not token:
+        return ProbeResult(kind="auth", message="未提供 API Key")
+    cfg = replace(load_config().embedding, api_key=token)
+    try:
+        DashScopeEmbedder(cfg).embed([EMBEDDING_PROBE_TEXT], text_type="query")
+    except EmbeddingError as exc:
+        if exc.status_code is None:
+            return ProbeResult(kind="network", message=type(exc).__name__)
+        kind = "auth" if exc.status_code in AUTH_FAILURE_CODES else "server"
+        return ProbeResult(kind=kind, status_code=exc.status_code, message=f"HTTP {exc.status_code}")
+    return ProbeResult(kind="ok", status_code=200, message="HTTP 200")
 
 
 # ---------------------------------------------------------------- 界面开关
@@ -171,6 +200,60 @@ def delete_settings_model(provider: str) -> ModelSettingsView:
     provider = _known_provider(provider)
     try:
         clear_key(provider)
+    except CredentialError as exc:
+        raise ApiError(409, STATE_CONFLICT, str(exc)) from exc
+    return _model_view()
+
+
+# ---------------------------------------------------------------- 向量检索 Key（管理员）
+#
+# provider 固定为 DashScope，所以路径里没有 `{provider}`；探测通过才落盘，失败不回显、
+# 不写文件。响应复用 `ModelSettingsView`：前端一个模型就够，`embedding` 字段自带状态与
+# 回退说明（不配 Key 仍然能核对，只是退化为关键词检索）。
+
+
+@router.put(
+    "/settings/embedding",
+    dependencies=[Depends(require_capability("settings_model"))],
+    response_model=ModelSettingsView,
+)
+def put_settings_embedding(payload: EmbeddingKeyIn) -> ModelSettingsView:
+    """测试并保存向量检索 Key：探针不通过就不写文件、不回显输入。"""
+    key = (payload.key or "").strip()
+    if not key:
+        raise ApiError(400, VALIDATION_ERROR, "请先粘贴 API Key", details={"fields": ["key"]})
+    probe = probe_embedding(key)
+    if probe.kind != "ok":
+        if probe.kind == "auth":
+            raise ApiError(
+                422,
+                MODEL_KEY_INVALID,
+                PROBE_MESSAGES["auth"],
+                action=make_action("open_settings", "重新填写 Key"),
+            )
+        raise ApiError(
+            502,
+            MODEL_PROBE_FAILED,
+            PROBE_MESSAGES.get(probe.kind, PROBE_MESSAGES["server"]),
+            action=make_action("retry", "重试"),
+        )
+    try:
+        set_key(DASHSCOPE_PROVIDER, key)
+    except CredentialError as exc:
+        # 异常消息只含 provider 与路径，不含 Key
+        raise ApiError(409, STATE_CONFLICT, str(exc)) from exc
+    return _model_view()
+
+
+@router.delete(
+    "/settings/embedding",
+    dependencies=[Depends(require_capability("settings_model"))],
+    response_model=ModelSettingsView,
+)
+def delete_settings_embedding() -> ModelSettingsView:
+    """清除向量检索 Key（幂等）：只删 `dashscope` 条目，不动大模型 Key。"""
+    try:
+        clear_key(DASHSCOPE_PROVIDER)
     except CredentialError as exc:
         raise ApiError(409, STATE_CONFLICT, str(exc)) from exc
     return _model_view()
