@@ -52,6 +52,13 @@ class SetupStatus(BaseModel):
     runtime: RuntimeInfo
 
 
+class SampleContractView(BaseModel):
+    """首次向导的示例合同：标题给按钮/摘要用，正文原样交给 `POST /checks`。"""
+
+    name: str
+    text: str
+
+
 class SetupAdminIn(BaseModel):
     username: str
     password: str

@@ -32,6 +32,12 @@ export interface SetupStatus {
   runtime: RuntimeInfo
 }
 
+/** 首次向导第 3 步的示例合同：`name` 只用于标题，`text` 原样交给 `postCheck`。 */
+export interface SampleContract {
+  name: string
+  text: string
+}
+
 export interface LoginIn {
   username: string
   password: string

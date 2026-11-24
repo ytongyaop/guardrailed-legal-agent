@@ -50,7 +50,7 @@
     "admin_evaluation"
   ],
   "endpoints": {
-    "setup": ["GET /setup"],
+    "setup": ["GET /setup", "GET /setup/sample-contract"],
     "setup_admin": ["POST /setup/admin"],
     "login": ["POST /auth/login"],
     "register": ["POST /auth/register"],

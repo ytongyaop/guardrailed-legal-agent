@@ -25,6 +25,7 @@ import type {
   PasswordChangeIn,
   RegisterIn,
   RuleCatalogView,
+  SampleContract,
   SettingsUiView,
   SetupAdminIn,
   SetupStatus,
@@ -38,6 +39,11 @@ import type {
 
 export function fetchSetupStatus(signal?: AbortSignal): Promise<SetupStatus> {
   return http.get<SetupStatus>('/setup', { signal })
+}
+
+/** 首次向导第 3 步：公开端点，取一份含典型问题的示例合同。 */
+export function fetchSampleContract(): Promise<SampleContract> {
+  return http.get<SampleContract>('/setup/sample-contract', { redirectOn401: false })
 }
 
 export function createFirstAdmin(payload: SetupAdminIn): Promise<AuthState> {

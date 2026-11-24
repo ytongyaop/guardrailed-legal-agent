@@ -37,7 +37,7 @@ def _cap(
 
 CAPABILITIES: dict[str, Capability] = {
     # ---- 公开（无会话）：只做同源 Origin 校验，不校验 CSRF token
-    "setup": _cap("setup", (("GET", "/setup"),), anonymous=True),
+    "setup": _cap("setup", (("GET", "/setup"), ("GET", "/setup/sample-contract")), anonymous=True),
     "setup_admin": _cap("setup_admin", (("POST", "/setup/admin"),), anonymous=True),
     "login": _cap("login", (("POST", "/auth/login"),), anonymous=True),
     "register": _cap("register", (("POST", "/auth/register"),), anonymous=True),

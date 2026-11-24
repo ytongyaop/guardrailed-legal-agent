@@ -66,6 +66,7 @@ web/tests/                          # Vitest；Playwright 仅开发依赖
 | 方法、路径与鉴权 | 请求体/参数 | 成功响应 |
 | --- | --- | --- |
 | `GET /setup`（公开） | — | `{needs_admin:b,runtime:{copied_from:s\|null,db_path:s,warnings:s[],migration_status:s,messages:s[]}}`；运行/迁移提示由前端每会话只显示一次 |
+| `GET /setup/sample-contract`（公开） | — | `{name:s,text:s}`；首次向导试跑用的示例合同，与 `/setup` 同能力；文件缺失为 404 |
 | `POST /setup/admin`（公开，仅无管理员） | `{username:s,password:s,confirm_password:s,enterprise_name:s}` | `201 AuthState`；已有管理员则 409 |
 | `POST /auth/login`、`POST /auth/register`（公开） | 登录 `{username,password}`；注册加 `{enterprise_name}`，密码规则不变 | `200/201 AuthState={user:UserView,csrf_token:s,model_configured:b}`；`UserView={user_id,username,role,enterprise_id,onboarded}` |
 | `GET /auth/me`、`POST /auth/logout`、`POST /auth/onboarding` | 后两者无体 | 分别 `AuthState`、`204`、`UserView`；`/me` 每次重读用户与模型状态 |
