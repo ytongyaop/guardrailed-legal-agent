@@ -5,29 +5,43 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+import logging
 import secrets
 import uuid
 
 from ..domain.models import Enterprise, Role, User, UserDeletion
 from ..ports.repository import Repository
 
-_ITER = 120_000
+_log = logging.getLogger(__name__)
+
+# 新写入（注册 / 改口令 / 渐进升级回写）统一用这个迭代数。
+_ITER = 600_000
+# 迁移前写入的记录一律是 12 万。**必须与 `adapters/persist.py` 的 `LEGACY_ITERATIONS`（users.iterations
+# 列的默认值）一致**：那边决定旧记录被标记成哪一代，这里决定按几轮验它，两边错开就是全员登录失败。
+_LEGACY_ITER = 120_000
 
 # 口令下限：注册、首次初始化、改口令统一用这一处，避免三条路径各说各话
 MIN_PASSWORD_LEN = 8
 
 
-def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
-    """返回 (hash_hex, salt_hex)。同一密码每次盐不同。"""
+def hash_password(password: str, salt: str | None = None, iterations: int = _ITER) -> tuple[str, str]:
+    """返回 (hash_hex, salt_hex)。同一密码每次盐不同。
+
+    默认用当前迭代数；验证旧记录不需要在这里传 legacy 值（验证走 `verify_password`）。
+    """
     salt = salt or secrets.token_hex(16)
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), _ITER)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), iterations)
     return dk.hex(), salt
 
 
-def verify_password(password: str, password_hash: str, salt: str) -> bool:
-    """常量时间比较，避免时序侧信道。"""
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), _ITER)
+def verify_password(password: str, password_hash: str, salt: str, iterations: int) -> bool:
+    """常量时间比较，避免时序侧信道。
+
+    `iterations` 必须显式传：不同记录可能是不同代际的哈希，给默认值就是把一类账号锁在门外。
+    """
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), iterations)
     return secrets.compare_digest(dk.hex(), password_hash)
 
 
@@ -50,17 +64,34 @@ def register(
         salt=salt,
         role=role,
         enterprise_id=enterprise_id,
+        iterations=_ITER,
     )
     repo.create_user(user)
     return user
 
 
 def authenticate(repo: Repository, username: str, password: str) -> User | None:
-    """登录：用户不存在与密码错误返回同样的 None（不泄露账号是否存在）。"""
+    """登录：用户不存在与密码错误返回同样的 None（不泄露账号是否存在）。
+
+    登录成功且该记录的迭代数低于当前标准时，顺手用明文重算并回写（渐进升级）：
+    存量账号不用改口令、不用被踢，下次登录自动落到新一代哈希上。
+    """
     user = repo.get_user_by_name(username.strip())
     if not user:
         return None
-    return user if verify_password(password, user.password_hash, user.salt) else None
+    if not verify_password(password, user.password_hash, user.salt, user.iterations):
+        return None
+    if user.iterations < _ITER:
+        try:
+            digest, salt = hash_password(password)
+            repo.set_user_password(user.user_id, digest, salt, _ITER)
+        except Exception:  # 回写失败不阻断登录：只读库 / 磁盘满都不该让人进不去
+            # 本次照常登录，下次再试。只记 user_id：不记口令，也不记 hash / 盐。
+            _log.warning("口令哈希渐进升级回写失败，本次按旧哈希登录（user_id=%s）", user.user_id)
+        else:
+            # 必须返回更新后的对象：调用方（会话指纹、改口令）拿到旧 hash 会立刻失效或验不过
+            user = dataclasses.replace(user, password_hash=digest, salt=salt, iterations=_ITER)
+    return user
 
 
 def is_admin(user: User) -> bool:
@@ -85,14 +116,14 @@ def change_password(repo: Repository, user: User, old_password: str, new_passwor
 
     返回 (成功?, 失败原因)；成功时原因是空串。密码只存哈希 + 新盐，不写日志。
     """
-    if not verify_password(old_password, user.password_hash, user.salt):
+    if not verify_password(old_password, user.password_hash, user.salt, user.iterations):
         return False, "当前口令不正确"
     if len(new_password) < MIN_PASSWORD_LEN:
         return False, f"新口令至少 {MIN_PASSWORD_LEN} 位"
     if new_password == old_password:
         return False, "新口令不能与当前口令相同"
-    digest, salt = hash_password(new_password)
-    repo.set_user_password(user.user_id, digest, salt)
+    digest, salt = hash_password(new_password)  # 直接用当前迭代数
+    repo.set_user_password(user.user_id, digest, salt, _ITER)
     return True, ""
 
 

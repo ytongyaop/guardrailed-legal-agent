@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS users (
   user_id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL, salt TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT '用户', enterprise_id TEXT DEFAULT '', created_at TEXT,
-  onboarded INTEGER DEFAULT 0
+  onboarded INTEGER DEFAULT 0, iterations INTEGER DEFAULT 120000
 );
 CREATE TABLE IF NOT EXISTS enterprises (
   enterprise_id TEXT PRIMARY KEY, name TEXT NOT NULL, employer_type TEXT,
@@ -113,9 +113,16 @@ TASK_MIGRATIONS: dict[str, str] = {
     "owner_id": "TEXT DEFAULT ''",
 }
 
-# 旧库迁移（users 表）：早期版本的 users 表没有 onboarded 列，启动时按需补。
+# 存量口令哈希的 PBKDF2 迭代数。**必须与 `services/auth.py` 的 `_LEGACY_ITER` 一致**：
+# 那边的常量用于验证这些记录，这里的默认值用于给它们打上正确的代际标记。
+LEGACY_ITERATIONS = 120_000
+
+# 旧库迁移（users 表）：早期版本的 users 表没有这些列，启动时按需补。
 USER_MIGRATIONS: dict[str, str] = {
     "onboarded": "INTEGER DEFAULT 0",
+    # 口令哈希迭代数：迁移前写入的记录一律 LEGACY_ITERATIONS（当时唯一的值），
+    # 之后新写入由 `services/auth.py` 显式传当前值。不加 NOT NULL——ADD COLUMN 带 NOT NULL 受限。
+    "iterations": f"INTEGER DEFAULT {LEGACY_ITERATIONS}",
 }
 
 
@@ -373,8 +380,8 @@ class SqliteRepository:
     # ---------- 账号 ----------
     def create_user(self, user: User) -> None:
         self._conn.execute(
-            "INSERT INTO users(user_id,username,password_hash,salt,role,enterprise_id,created_at,onboarded)"
-            " VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO users(user_id,username,password_hash,salt,role,enterprise_id,created_at,onboarded,"
+            "iterations) VALUES(?,?,?,?,?,?,?,?,?)",
             (
                 user.user_id,
                 user.username,
@@ -384,6 +391,7 @@ class SqliteRepository:
                 user.enterprise_id,
                 user.created_at or _now(),
                 int(user.onboarded),
+                user.iterations,
             ),
         )
         self._conn.commit()
@@ -405,11 +413,11 @@ class SqliteRepository:
         self._conn.execute("UPDATE users SET enterprise_id=? WHERE user_id=?", (enterprise_id, user_id))
         self._conn.commit()
 
-    def set_user_password(self, user_id: str, password_hash: str, salt: str) -> None:
-        """改口令：只覆盖哈希与盐（调用方负责生成，明文不落库）。"""
+    def set_user_password(self, user_id: str, password_hash: str, salt: str, iterations: int) -> None:
+        """改口令：只覆盖哈希、盐与迭代数（调用方负责生成，明文不落库）。"""
         self._conn.execute(
-            "UPDATE users SET password_hash=?, salt=? WHERE user_id=?",
-            (password_hash, salt, user_id),
+            "UPDATE users SET password_hash=?, salt=?, iterations=? WHERE user_id=?",
+            (password_hash, salt, iterations, user_id),
         )
         self._conn.commit()
 
@@ -429,6 +437,8 @@ class SqliteRepository:
             enterprise_id=row["enterprise_id"] or "",
             created_at=row["created_at"] or "",
             onboarded=bool(row["onboarded"]) if "onboarded" in row.keys() else False,
+            # 防御旧只读库（列没补上）：迁移前写入的记录一律是旧迭代数
+            iterations=int(row["iterations"]) if "iterations" in row.keys() else LEGACY_ITERATIONS,
         )
 
     def delete_user(self, user_id: str, *, actor_id: str, log_id: str) -> UserDeletion:

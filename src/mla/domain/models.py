@@ -374,7 +374,11 @@ class VerifyReport:
 
 @dataclass(frozen=True)
 class User:
-    """账号：密码只存 pbkdf2 哈希与盐，不存明文。"""
+    """账号：密码只存 pbkdf2 哈希与盐，不存明文。
+
+    `iterations` 是该条哈希写入时的 PBKDF2 迭代数：不同代际的记录必须用各自的迭代数验证，
+    所以它跟着 hash+salt 一起走。默认 120,000 只为“没这个字段的旧记录”兜底，真实值以库为准。
+    """
 
     user_id: str
     username: str
@@ -384,6 +388,7 @@ class User:
     enterprise_id: str = ""
     created_at: str = ""
     onboarded: bool = False
+    iterations: int = 120_000
 
 
 @dataclass(frozen=True)

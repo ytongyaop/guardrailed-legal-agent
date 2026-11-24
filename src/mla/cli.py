@@ -237,7 +237,7 @@ def cmd_admin(args: argparse.Namespace) -> int:
     """
     from .adapters.persist import SqliteRepository
     from .domain.models import Role
-    from .services.auth import MIN_PASSWORD_LEN, hash_password
+    from .services.auth import _ITER, MIN_PASSWORD_LEN, hash_password
 
     repo = SqliteRepository(db_path=_runtime_db_path(args))
 
@@ -265,7 +265,7 @@ def cmd_admin(args: argparse.Namespace) -> int:
             print(f"口令至少 {MIN_PASSWORD_LEN} 位。", file=sys.stderr)
             return 1
         digest, salt = hash_password(password)
-        repo.set_user_password(user.user_id, digest, salt)
+        repo.set_user_password(user.user_id, digest, salt, _ITER)
         print(f"已重置口令：{username}")
         if generated:
             print(f"新口令：{password}")
