@@ -105,3 +105,129 @@ jobs:
           python scripts/validate_missing_terms.py
           python scripts/validate_clause_gold.py
           python scripts/validate_elements.py
+
+  # 打包冒烟：在 Windows 上真打一次 exe 并起服务访问。
+  # 单独成 job 而不是塞进 test 的 matrix：打包要 windows-latest + Node 构建，混在一起只会互相拖慢。
+  # 这里**不跑 pytest**（那是 test job 的事），只验证「产物能启动、能出页面、能建号」。
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[files,web,package]"
+
+      - name: Install frontend deps
+        run: npm --prefix web ci
+
+      - name: Build frontend
+        run: npm --prefix web run build
+
+      # 与 scripts/build_exe.ps1 第 3 步同一口径：先清空，避免残留旧哈希资源被打进包
+      - name: Stage frontend into package
+        run: |
+          if (Test-Path src/mla/api/static) { Remove-Item src/mla/api/static -Recurse -Force }
+          New-Item -ItemType Directory -Path src/mla/api/static -Force | Out-Null
+          Copy-Item -Path web/dist/* -Destination src/mla/api/static -Recurse -Force
+
+      - name: Build exe
+        run: python -m PyInstaller mla.spec --noconfirm --clean
+
+      # 全程落 RUNNER_TEMP：不写用户目录，也不污染仓库；
+      # 端口优先读 MLA_PORT_FILE（比解析控制台稳），失败再打印 exe 的 stdout/stderr 与 mla.log。
+      - name: Smoke test packaged exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = "dist\mla\mla.exe"
+          $staticIndex = "dist\mla\_internal\mla\api\static\index.html"
+
+          if (-not (Test-Path $exe)) { throw "缺少产物：$exe" }
+          if (-not (Test-Path $staticIndex)) { throw "前端产物未进包：$staticIndex" }
+
+          $tmp = Join-Path $env:RUNNER_TEMP "mla-smoke"
+          Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+
+          $env:MLA_HOME = Join-Path $tmp "home"
+          $env:MLA_DB = Join-Path $tmp "smoke.sqlite3"
+          $env:MLA_NO_BROWSER = "1"
+          $env:MLA_PORT_FILE = Join-Path $tmp "port.txt"
+          $stdout = Join-Path $tmp "stdout.txt"
+          $stderr = Join-Path $tmp "stderr.txt"
+
+          function Show-Outputs {
+            Write-Host "--- exe stdout ---"
+            if (Test-Path $stdout) { Get-Content $stdout }
+            Write-Host "--- exe stderr ---"
+            if (Test-Path $stderr) { Get-Content $stderr }
+            $log = Join-Path $env:MLA_HOME "logs\mla.log"
+            if (Test-Path $log) {
+              Write-Host "--- mla.log ---"
+              Get-Content $log
+            }
+          }
+
+          $proc = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+
+          try {
+            $port = $null
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Seconds 1
+              if (Test-Path $env:MLA_PORT_FILE) {
+                $raw = Get-Content $env:MLA_PORT_FILE -Raw -ErrorAction SilentlyContinue
+                if ($raw -and $raw.Trim()) {
+                  $port = $raw.Trim()
+                  break
+                }
+              }
+              if ($proc.HasExited) { break }
+            }
+            if (-not $port) {
+              Show-Outputs
+              throw "exe 未在 60 秒内报告端口（HasExited=$($proc.HasExited)）"
+            }
+
+            $base = "http://127.0.0.1:$port"
+            Write-Host "MLA_PORT=$port"
+
+            $root = Invoke-WebRequest -Uri "$base/" -UseBasicParsing -TimeoutSec 30
+            Write-Host "GET / -> $($root.StatusCode)"
+            if ($root.StatusCode -ne 200) { throw "GET / 期望 200，实际 $($root.StatusCode)" }
+
+            $setup = Invoke-WebRequest -Uri "$base/api/setup" -UseBasicParsing -TimeoutSec 30
+            Write-Host "GET /api/setup -> $($setup.StatusCode)"
+            if ($setup.StatusCode -ne 200) { throw "GET /api/setup 期望 200，实际 $($setup.StatusCode)" }
+
+            $body = '{"username":"smoke","password":"smoke-pass-123","confirm_password":"smoke-pass-123","enterprise_name":"smoke"}'
+            $admin = Invoke-WebRequest -Uri "$base/api/setup/admin" -Method Post -Body $body `
+              -ContentType "application/json; charset=utf-8" -UseBasicParsing -TimeoutSec 60
+            Write-Host "POST /api/setup/admin -> $($admin.StatusCode)"
+            if ($admin.StatusCode -ne 201) { throw "POST /api/setup/admin 期望 201，实际 $($admin.StatusCode)" }
+          }
+          catch {
+            Show-Outputs
+            throw
+          }
+          finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }
+
+          $size = (Get-ChildItem "dist\mla" -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
+          Write-Host ("目录体积：{0:N1} MB" -f $size)

@@ -1,5 +1,7 @@
 # 虚拟环境与缓存
 .venv/
+# 干净打包环境（scripts/setup_packenv.ps1 生成，只装运行 + 打包依赖）
+.packenv/
 __pycache__/
 *.py[cod]
 *.egg-info/

@@ -19,6 +19,10 @@
   `mla/api/app.py` 用 `Path(__file__).parent / "static"` 定位前端，所以产物必须落在
   `_internal/mla/data` 与 `_internal/mla/api/static`，与源码树一一对应（PyInstaller 冻结后
   `__file__` 指向 `_internal` 里的真实文件，这条链路才成立）。
+- **不收集 Streamlit 时代的遗留依赖**（实测结论）：`import mla.graph.build`、
+  `mla.services.retrieval`、`mla.services.report` 都不会加载 pandas / pyarrow / PIL；
+  只有 `mla.services.report` 会加载 **lxml**（python-docx 导出 Word 要用），所以 lxml 必须留，
+  其余列进 `Analysis(excludes=...)` 兜底。打包环境本身也要干净（见 `scripts/setup_packenv.ps1`）。
 """
 
 import fnmatch
@@ -157,7 +161,22 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     # tkinter 只有一个用途是「给本地脚本弹窗」，本项目全程无 GUI 依赖，直接剔除省体积。
-    excludes=["tkinter"],
+    # 下面这些是 Streamlit 时代的遗留依赖与可选集成，运行时不需要（见模块 docstring 的实测）：
+    # 干净环境里本来就不会装；列在这里是防御——万一在脏环境构建，也不会把上百 MB 收进包。
+    # 注意 lxml 不能加：python-docx 导出 Word 报告要用它。
+    excludes=[
+        "tkinter",
+        "streamlit",
+        "altair",
+        "pydeck",
+        "narwhals",
+        "pandas",
+        "pyarrow",
+        "PIL",
+        "matplotlib",
+        "IPython",
+        "notebook",
+    ],
     noarchive=False,
     optimize=0,
 )
