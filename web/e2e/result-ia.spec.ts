@@ -8,6 +8,10 @@
  * 页面切换一般用侧栏点击（SPA 内跳转）：整页刷新会清掉内存会话，
  * 而「去设置打开过程开关再回来看同一次结果」正是要验证的行为。
  * 内存会话之外的恢复路径另有专项用例：`/check?task_id=…` 刷新后按 URL 重新拉详情。
+ *
+ * 免责提示：`DisclaimerNotice` 挂在根组件上，首次访问会弹 dialog 并遮住整个页面。
+ * Playwright 每个用例都是全新上下文（localStorage 为空），所以除下面那条专门验证
+ * 「首次提示」的用例外，其余用例都在首次导航前预写「已读」标记（见 `acknowledgeDisclaimer`）。
  */
 
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
@@ -15,6 +19,14 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 const MODEL_URL = 'http://127.0.0.1:8021'
 const NO_MODEL_URL = 'http://127.0.0.1:8022'
 const PASSWORD = 'e2e-pass-123'
+/**
+ * 免责提示的「已读」标记，取值来源是 `web/src/components/DisclaimerNotice.vue` 的
+ * `ACK_KEY` / `ACK_VERSION`（组件只比较这两者的值，键名和版本号必须逐字一致）。
+ *
+ * ⚠️ 组件里改免责版本号（`ACK_VERSION`）时，这里必须同步改：
+ * 不同步的话老版本标记不再匹配 → 所有用例首次导航后又弹 dialog → 遮罩拦住全部点击。
+ */
+const DISCLAIMER_ACK = { key: 'mla.disclaimer.acknowledged', version: '1.0.0' } as const
 const CONTRACT = [
   '第一条 本合同期限为一年，自 2026 年 1 月 1 日起至 2026 年 12 月 31 日止。',
   '第二条 试用期为六个月，试用期工资为转正工资的百分之七十。',
@@ -35,17 +47,39 @@ async function ensureAdmin(request: APIRequestContext, base: string): Promise<vo
   expect([201, 409]).toContain(response.status())
 }
 
-/** 走真实登录页：填账号口令 → 登录 → 等到核对页路由。
+/**
+ * 在页面首次导航前把「已读免责」写进 localStorage。
+ *
+ * 时机很关键：`addInitScript` 只对**之后**的导航生效，所以必须在 `page.goto` 之前调用；
+ * 每个新上下文里它就是首次加载时的初始状态，与真人点过「我知道了」的效果相同
+ * （不阻断任何操作，也不改组件行为）。
+ */
+async function acknowledgeDisclaimer(page: Page): Promise<void> {
+  await page.addInitScript(
+    (marker: { key: string; version: string }) => {
+      window.localStorage.setItem(marker.key, marker.version)
+    },
+    { ...DISCLAIMER_ACK },
+  )
+}
+
+/** 已经停在登录页：填账号口令 → 登录 → 等到核对页路由。
  *
  * 注意：Element Plus 的 `el-input` 把透传属性绑定到原生 `<input>` 上，
  * 所以 `getByTestId('login-username')` 命中的就是输入框本身，不能再 `.locator('input')`。
  */
-async function signIn(page: Page, base: string): Promise<void> {
-  await page.goto(`${base}/login`)
+async function submitLogin(page: Page): Promise<void> {
   await page.getByTestId('login-username').fill('admin')
   await page.getByTestId('login-password').fill(PASSWORD)
   await page.getByTestId('login-submit').click()
   await page.waitForURL((url) => url.pathname === '/check')
+}
+
+/** 走真实登录页：预置「已读免责」→ 打开 `/login` → 登录 → 等到核对页路由。 */
+async function signIn(page: Page, base: string): Promise<void> {
+  await acknowledgeDisclaimer(page)
+  await page.goto(`${base}/login`)
+  await submitLogin(page)
 }
 
 /** 首次登录会弹「开始之前」引导（未确认前每次登录都弹）：先确认掉再操作页面。 */
@@ -80,6 +114,40 @@ async function runCheck(page: Page): Promise<void> {
   }
   await expect(headline).toBeVisible({ timeout: 60_000 })
 }
+
+test('首次访问会弹免责提示并遮住操作，关闭后不阻断登录', async ({ page, request }) => {
+  await ensureAdmin(request, MODEL_URL)
+
+  // 不预置「已读」：这就是真人第一次打开，新上下文的 localStorage 本来就是空的
+  await page.goto(`${MODEL_URL}/login`)
+
+  const dialog = page.getByRole('dialog', { name: '使用前请知悉' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText('不构成律师与客户的关系')
+
+  // 「遮住操作」实测：对登录按钮做试点击（只跑可操作性检查、不真点），被 dialog 挡下
+  let interceptError: unknown = null
+  try {
+    await page.getByTestId('login-submit').click({ trial: true, timeout: 2_000 })
+  } catch (failure) {
+    interceptError = failure
+  }
+  expect(interceptError).toBeInstanceOf(Error)
+  expect((interceptError as Error).message).toContain('intercepts pointer events')
+
+  // 关闭（任何关闭方式都算已读）→ 弹窗消失 → 同一页面照常操作
+  await page.getByRole('button', { name: '我知道了' }).click()
+  await expect(dialog).toBeHidden()
+
+  await submitLogin(page)
+  await dismissOnboarding(page)
+  await expect(page.getByTestId('check-form')).toBeVisible()
+
+  // 再进来一次：标记已由组件写进 localStorage，不该再弹
+  await page.goto(`${MODEL_URL}/login`)
+  await expect(page.getByTestId('login-username')).toBeVisible()
+  await expect(dialog).toBeHidden()
+})
 
 test('登录 → 核对 → 三层结果：条号常驻、原文折叠、第三层不渲染', async ({ page, request }) => {
   await ensureAdmin(request, MODEL_URL)
