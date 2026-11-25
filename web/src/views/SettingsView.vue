@@ -37,6 +37,14 @@ const EMBEDDING_STORAGE_NOTE =
   '阿里云百炼 Key 与上面的大模型 Key 存在同一个凭据文件里，同样不会回显。'
 const BAILIAN_CONSOLE_URL = 'https://bailian.console.aliyun.com/'
 
+/** 数据与隐私说明（1.0.0 公开分发）：纯展示，不加外链——exe 用户可能离线打开页面。 */
+const PRIVACY_LINES: readonly string[] = [
+  '合同正文：只在你点击“开始核对”时发送到你配置的模型服务商（如 DeepSeek、阿里云百炼）用于分析。',
+  '本地存储：账号、企业、合同与核对记录保存在本机的 %LOCALAPPDATA%\\mla\\；删除该目录即清空。',
+  'API Key：只保存在本机的 auth.json，不会上传，界面上也不回显。',
+  '使用统计：本工具不收集使用统计，也不上报任何遥测数据。',
+]
+
 const session = useSession()
 const admin = computed(() => isAdmin())
 
@@ -383,6 +391,11 @@ onMounted(() => {
       </el-form>
     </el-card>
 
+    <el-card class="page-card" shadow="never">
+      <h2 class="page-title">数据与隐私</h2>
+      <p v-for="line in PRIVACY_LINES" :key="line" class="privacy-line">{{ line }}</p>
+    </el-card>
+
     <el-dialog v-model="clearVisible" title="确认清除" width="460px">
       <p>
         确认清除 {{ activeProvider?.display_name ?? 'DeepSeek' }} 的 Key？清除后：处理建议生成、生成式问答、条款级审查不可用；确定性规则核对与必备条款缺项检测不受影响。
@@ -404,3 +417,15 @@ onMounted(() => {
     </el-dialog>
   </section>
 </template>
+
+<style scoped>
+.privacy-line {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.privacy-line:last-child {
+  margin-bottom: 0;
+}
+</style>

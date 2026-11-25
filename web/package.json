@@ -1,7 +1,7 @@
 {
   "name": "mla-web",
   "private": true,
-  "version": "0.4.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "小微企业用工风险辅助系统 · 前端（Vue 3 + Vite + Element Plus，规格 006）",
   "scripts": {

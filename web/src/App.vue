@@ -1,14 +1,16 @@
 <script setup lang="ts">
 /**
- * 根组件：只负责两件事——套不套侧栏外壳、收到 401 时跳登录。
+ * 根组件：只负责三件事——套不套侧栏外壳、收到 401 时跳登录、首次启动的免责提示。
  *
  * 外壳由路由 `meta.layout` 决定：登录与初始化是 `bare`，其余走 `AppShell`。
+ * 免责提示放在这一层（不是 `AppShell`）：登录与初始化页也要提示。
  */
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 
 import AppShell from '@/components/AppShell.vue'
+import DisclaimerNotice from '@/components/DisclaimerNotice.vue'
 import { loadRuntimeNotice } from '@/composables/runtimeNotice'
 import { setSignedOutHandler, useSession } from '@/stores/session'
 
@@ -38,5 +40,6 @@ onMounted(() => {
     <app-shell v-else>
       <router-view />
     </app-shell>
+    <disclaimer-notice />
   </el-config-provider>
 </template>

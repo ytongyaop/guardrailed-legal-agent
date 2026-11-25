@@ -13,6 +13,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     AppShell: typeof import('./components/AppShell.vue')['default']
     AskPanel: typeof import('./components/result/AskPanel.vue')['default']
+    DisclaimerNotice: typeof import('./components/DisclaimerNotice.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElButton: typeof import('element-plus/es')['ElButton']
     ElCard: typeof import('element-plus/es')['ElCard']
